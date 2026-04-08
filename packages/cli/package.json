@@ -1,0 +1,23 @@
+{
+	"name": "@my-agent/cli",
+	"version": "0.1.0",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"bin": {
+		"my-agent": "dist/main.js"
+	},
+	"scripts": {
+		"build": "tsc -b",
+		"start": "node dist/main.js",
+		"dev": "tsx src/main.ts",
+		"test": "vitest run"
+	},
+	"dependencies": {
+		"@my-agent/ai": "*",
+		"@my-agent/core": "*"
+	},
+	"devDependencies": {
+		"tsx": "^4.19.0"
+	}
+}
