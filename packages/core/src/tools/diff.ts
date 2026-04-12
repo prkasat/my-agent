@@ -22,11 +22,7 @@ export function computeDiff(oldContent: string, newContent: string, contextLines
 
 	let lastOldDiff = oldLines.length - 1;
 	let lastNewDiff = newLines.length - 1;
-	while (
-		lastOldDiff > firstDiff &&
-		lastNewDiff > firstDiff &&
-		oldLines[lastOldDiff] === newLines[lastNewDiff]
-	) {
+	while (lastOldDiff > firstDiff && lastNewDiff > firstDiff && oldLines[lastOldDiff] === newLines[lastNewDiff]) {
 		lastOldDiff--;
 		lastNewDiff--;
 	}

@@ -31,7 +31,10 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
 	});
 
 	// Don't propagate errors to future operations
-	queues.set(resolvedPath, newPromise.catch(() => {}));
+	queues.set(
+		resolvedPath,
+		newPromise.catch(() => {}),
+	);
 
 	// Cleanup when queue is empty
 	newPromise.finally(() => {

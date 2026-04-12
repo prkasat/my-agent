@@ -1,31 +1,28 @@
 import { execSync } from "node:child_process";
 
 /**
- * Kill a process and all its children.
+ * Kill a process and all its children immediately.
  *
- * Without this, aborting a bash command only kills the parent shell,
- * leaving child processes (servers, watchers) as orphans.
+ * Uses SIGKILL for immediate termination - prioritizes responsiveness
+ * over graceful shutdown. Without this, aborting a bash command only
+ * kills the parent shell, leaving child processes as orphans.
  */
 export function killProcessTree(pid: number): void {
 	try {
 		if (process.platform === "win32") {
 			execSync(`taskkill /pid ${pid} /T /F`, { stdio: "ignore" });
 		} else {
-			// Send SIGTERM to process group
+			// Send SIGKILL to process group for immediate termination
 			try {
-				process.kill(-pid, "SIGTERM");
+				process.kill(-pid, "SIGKILL");
 			} catch {
-				process.kill(pid, "SIGTERM");
-			}
-
-			// Give 3s for graceful shutdown, then SIGKILL
-			setTimeout(() => {
+				// Fallback to killing just the process if group kill fails
 				try {
-					process.kill(-pid, "SIGKILL");
+					process.kill(pid, "SIGKILL");
 				} catch {
-					// Already dead
+					// Process already dead
 				}
-			}, 3000);
+			}
 		}
 	} catch {
 		// Process already exited
