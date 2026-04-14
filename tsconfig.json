@@ -14,5 +14,5 @@
 		"forceConsistentCasingInFileNames": true,
 		"resolveJsonModule": true
 	},
-	"references": [{ "path": "packages/ai" }, { "path": "packages/core" }, { "path": "packages/cli" }]
+	"references": [{ "path": "packages/ai" }, { "path": "packages/core" }, { "path": "packages/cli" }, { "path": "packages/tui" }]
 }
