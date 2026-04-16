@@ -399,6 +399,67 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-12 regression: suffix-based path-bearing key detection", () => {
+	// Pre-pass-12 bug: PATH_FIELD_NAMES was a fixed allowlist (path,
+	// filePath, file_path, etc.) and didn't recognize camelCase suffix
+	// patterns like configPath, privateKey, secretFile, credsPath. A
+	// custom knownReadOnly tool could carry a relative path WITH SPACES
+	// under those keys ("My Secrets/credentials.json"), which doesn't
+	// trip looksLikePath (no leading /, ~, ./), and the floor never
+	// inspected it.
+
+	const cases: Array<[string, string, string]> = [
+		["configPath", "My Secrets/credentials.json", "configPath / relative w/ space"],
+		["privateKey", "Secrets Folder/id_rsa", "privateKey / relative w/ space"],
+		["secretFile", "Application Data/.env.local", "secretFile / relative w/ space"],
+		["sshKey", "config/id_ed25519", "sshKey / no slash prefix"],
+		["credsPath", "Cloud Creds/credentials.json", "credsPath / relative w/ space"],
+		["credentialFile", "data/credentials.json", "credentialFile suffix"],
+		["outputDir", "/etc", "outputDir / exact protected dir"],
+		["sourceFolder", "~/.ssh", "sourceFolder / exact protected dir"],
+		["awsCredentials", "/Users/x/.aws/credentials.json", "awsCredentials suffix"],
+	];
+
+	for (const [field, value, label] of cases) {
+		it(`(deny) blocks knownReadOnly tool with ${label}`, async () => {
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set(["custom_read"]),
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: value }));
+			expect(result.action).toBe("block");
+		});
+	}
+
+	it("(deny) blocks bare protected basename under suffix-detected key", async () => {
+		// `secretFile: ".env"` was already covered in pass-9; this one
+		// validates that suffix-based detection also catches the case
+		// where the bare basename comes under a key we haven't explicitly
+		// listed (e.g. envSecretFile).
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", { envSecretFile: ".env" }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(auto) suffix-based key with non-protected value is allowed", async () => {
+		// `apiKey: "sk-..."` and similar non-path values that happen to
+		// match the suffix pattern must not be blocked unless they hit a
+		// protected pattern.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("custom_tool", {
+				apiKey: "sk-abc-123",
+				accessKey: "AKIAEXAMPLE",
+				userPath: "/var/log/app.log",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash operands + shell-meta boundaries", () => {
 	// Pre-pass-11 bug: PROTECTED_PATH_PATTERNS used `[\s/\\]` boundaries.
 	// `cat "/etc"`, `cat ".env"`, `ls "~/.ssh"`, etc. were not blocked

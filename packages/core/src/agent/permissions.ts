@@ -182,6 +182,26 @@ const PATH_FIELD_NAMES = new Set([
 ]);
 
 /**
+ * Suffix-based detection of path-bearing keys for camelCase / snake_case
+ * fields the explicit allowlist doesn't cover. A custom MCP/plugin tool
+ * commonly uses keys like `configPath`, `privateKey`, `secretFile`,
+ * `credsPath`, `outputDir`, etc. — none of those are in PATH_FIELD_NAMES,
+ * but their value is unambiguously a filesystem path. (Pass-12 finding.)
+ *
+ * False-positives (e.g. `apiKey` for an HTTP key, `monkey`, `profile`)
+ * are harmless: the value is yielded for pattern matching but only
+ * blocks when it actually matches a protected path. No prose
+ * false-positive risk because path-bearing-key gating only matters when
+ * the value isn't already path-shaped on its own.
+ */
+const PATH_KEY_TOKEN_RE = /(?:^|[a-z_])(path|file|filename|dir|directory|folder|key|cred|credential|secret)s?$/i;
+
+function isPathBearingKey(key: string | null): boolean {
+	if (key === null) return false;
+	return PATH_FIELD_NAMES.has(key) || PATH_KEY_TOKEN_RE.test(key);
+}
+
+/**
  * Heuristic: a string is "path-shaped" if it looks like a filesystem path
  * argument. Used to scan unknown fields without tripping on freeform text
  * that merely mentions a protected name (e.g. `content: "Don't commit .env"`,
@@ -250,8 +270,7 @@ function* iterPathLikeValues(
 	seen = new WeakSet<object>(),
 ): Generator<string> {
 	if (typeof value === "string") {
-		const fromPathField = parentKey !== null && PATH_FIELD_NAMES.has(parentKey);
-		if (fromPathField || looksLikePath(value)) yield value;
+		if (isPathBearingKey(parentKey) || looksLikePath(value)) yield value;
 		return;
 	}
 	if (value && typeof value === "object") {
