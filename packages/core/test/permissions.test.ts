@@ -268,6 +268,101 @@ describe("createPermissionChecker — Tier-2 pass-3 regression: requireConfirmat
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path floor walks all args fields", () => {
+	// Pre-pass-7 bug: the protected-path floor only checked args.path. A
+	// custom read tool whitelisted via knownReadOnly that carried its
+	// target under any other field (filePath, file_path, file, etc.) could
+	// read /etc/shadow, ~/.ssh/id_rsa, .env, and similar protected paths
+	// in deny mode. Verified locally before the fix that
+	// `createPermissionChecker("deny", { knownReadOnly: new Set(["docs_lookup"]) })`
+	// allowed `{filePath: "/etc/shadow"}`.
+	const protectedPath = "/etc/shadow";
+	const aliasFields = ["path", "filePath", "file_path", "file", "pathname", "target"];
+
+	for (const field of aliasFields) {
+		it(`(deny) blocks knownReadOnly tool with protected path under "${field}"`, async () => {
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set(["custom_read"]),
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: protectedPath }));
+			expect(result.action).toBe("block");
+			if (result.action === "block") {
+				expect(result.reason).toMatch(/Protected path/);
+			}
+		});
+
+		it(`(ask) blocks knownReadOnly tool with protected path under "${field}"`, async () => {
+			const onAsk = vi
+				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+				.mockResolvedValue("allow_once");
+			const checker = createPermissionChecker("ask", {
+				knownReadOnly: new Set(["custom_read"]),
+				onAsk,
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: protectedPath }));
+			expect(result.action).toBe("block");
+			expect(onAsk).not.toHaveBeenCalled(); // Floor catches it before any prompt.
+		});
+	}
+
+	it("(deny) blocks protected path nested inside a custom-tool args object", async () => {
+		// Real custom tools sometimes wrap arguments: {target: {path: "..."}}.
+		// The floor must descend into nested values, not just inspect leaf
+		// keys at top level.
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", { target: { path: "/etc/shadow" } }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) blocks protected path inside an array argument", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", { paths: ["/tmp/safe.txt", "/etc/shadow"] }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) blocks ssh key path under any field name", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", { keyfile: "/home/user/.ssh/id_rsa" }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(auto) protected paths are blocked even in auto mode (always-blocked floor)", async () => {
+		// Auto mode is permissive for unknown tools, but the floor must hold.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("custom_tool", { filePath: "/home/user/.aws/credentials" }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) tolerates pathological deeply-nested args without infinite recursion", async () => {
+		// Build something deeper than the depth bound to verify the walker
+		// terminates and just stops descending past the cap.
+		let nested: unknown = "/tmp/safe.txt";
+		for (let i = 0; i < 50; i++) {
+			nested = { wrapped: nested };
+		}
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(makeCtx("custom_read", { deep: nested }));
+		// Path is benign so this should be allowed (the floor just shouldn't crash).
+		expect(result.action).toBe("allow");
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-5 regression: no implicit name-based read allowlist", () => {
 	for (const name of BUILTIN_READ_TOOL_NAMES) {
 		it(`(deny) blocks bare-name "${name}" when host did not opt in via knownReadOnly`, async () => {

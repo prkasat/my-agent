@@ -139,6 +139,34 @@ interface PermissionChecker {
 	check: (ctx: BeforeToolCallContext) => Promise<BeforeToolCallResult>;
 }
 
+/**
+ * Walk every string-valued leaf of the tool args (top-level, nested objects,
+ * arrays). Used by the protected-path floor: a custom read tool registered
+ * via knownReadOnly may store its target path under ANY field name
+ * (`path`, `filePath`, `file_path`, `file`, `pathname`, `target`, …) and we
+ * cannot trust naming conventions. Walking every string is the only field-
+ * name-agnostic way to enforce the floor.
+ *
+ * Depth-bounded to defeat pathological cyclic / deeply-nested structures.
+ * Cycle detection is unnecessary at depth 5.
+ */
+function* iterStringValues(value: unknown, depth = 0): Generator<string> {
+	if (depth > 5) return;
+	if (typeof value === "string") {
+		yield value;
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const v of value) yield* iterStringValues(v, depth + 1);
+		return;
+	}
+	if (value && typeof value === "object") {
+		for (const v of Object.values(value as Record<string, unknown>)) {
+			yield* iterStringValues(v, depth + 1);
+		}
+	}
+}
+
 export interface PermissionCheckerOptions {
 	/**
 	 * Additional tool names that require confirmation (tool-level
@@ -195,11 +223,17 @@ export function createPermissionChecker(
 			}
 
 			// === Always blocked: protected paths via tool args ===
-			const filePath = typedArgs?.path;
-			if (typeof filePath === "string") {
+			// Walk every string value in the args (top-level, nested) rather
+			// than only `args.path`. A custom read tool whitelisted via
+			// knownReadOnly may carry the target under `filePath`,
+			// `file_path`, `pathname`, etc. — naming conventions are not
+			// enforceable across MCP/plugin tools, so the protected-path
+			// floor must run on every string leaf to remain unbypassable.
+			// (Codex Tier-2 pass-7 finding.)
+			for (const candidate of iterStringValues(typedArgs)) {
 				for (const pattern of PROTECTED_PATH_PATTERNS) {
-					if (pattern.test(filePath)) {
-						return { action: "block", reason: `Protected path: ${filePath}` };
+					if (pattern.test(candidate)) {
+						return { action: "block", reason: `Protected path: ${candidate}` };
 					}
 				}
 			}
