@@ -399,6 +399,41 @@ describe("SessionManager", () => {
       expect(reopened.getEntries()).toHaveLength(4);
     });
 
+    it("Codex-pass5-fix: withLock is re-entrant and keeps lockHeld true across nested scopes", async () => {
+      // Nested withLock used to either deadlock on the cross-process
+      // file lock OR clear lockHeld inside the inner finally even
+      // though the outer critical section was still active. Either
+      // breaks navigateBranch's truncate-on-failure semantics.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      let outerHeldBeforeInner = false;
+      let innerHeld = false;
+      let outerHeldAfterInner = false;
+
+      await manager.withLock(async () => {
+        outerHeldBeforeInner = (manager as any).lockHeld;
+        await manager.withLock(async () => {
+          innerHeld = (manager as any).lockHeld;
+        });
+        outerHeldAfterInner = (manager as any).lockHeld;
+      });
+
+      expect(outerHeldBeforeInner).toBe(true);
+      expect(innerHeld).toBe(true);
+      // CRITICAL: the outer's lockHeld must STILL be true after the
+      // inner exits — without per-instance depth counting, the inner's
+      // finally would have cleared it.
+      expect(outerHeldAfterInner).toBe(true);
+      expect((manager as any).lockHeld).toBe(false);
+    });
+
     it("Codex-pass3-fix: navigateBranch leaves disk untouched on persist failure (in-memory rollback only)", () => {
       // Pass-2 added a truncateSync rollback to erase phantom on-disk
       // entries from a failed persist. Pass-3 found that the truncate

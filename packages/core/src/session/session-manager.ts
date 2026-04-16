@@ -375,15 +375,22 @@ export class SessionManager {
   private persist: boolean;
   private flushed: boolean = false;
   /**
-   * Tracks whether the cross-process lock is currently held via withLock.
+   * Re-entrant depth counter for withLock.
    *
    * navigateBranch's rollback truncate is only safe under exclusive
    * access — without the lock, a peer process appending to the file
    * between our snapshot and our truncate would have its bytes erased.
-   * We use this flag to enable the durable rollback path only when the
-   * caller has wrapped navigateBranch in withLock.
+   * We treat depth > 0 as "lock is held" and re-entry as cheap (skip
+   * the cross-process lock acquisition because this process already
+   * owns it). Without re-entry, an inner withLock from a callback
+   * would wait on the file lock this process already holds and time
+   * out, AND a non-counted boolean would let an inner finally clear
+   * the flag mid-outer-critical-section.
    */
-  private lockHeld: boolean = false;
+  private lockDepth: number = 0;
+  private get lockHeld(): boolean {
+    return this.lockDepth > 0;
+  }
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private leafId: string | null = null;
@@ -1338,13 +1345,28 @@ export class SessionManager {
    * ```
    */
   async withLock<T>(fn: () => Promise<T>): Promise<T> {
-    if (!this.sessionFile) {
-      // In-memory session - no locking needed
-      this.lockHeld = true;
+    // Re-entrant short-circuit: if THIS manager already holds the
+    // lock (somewhere up the call stack), skip the cross-process
+    // acquire — we already have exclusive access. Without this an
+    // inner withLock would deadlock against the outer's file lock.
+    if (this.lockDepth > 0) {
+      this.lockDepth++;
       try {
         return await fn();
       } finally {
-        this.lockHeld = false;
+        this.lockDepth--;
+      }
+    }
+
+    if (!this.sessionFile) {
+      // In-memory session - no cross-process locking needed, but we
+      // still want lockDepth tracking so navigateBranch's truncate
+      // path knows it can roll back safely.
+      this.lockDepth++;
+      try {
+        return await fn();
+      } finally {
+        this.lockDepth--;
       }
     }
     const sessionFile = this.sessionFile;
@@ -1368,11 +1390,11 @@ export class SessionManager {
         this.buildIndex();
         this.flushed = true;
       }
-      this.lockHeld = true;
+      this.lockDepth++;
       try {
         return await fn();
       } finally {
-        this.lockHeld = false;
+        this.lockDepth--;
       }
     });
   }
