@@ -399,6 +399,87 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash operands + shell-meta boundaries", () => {
+	// Pre-pass-11 bug: PROTECTED_PATH_PATTERNS used `[\s/\\]` boundaries.
+	// `cat "/etc"`, `cat ".env"`, `ls "~/.ssh"`, etc. were not blocked
+	// because the quote characters were not boundary chars. Lookbehind /
+	// lookahead on segment-char negation now treats any non-segment char
+	// (whitespace, /, \, quotes, ;, |, &, >, <, (, ), …) as a boundary.
+
+	const quotedExactDirs: Array<[string, string]> = [
+		[`cat "/etc"`, `/etc with double quotes`],
+		[`cat '/etc'`, `/etc with single quotes`],
+		[`ls "~/.ssh"`, `~/.ssh with double quotes`],
+		[`ls "~/.aws"`, `~/.aws with double quotes`],
+		[`find "/Users/pk/.aws"`, `nested ~/.aws with double quotes`],
+		[`cat "/etc/shadow"`, `/etc/shadow with double quotes`],
+	];
+
+	for (const [command, label] of quotedExactDirs) {
+		it(`(auto) blocks bash command with ${label}`, async () => {
+			const checker = createPermissionChecker("auto");
+			const result = await checker.check(makeCtx("bash", { command }));
+			expect(result.action).toBe("block");
+		});
+	}
+
+	const quotedBareBasenames: Array<[string, string]> = [
+		[`cat ".env"`, `.env with double quotes`],
+		[`cat '.env'`, `.env with single quotes`],
+		[`cat ".env.local"`, `.env.local with double quotes`],
+		[`cat "credentials.json"`, `credentials.json with double quotes`],
+		[`cat "id_rsa"`, `id_rsa with double quotes`],
+		[`cat "id_ed25519.pub"`, `id_ed25519 with double quotes`],
+	];
+
+	for (const [command, label] of quotedBareBasenames) {
+		it(`(auto) blocks bash command with ${label}`, async () => {
+			const checker = createPermissionChecker("auto");
+			const result = await checker.check(makeCtx("bash", { command }));
+			expect(result.action).toBe("block");
+		});
+	}
+
+	const shellMetaForms: Array<[string, string]> = [
+		[`cat /etc/shadow|grep root`, `pipe after protected path`],
+		[`cat .env;ls`, `semicolon after .env`],
+		[`cat .env&&echo done`, `&& chain`],
+		[`cat /etc/shadow>out.txt`, `> redirect after protected path`],
+		[`cat <(cat /etc/shadow)`, `process substitution`],
+		[`(cat .env)`, `subshell parens`],
+	];
+
+	for (const [command, label] of shellMetaForms) {
+		it(`(auto) blocks bash command with ${label}`, async () => {
+			const checker = createPermissionChecker("auto");
+			const result = await checker.check(makeCtx("bash", { command }));
+			expect(result.action).toBe("block");
+		});
+	}
+
+	it("(auto) bash command with .pem inside quotes is blocked", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("bash", { command: `cat "private.pem"` }),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(auto) does NOT block benign substring matches in bash commands", async () => {
+		// /etcetera, .envelope, id_rsa_demo are NOT the protected items.
+		// Lookbehind/lookahead must hold here.
+		const checker = createPermissionChecker("auto");
+		for (const command of [
+			"cat /etcetera/file.txt",
+			"cat .envelope.bak",
+			"cat id_rsa_demo.txt",
+		]) {
+			const result = await checker.check(makeCtx("bash", { command }));
+			expect(result.action).toBe("allow");
+		}
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-10 regression: real paths with spaces + exact protected directories", () => {
 	// Pre-pass-10 issue 1: looksLikePath rejected ANY string with
 	// whitespace, so a custom knownReadOnly tool could pass a real path

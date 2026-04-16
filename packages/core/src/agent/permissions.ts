@@ -94,37 +94,43 @@ const DESTRUCTIVE_PATTERNS = [
  * Patterns for protected file paths.
  * Checked against both tool args.path AND inside bash command strings.
  *
- * Boundary-aware so they match BOTH the exact directory/file AND any
- * descendant. e.g. `~/.ssh` and `~/.ssh/id_rsa` both hit `\.ssh`. Pre-
- * pass-10 the patterns required a trailing slash, so `ls ~/.ssh` /
- * `find /Users/pk/.aws` / `ls /etc` bypassed the floor.
+ * Boundary-aware via negative lookbehind / lookahead on path-segment
+ * characters (`[A-Za-z0-9_-]`), so any non-segment char (whitespace,
+ * `/`, `\`, quotes, shell metacharacters like `;`, `|`, `&`, `>`, `<`,
+ * `(`, `)`, etc.) acts as a token boundary. This catches:
+ *   - Exact directories (`/etc`, `~/.ssh`, `/Users/pk/.aws`)
+ *   - Descendants (`/etc/shadow`, `~/.ssh/id_rsa`, `.env.local`)
+ *   - Quoted bash operands (`cat "/etc"`, `cat ".env"`, `ls "~/.ssh"`)
+ *   - Shell-pipelined forms (`cat /etc/shadow|grep`, `cat .env;ls`)
+ * — while NOT matching substrings that share a prefix but extend with
+ * segment chars (`/etcetera`, `.envelope`, `id_rsa_demo`).
  *
- * Boundary set includes whitespace so bash commands like `cat .env` or
- * `ls /etc` are caught — in bash, the whitespace-delimited token IS the
- * path. For args values, the path-shape gate already excludes prose,
- * so whitespace boundaries don't cause false-positives there either.
+ * Pass-10 used `[\s/\\]` boundaries which missed quoted forms like
+ * `cat "/etc"` (Codex pass-11). Lookaround on segment-char negation
+ * is the most robust formulation that doesn't require shell parsing.
  */
 const PROTECTED_PATH_PATTERNS = [
 	// System directories: match exact dir or descendant.
-	/(?:^|[\s/\\])etc(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])usr(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])sys(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])boot(?:[\s/\\]|$)/,
+	/(?<![A-Za-z0-9_-])etc(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])usr(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])sys(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])boot(?![A-Za-z0-9_-])/,
 	// Dot-directories: match exact dir or descendant.
-	/(?:^|[\s/\\])\.ssh(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])\.aws(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])\.gnupg(?:[\s/\\]|$)/,
-	// Sensitive dotfiles / known basenames: match anywhere as a path
-	// segment, including extension-suffixed variants like `.env.local`.
-	/(?:^|[\s/\\])\.env(?:[\s/\\.]|$)/,
-	/(?:^|[\s/\\])\.npmrc(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])\.netrc(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])credentials\.json(?:[\s/\\]|$)/,
-	/(?:^|[\s/\\])id_rsa(?:[\s/\\.]|$)/,
-	/(?:^|[\s/\\])id_ed25519(?:[\s/\\.]|$)/,
+	/(?<![A-Za-z0-9_-])\.ssh(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])\.aws(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])\.gnupg(?![A-Za-z0-9_-])/,
+	// Sensitive dotfiles / known basenames.
+	/(?<![A-Za-z0-9_-])\.env(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])\.npmrc(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])\.netrc(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])credentials\.json(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])id_rsa(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])id_ed25519(?![A-Za-z0-9_-])/,
 	// Key file extensions: any path component ending in .pem or .key.
-	/(?:^|[\s/\\])[^/\\\s]+\.pem(?:[\s]|$)/,
-	/(?:^|[\s/\\])[^/\\\s]+\.key(?:[\s]|$)/,
+	// Word-boundary on `\b` so `mykey.pem` / `server.key` are caught
+	// even though the lookbehind would reject `y` / `r` before `.pem`.
+	/\.pem\b/,
+	/\.key\b/,
 ];
 
 /**
