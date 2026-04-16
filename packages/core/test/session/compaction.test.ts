@@ -4,6 +4,8 @@ import type { AssistantMessage, AssistantMessageEvent } from "@my-agent/ai";
 import {
   estimateTokens,
   estimateContextTokens,
+  measureContextTokens,
+  calculateContextTokens,
   findCutPoint,
   extractFileOperations,
   generateCompactionSummary,
@@ -369,6 +371,134 @@ describe("shouldCompact", () => {
     })();
   });
 
+  it("Tier-1: shouldCompact uses provider Usage tokens when an assistant turn reports them", () => {
+    // The chars/4 estimate of this conversation is tiny (a few tokens),
+    // so the OLD shouldCompact would never trigger for a 1000-token
+    // window. With Usage-based accounting, the model is reporting that
+    // the LAST assistant turn already consumed 1500 tokens — which
+    // exceeds (1000 - 200) = 800 limit and MUST trigger compaction.
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        usage: { inputTokens: 1400, outputTokens: 100 },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as any,
+    ];
+    expect(shouldCompact(messages, 1000, 200)).toBe(true);
+
+    // Sanity check: the chars/4 fallback would have said "no compact"
+    // because the raw text is only a handful of tokens.
+    expect(estimateContextTokens(messages)).toBeLessThan(50);
+  });
+});
+
+describe("measureContextTokens", () => {
+  it("falls back to chars/4 when no assistant message has usage", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi", timestamp: Date.now() },
+    ];
+    const measurement = measureContextTokens(messages);
+    expect(measurement.lastUsageIndex).toBeNull();
+    expect(measurement.usageTokens).toBe(0);
+    expect(measurement.tokens).toBe(estimateContextTokens(messages));
+    expect(measurement.trailingTokens).toBe(measurement.tokens);
+  });
+
+  it("uses last assistant Usage when present", () => {
+    const messages: AgentMessage[] = [
+      { role: "user", content: "hi", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "hello" }],
+        usage: { inputTokens: 1000, outputTokens: 200, cacheReadTokens: 50 },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as any,
+    ];
+    const measurement = measureContextTokens(messages);
+    expect(measurement.lastUsageIndex).toBe(1);
+    expect(measurement.usageTokens).toBe(1250);
+    expect(measurement.trailingTokens).toBe(0);
+    expect(measurement.tokens).toBe(1250);
+  });
+
+  it("adds trailing message estimates after the last Usage anchor", () => {
+    // Simulates: prior assistant turn produced usage 1000+200, then a
+    // user turn was added that has not been sent yet. We should bill
+    // the prior turn at provider cost AND estimate the trailing user
+    // message via chars/4.
+    const trailingText = "B".repeat(400); // ~100 tokens
+    const messages: AgentMessage[] = [
+      { role: "user", content: "first", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        usage: { inputTokens: 1000, outputTokens: 200 },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as any,
+      { role: "user", content: trailingText, timestamp: Date.now() },
+    ];
+
+    const measurement = measureContextTokens(messages);
+    expect(measurement.lastUsageIndex).toBe(1);
+    expect(measurement.usageTokens).toBe(1200);
+    expect(measurement.trailingTokens).toBeCloseTo(100, 0);
+    expect(measurement.tokens).toBeCloseTo(1300, 0);
+  });
+
+  it("skips aborted/error assistant messages when finding the last Usage", () => {
+    // An aborted turn's reported usage is unreliable (often partial /
+    // phantom from a half-streamed response). measureContextTokens MUST
+    // walk past it to the most recent CLEAN assistant turn.
+    const messages: AgentMessage[] = [
+      { role: "user", content: "first", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        usage: { inputTokens: 800, outputTokens: 100 },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      } as any,
+      { role: "user", content: "second", timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "" }],
+        usage: { inputTokens: 999_999, outputTokens: 0 },
+        stopReason: "aborted",
+        timestamp: Date.now(),
+      } as any,
+    ];
+
+    const measurement = measureContextTokens(messages);
+    expect(measurement.lastUsageIndex).toBe(1);
+    expect(measurement.usageTokens).toBe(900);
+  });
+});
+
+describe("calculateContextTokens", () => {
+  it("sums input, output, and cache tokens", () => {
+    expect(
+      calculateContextTokens({
+        inputTokens: 100,
+        outputTokens: 50,
+        cacheReadTokens: 25,
+        cacheWriteTokens: 10,
+      }),
+    ).toBe(185);
+  });
+
+  it("treats missing cache fields as zero", () => {
+    expect(
+      calculateContextTokens({ inputTokens: 100, outputTokens: 50 }),
+    ).toBe(150);
+  });
+});
+
+describe("regression scenarios", () => {
   it("regression: clamps reserveTokens for small context windows", () => {
     // Without the clamp, contextWindow=4K, reserveTokens=16K gives
     // limit = 4000 - 16000 = -12000. Then ANY non-empty context returns

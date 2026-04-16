@@ -36,13 +36,19 @@ export { SessionManager, buildSessionContext } from "./session-manager.js";
 export {
   estimateTokens,
   estimateContextTokens,
+  measureContextTokens,
+  calculateContextTokens,
   findCutPoint,
   extractFileOperations,
   generateCompactionSummary,
   compact,
   shouldCompact,
 } from "./compaction.js";
-export type { CompactionResult, CompactOptions } from "./compaction.js";
+export type {
+  CompactionResult,
+  CompactOptions,
+  ContextTokenMeasurement,
+} from "./compaction.js";
 
 // Auto-Compaction
 export {

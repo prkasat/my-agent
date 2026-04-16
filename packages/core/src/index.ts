@@ -134,6 +134,8 @@ export {
 	// Compaction
 	estimateTokens,
 	estimateContextTokens,
+	measureContextTokens,
+	calculateContextTokens,
 	findCutPoint,
 	extractFileOperations,
 	generateCompactionSummary,

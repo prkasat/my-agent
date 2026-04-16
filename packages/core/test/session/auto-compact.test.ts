@@ -113,6 +113,97 @@ describe("createAutoCompactor", () => {
 	});
 });
 
+describe("Tier-1: usage-based trigger", () => {
+	it("invokes the summarization LLM when last assistant Usage exceeds the limit even though chars/4 would not", async () => {
+		// Threat model: thinking-heavy models (e.g., o1, claude with extended
+		// thinking) and prompt-cached calls return tokens that exceed the
+		// chars/4 estimate by 5-10x. The OLD chars/4-only trigger would let
+		// the conversation silently grow past the model's actual context
+		// window before compaction kicks in. The Usage-based trigger MUST
+		// notice the real consumption immediately.
+		let summaryCalls = 0;
+		const trackingStreamFn = ((_m: Model, _ctx: any, _opts: any) => {
+			summaryCalls++;
+			return fakeStreamFn("compacted")();
+		}) as any;
+
+		const compactor = createAutoCompactor({
+			streamFn: trackingStreamFn,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+		});
+
+		// A few short text messages — chars/4 says ~tens of tokens. But
+		// the last clean assistant turn reports 1400 inputTokens + 100
+		// outputTokens, way over the 1000-token window minus 100 reserve
+		// = 900 limit. The Usage-based trigger MUST kick in.
+		const filler = "x".repeat(300); // ~75 tokens each
+		const messages: AgentMessage[] = [
+			{ role: "user", content: `u0: ${filler}`, timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: `a1: ${filler}` }],
+				usage: { inputTokens: 1400, outputTokens: 100 },
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage,
+			{ role: "user", content: `u2: ${filler}`, timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: `a3: ${filler}` }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage,
+		];
+
+		const context: AgentContext = {
+			messages,
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(context);
+		expect(summaryCalls).toBe(1);
+	});
+
+	it("does NOT call the summarization LLM when reported Usage is well within the limit", async () => {
+		let summaryCalls = 0;
+		const trackingStreamFn = ((_m: Model, _ctx: any, _opts: any) => {
+			summaryCalls++;
+			return fakeStreamFn("compacted")();
+		}) as any;
+
+		const compactor = createAutoCompactor({
+			streamFn: trackingStreamFn,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+		});
+
+		// Long-ish text but the model says "I only used 150 tokens" via
+		// Usage. Trust the model — don't compact.
+		const filler = "x".repeat(300);
+		const messages: AgentMessage[] = [
+			{ role: "user", content: `u0: ${filler}`, timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: `a1: ${filler}` }],
+				usage: { inputTokens: 100, outputTokens: 50 },
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage,
+		];
+
+		const context: AgentContext = {
+			messages,
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(context);
+		expect(summaryCalls).toBe(0);
+	});
+});
+
 describe("regression A5 — small context window", () => {
 	it("does not collapse history when contextWindow < default reserveTokens", async () => {
 		// 4K context window with default 16K reserve — the original code computed

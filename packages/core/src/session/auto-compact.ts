@@ -12,7 +12,7 @@ import { DEFAULT_COMPACTION_SETTINGS } from "./types.js";
 import {
   compact,
   effectiveReserveTokens,
-  estimateContextTokens,
+  measureContextTokens,
   type CompactionResult,
 } from "./compaction.js";
 
@@ -128,7 +128,7 @@ export function createAutoCompactor(
     // user-cancellation state, while options.signal was bound at setup time.
     const effectiveSignal = signal ?? options.signal;
 
-    const currentTokens = estimateContextTokens(context.messages);
+    const currentTokens = measureContextTokens(context.messages).tokens;
     const contextWindow = context.model.contextWindow ?? 128_000;
 
     // Clamp reserveTokens against the model's actual context window.

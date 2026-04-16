@@ -12,7 +12,7 @@
  */
 
 import type { AgentMessage, AgentContext } from "../agent/types.js";
-import type { AssistantMessage, Message, Model, StreamFunction } from "@my-agent/ai";
+import type { AssistantMessage, Message, Model, StreamFunction, Usage } from "@my-agent/ai";
 import type { CompactionDetails } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
 
@@ -94,10 +94,109 @@ export function estimateTokens(message: AgentMessage): number {
 }
 
 /**
- * Estimate total tokens for a list of messages.
+ * Estimate total tokens for a list of messages using the chars/4 heuristic.
+ * Prefer `measureContextTokens` when available — it uses provider-reported
+ * usage for the prefix up through the last assistant turn and only estimates
+ * the trailing tail.
  */
 export function estimateContextTokens(messages: AgentMessage[]): number {
   return messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+}
+
+/**
+ * Sum a Usage record into total context tokens.
+ *
+ * Pi-Mono prefers `usage.totalTokens` when the provider reports it. Our
+ * Usage shape doesn't carry `totalTokens`, so we always sum the components.
+ * Cache reads and writes are real context tokens that the provider charges
+ * for and that count against the context window, so they're included.
+ */
+export function calculateContextTokens(usage: Usage): number {
+  return (
+    (usage.inputTokens || 0) +
+    (usage.outputTokens || 0) +
+    (usage.cacheReadTokens || 0) +
+    (usage.cacheWriteTokens || 0)
+  );
+}
+
+/**
+ * Find the last assistant message that carries usable usage data.
+ *
+ * Skips aborted and error messages — their usage is unreliable (often
+ * partial / phantom) and shouldn't anchor the context-window estimate.
+ */
+function getLastAssistantUsageInfo(
+  messages: AgentMessage[],
+): { usage: Usage; index: number } | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (
+      "role" in msg &&
+      msg.role === "assistant" &&
+      msg.usage &&
+      msg.stopReason !== "aborted" &&
+      msg.stopReason !== "error"
+    ) {
+      return { usage: msg.usage, index: i };
+    }
+  }
+  return undefined;
+}
+
+export interface ContextTokenMeasurement {
+  /** Best estimate of the tokens that will be sent on the next LLM call. */
+  tokens: number;
+  /** Tokens taken from the last assistant message's reported Usage (0 if none). */
+  usageTokens: number;
+  /** Tokens estimated for messages after the last assistant Usage anchor. */
+  trailingTokens: number;
+  /**
+   * Index of the assistant message whose Usage was used as the anchor, or
+   * `null` if no usage was found and the count is fully estimated.
+   */
+  lastUsageIndex: number | null;
+}
+
+/**
+ * Measure context tokens, preferring real provider Usage over chars/4.
+ *
+ * The context sent to the LLM on the *next* turn is approximately:
+ *   {tokens that produced the last assistant turn} + {messages added since}
+ * The first term is precisely what `usage.inputTokens + usage.outputTokens`
+ * accounts for, because the provider already counted those tokens. The
+ * second term is the only thing we still have to estimate.
+ *
+ * When no assistant message has reported usage yet (cold start, before the
+ * first turn completes), this falls back to a fully-estimated count.
+ */
+export function measureContextTokens(
+  messages: AgentMessage[],
+): ContextTokenMeasurement {
+  const usageInfo = getLastAssistantUsageInfo(messages);
+
+  if (!usageInfo) {
+    const estimated = estimateContextTokens(messages);
+    return {
+      tokens: estimated,
+      usageTokens: 0,
+      trailingTokens: estimated,
+      lastUsageIndex: null,
+    };
+  }
+
+  const usageTokens = calculateContextTokens(usageInfo.usage);
+  let trailingTokens = 0;
+  for (let i = usageInfo.index + 1; i < messages.length; i++) {
+    trailingTokens += estimateTokens(messages[i]);
+  }
+
+  return {
+    tokens: usageTokens + trailingTokens,
+    usageTokens,
+    trailingTokens,
+    lastUsageIndex: usageInfo.index,
+  };
 }
 
 // ============================================================================
@@ -574,13 +673,17 @@ export function effectiveReserveTokens(
 
 /**
  * Check if compaction is needed based on token count.
+ *
+ * Uses provider Usage when available so that the trigger matches what the
+ * model actually charges for, not the chars/4 overestimate. Falls back to
+ * the heuristic when no assistant turn has reported usage yet.
  */
 export function shouldCompact(
   messages: AgentMessage[],
   contextWindow: number,
   reserveTokens: number
 ): boolean {
-  const currentTokens = estimateContextTokens(messages);
+  const currentTokens = measureContextTokens(messages).tokens;
   const limit = contextWindow - effectiveReserveTokens(contextWindow, reserveTokens);
   return currentTokens > limit;
 }
