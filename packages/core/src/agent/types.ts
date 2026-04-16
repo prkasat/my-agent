@@ -15,7 +15,9 @@ import type {
 // Extends the base Message type with custom message types.
 // Custom messages are internal — convertToLlm filters them out before LLM calls.
 
-export type AgentMessage = Message | CustomAgentMessage;
+import type { CustomMessage } from "./custom-messages.js";
+
+export type AgentMessage = Message | CustomAgentMessage | CustomMessage;
 
 export interface CustomAgentMessage {
 	role: "custom";
@@ -41,7 +43,21 @@ export interface AgentTool<TParams extends TSchema = TSchema, TDetails = unknown
 	parameters: TParams;
 	/** Transform raw args before validation */
 	prepareArguments?: (raw: unknown) => Static<TParams>;
-	/** Execute the tool and return a result for the LLM */
+	/**
+	 * Execute the tool and return a result for the LLM.
+	 *
+	 * Abort contract: implementations MUST honor `signal`. When the agent
+	 * loop aborts a parallel tool batch, it returns immediately rather
+	 * than waiting for outstanding executions — but it cannot force-stop
+	 * a non-cooperative tool. A tool that ignores `signal` and keeps
+	 * running (open timers, sockets, child processes) will keep the Node
+	 * event loop alive past `agent_end`.
+	 *
+	 * Wire any internal `setTimeout`, `fetch`, child-process spawn, or
+	 * stream to abort when `signal.aborted` becomes true (`fetch({ signal })`,
+	 * `setTimeout(cb, ms, { signal })`, `child_process.spawn({ signal })`,
+	 * or `signal.addEventListener("abort", cleanup)`).
+	 */
 	execute: (
 		toolCallId: string,
 		params: Static<TParams>,
@@ -71,8 +87,15 @@ export interface AgentLoopConfig {
 	 * MUST filter out custom messages. MUST NOT throw.
 	 */
 	convertToLlm: (messages: AgentMessage[]) => Message[];
-	/** Optional: transform context before each LLM call (token pruning, caching) */
-	transformContext?: (context: AgentContext) => AgentContext;
+	/**
+	 * Optional: transform context before each LLM call (token pruning, caching, compaction).
+	 * Receives the loop's AbortSignal so long-running transforms (e.g., LLM-powered
+	 * compaction) can be cancelled when the caller aborts the agent.
+	 */
+	transformContext?: (
+		context: AgentContext,
+		signal?: AbortSignal,
+	) => AgentContext | Promise<AgentContext>;
 	/** Dynamic API key resolution. Called before each LLM call. */
 	getApiKey?: (provider: string) => Promise<string | undefined>;
 	/** Get steering messages to inject between turns (inner loop driver) */
@@ -127,4 +150,4 @@ export type AgentEvent =
 	| { type: "tool_execution_update"; toolCallId: string; update: Partial<AgentToolResult> }
 	| { type: "tool_execution_end"; toolCallId: string; result: AgentToolResult; isError: boolean }
 	| { type: "turn_end"; turnIndex: number; usage?: Usage }
-	| { type: "agent_end"; reason: "complete" | "error" | "aborted" | "max_turns" };
+	| { type: "agent_end"; reason: "complete" | "error" | "aborted" | "max_turns"; error?: string };

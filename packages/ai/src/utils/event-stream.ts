@@ -10,7 +10,7 @@
  */
 export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 	private queue: TEvent[] = [];
-	private waiting: ((value: IteratorResult<TEvent>) => void) | null = null;
+	private waiters: ((value: IteratorResult<TEvent>) => void)[] = [];
 	private done = false;
 
 	private resultPromise: Promise<TResult>;
@@ -29,7 +29,7 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 
 	/**
 	 * Push an event into the stream.
-	 * If a consumer is waiting, deliver immediately.
+	 * If consumers are waiting, deliver to all of them.
 	 * If this is a completion event, resolve the result.
 	 */
 	push(event: TEvent): void {
@@ -44,11 +44,13 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 			}
 		}
 
-		// Deliver to waiting consumer or queue
-		if (this.waiting) {
-			const resolve = this.waiting;
-			this.waiting = null;
-			resolve({ value: event, done: false });
+		// Deliver to all waiting consumers or queue
+		if (this.waiters.length > 0) {
+			const waiters = this.waiters;
+			this.waiters = [];
+			for (const resolve of waiters) {
+				resolve({ value: event, done: false });
+			}
 		} else {
 			this.queue.push(event);
 		}
@@ -68,10 +70,13 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 			this.rejectResult(new Error("Stream ended without result"));
 		}
 
-		if (this.waiting) {
-			const resolve = this.waiting;
-			this.waiting = null;
-			resolve({ value: undefined as unknown as TEvent, done: true });
+		// Notify all waiting consumers that stream is done
+		if (this.waiters.length > 0) {
+			const waiters = this.waiters;
+			this.waiters = [];
+			for (const resolve of waiters) {
+				resolve({ value: undefined as unknown as TEvent, done: true });
+			}
 		}
 	}
 
@@ -96,9 +101,9 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 			// If done and queue empty, stop
 			if (this.done) return;
 
-			// Wait for next event
+			// Wait for next event (add to waiters queue)
 			const result = await new Promise<IteratorResult<TEvent>>((resolve) => {
-				this.waiting = resolve;
+				this.waiters.push(resolve);
 			});
 
 			if (result.done) return;

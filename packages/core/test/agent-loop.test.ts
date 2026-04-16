@@ -247,6 +247,339 @@ describe("Agent Loop", () => {
 		expect(endReason).toBe("max_turns");
 	});
 
+	it("should respect a pre-aborted caller signal", async () => {
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "should not run" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const ac = new AbortController();
+		ac.abort();
+
+		let endReason = "";
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{ streamFn: llm, convertToLlm: defaultConvertToLlm },
+			{ signal: ac.signal },
+		);
+
+		for await (const event of loop) {
+			if (event.type === "agent_end") endReason = event.reason;
+		}
+
+		expect(endReason).toBe("aborted");
+	});
+
+	it("should pass the caller signal into transformContext", async () => {
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "ok" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const ac = new AbortController();
+		let receivedSignal: AbortSignal | undefined;
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				transformContext: (ctx, signal) => {
+					receivedSignal = signal;
+					return ctx;
+				},
+			},
+			{ signal: ac.signal },
+		);
+
+		await loop.result();
+		expect(receivedSignal).toBe(ac.signal);
+	});
+
+	it("should pass a defined signal to transformContext even when caller omits one", async () => {
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "ok" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		let receivedSignal: AbortSignal | undefined;
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				transformContext: (ctx, signal) => {
+					receivedSignal = signal;
+					return ctx;
+				},
+			},
+		);
+
+		await loop.result();
+		expect(receivedSignal).toBeDefined();
+		expect(receivedSignal?.aborted).toBe(false);
+	});
+
+	it("regression: aborting during tool execution does not leave a synthetic tool error in the conversation", async () => {
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_call",
+						id: "tc1",
+						name: "slow",
+						arguments: "{}",
+					},
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const ac = new AbortController();
+		const slowTool = {
+			name: "slow",
+			description: "Slow tool that respects the abort signal",
+			parameters: Type.Object({}),
+			execute: async (_id: string, _params: any, signal: AbortSignal) => {
+				// Trigger abort mid-tool, then throw the way well-behaved
+				// signal-aware tools do.
+				ac.abort();
+				if (signal.aborted) throw new Error("Operation aborted");
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Run the slow tool" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [slowTool],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{ streamFn: llm, convertToLlm: defaultConvertToLlm },
+			{ signal: ac.signal },
+		);
+
+		let endReason = "";
+		for await (const event of loop) {
+			if (event.type === "agent_end") endReason = event.reason;
+		}
+
+		expect(endReason).toBe("aborted");
+
+		const messages = await loop.result();
+		// Conversation should NOT contain a synthetic toolResult with isError
+		// generated from the abort exception. Before the fix, a fake
+		// "Error: Operation aborted" tool result was appended here.
+		const fakeAbortErrors = messages.filter((m) => {
+			if (!("role" in m) || m.role !== "toolResult") return false;
+			if (!m.isError) return false;
+			const text = m.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join(" ");
+			return text.toLowerCase().includes("aborted");
+		});
+		expect(fakeAbortErrors).toHaveLength(0);
+	});
+
+	it("regression (pass-3): aborting mid multi-tool batch leaves a structurally complete transcript", async () => {
+		// The assistant requests TWO tools in one message. The first tool
+		// completes; the second triggers abort and throws. Without the
+		// padding fix, context.messages would contain assistant{2 tool_calls}
+		// followed by only ONE toolResult — invalid for replay/resume and
+		// some providers reject the next call outright.
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_call", id: "tc1", name: "fast", arguments: "{}" },
+					{ type: "tool_call", id: "tc2", name: "abortive", arguments: "{}" },
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const ac = new AbortController();
+		const fastTool = {
+			name: "fast",
+			description: "Completes immediately",
+			parameters: Type.Object({}),
+			execute: async () => ({ content: [{ type: "text" as const, text: "done" }] }),
+		};
+		const abortiveTool = {
+			name: "abortive",
+			description: "Aborts the run",
+			parameters: Type.Object({}),
+			execute: async (_id: string, _params: any, signal: AbortSignal) => {
+				ac.abort();
+				if (signal.aborted) throw new Error("Operation aborted");
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Run two tools" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [fastTool, abortiveTool],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{ streamFn: llm, convertToLlm: defaultConvertToLlm },
+			{ signal: ac.signal },
+		);
+
+		let endReason = "";
+		for await (const event of loop) {
+			if (event.type === "agent_end") endReason = event.reason;
+		}
+		expect(endReason).toBe("aborted");
+
+		const messages = await loop.result();
+		// Find the assistant message with two tool_calls
+		const assistantWithTools = messages.find(
+			(m) =>
+				"role" in m &&
+				m.role === "assistant" &&
+				m.content.some((c) => c.type === "tool_call"),
+		);
+		expect(assistantWithTools).toBeDefined();
+
+		const toolCalls =
+			assistantWithTools && "content" in assistantWithTools
+				? assistantWithTools.content.filter((c: any) => c.type === "tool_call")
+				: [];
+		const toolResults = messages.filter((m) => "role" in m && m.role === "toolResult");
+
+		// Structural invariant: one toolResult per tool_call
+		expect(toolResults).toHaveLength(toolCalls.length);
+		expect(toolResults).toHaveLength(2);
+
+		// Synthetic cancellation result for the unfinished call (NOT isError)
+		const cancelled = toolResults.find((r: any) => r.toolCallId === "tc2");
+		expect(cancelled).toBeDefined();
+		expect((cancelled as any).isError).not.toBe(true);
+		const cancelledText = (cancelled as any).content
+			.filter((c: any) => c.type === "text")
+			.map((c: any) => c.text)
+			.join(" ");
+		expect(cancelledText.toLowerCase()).toContain("cancel");
+	});
+
+	it("regression (pass-4): parallel abort does not wait for non-cooperative siblings", async () => {
+		// One tool aborts immediately; a sibling SLEEPS without honoring
+		// the signal. With Promise.allSettled, the run would block until
+		// the sleeper finished. With the racing implementation, the run
+		// must end as soon as the abort fires — well before the sleeper.
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{ type: "tool_call", id: "tc1", name: "abortive", arguments: "{}" },
+					{ type: "tool_call", id: "tc2", name: "non-cooperative", arguments: "{}" },
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const ac = new AbortController();
+		const abortive = {
+			name: "abortive",
+			description: "Aborts immediately",
+			parameters: Type.Object({}),
+			execute: async (_id: string, _params: any, signal: AbortSignal) => {
+				ac.abort();
+				if (signal.aborted) throw new Error("Operation aborted");
+				return { content: [{ type: "text" as const, text: "ok" }] };
+			},
+		};
+
+		// Sleeps for a long time WITHOUT checking the signal — simulates a
+		// network call or third-party SDK that's not signal-aware. We track
+		// whether it was awaited via a side effect so the test can fail
+		// fast if the racing logic regresses.
+		let sleeperFinished = false;
+		const nonCooperative = {
+			name: "non-cooperative",
+			description: "Long sleep that ignores the signal",
+			parameters: Type.Object({}),
+			execute: async () => {
+				await new Promise((r) => setTimeout(r, 5_000));
+				sleeperFinished = true;
+				return { content: [{ type: "text" as const, text: "late" }] };
+			},
+		};
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Run them" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [abortive, nonCooperative],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+				toolExecution: "parallel",
+			},
+			{ streamFn: llm, convertToLlm: defaultConvertToLlm },
+			{ signal: ac.signal },
+		);
+
+		const start = Date.now();
+		let endReason = "";
+		for await (const event of loop) {
+			if (event.type === "agent_end") endReason = event.reason;
+		}
+		const elapsed = Date.now() - start;
+
+		expect(endReason).toBe("aborted");
+		// Should return WELL before the 5-second sleeper. Generous bound
+		// so this isn't flaky on slow CI; tight enough to detect a hang.
+		expect(elapsed).toBeLessThan(2_000);
+		// Sleeper was abandoned mid-flight
+		expect(sleeperFinished).toBe(false);
+
+		const messages = await loop.result();
+		// Structural padding still gives one toolResult per tool_call
+		const toolResults = messages.filter((m) => "role" in m && m.role === "toolResult");
+		expect(toolResults).toHaveLength(2);
+	});
+
 	it("should filter custom messages via convertToLlm", () => {
 		const messages = [
 			{ role: "user" as const, content: "Hello" },

@@ -10,15 +10,34 @@ import type {
 import type { AssistantMessage, Message, ToolCallContent, ToolResultMessage } from "@my-agent/ai";
 
 /**
+ * Per-invocation options for the agent loop.
+ */
+export interface AgentLoopRunOptions {
+	/**
+	 * Caller-controlled abort signal. When aborted, the in-flight LLM call,
+	 * compaction transform, tool execution, and retry backoff all stop.
+	 *
+	 * Without a signal, the loop runs to completion with no external way to
+	 * cancel it — useful for tests but unsafe for interactive callers.
+	 */
+	signal?: AbortSignal;
+}
+
+/**
  * Start a new agent loop with user prompts.
  *
  * Returns an EventStream that emits AgentEvents as the agent runs,
  * and resolves to the final message list when complete.
+ *
+ * Pass an AbortSignal in options.signal to cancel the loop. The signal
+ * is threaded through transformContext, the provider stream, tool
+ * execution, and the retry backoff.
  */
 export function agentLoop(
 	prompts: AgentMessage[],
 	context: AgentContext,
 	config: AgentLoopConfig,
+	options?: AgentLoopRunOptions,
 ): EventStream<AgentEvent, AgentMessage[]> {
 	context.messages.push(...prompts);
 
@@ -27,8 +46,12 @@ export function agentLoop(
 		() => [...context.messages],
 	);
 
-	runLoop(context, config, stream).catch(() => {
-		stream.push({ type: "agent_end", reason: "error" });
+	runLoop(context, config, stream, options?.signal).catch((err) => {
+		stream.push({
+			type: "agent_end",
+			reason: "error",
+			error: err instanceof Error ? err.message : String(err),
+		});
 	});
 
 	return stream;
@@ -41,6 +64,7 @@ export function agentLoop(
 export function agentLoopContinue(
 	context: AgentContext,
 	config: AgentLoopConfig,
+	options?: AgentLoopRunOptions,
 ): EventStream<AgentEvent, AgentMessage[]> {
 	const lastMsg = context.messages[context.messages.length - 1];
 	if (lastMsg && "role" in lastMsg && lastMsg.role === "assistant") {
@@ -52,11 +76,37 @@ export function agentLoopContinue(
 		() => [...context.messages],
 	);
 
-	runLoop(context, config, stream).catch(() => {
-		stream.push({ type: "agent_end", reason: "error" });
+	runLoop(context, config, stream, options?.signal).catch((err) => {
+		stream.push({
+			type: "agent_end",
+			reason: "error",
+			error: err instanceof Error ? err.message : String(err),
+		});
 	});
 
 	return stream;
+}
+
+/**
+ * Sleep that respects an AbortSignal. Resolves after `ms`, or rejects
+ * with a DOMException-style "AbortError" the moment the signal fires.
+ */
+function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(new Error("Aborted"));
+			return;
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener("abort", onAbort);
+			resolve();
+		}, ms);
+		const onAbort = () => {
+			clearTimeout(timer);
+			reject(new Error("Aborted"));
+		};
+		signal.addEventListener("abort", onAbort, { once: true });
+	});
 }
 
 /**
@@ -65,14 +115,19 @@ export function agentLoopContinue(
  * Architecture (from Pi-Mono):
  * - Outer loop: handles follow-up messages after agent would stop
  * - Inner loop: handles LLM call -> tool execution -> steering messages
+ *
+ * The signal is the caller-supplied AbortSignal. If the caller didn't
+ * provide one, we still create a never-aborting controller so downstream
+ * code can rely on signal being defined. This preserves backward
+ * compatibility with code paths that didn't accept a signal before.
  */
 async function runLoop(
 	context: AgentContext,
 	config: AgentLoopConfig,
 	stream: EventStream<AgentEvent, AgentMessage[]>,
+	callerSignal: AbortSignal | undefined,
 ): Promise<void> {
-	const abortController = new AbortController();
-	const signal = abortController.signal;
+	const signal = callerSignal ?? new AbortController().signal;
 
 	stream.push({ type: "agent_start" });
 
@@ -83,6 +138,10 @@ async function runLoop(
 	outerLoop: while (true) {
 		// === Inner Loop: LLM call + tools + steering ===
 		while (true) {
+			if (signal.aborted) {
+				stream.push({ type: "agent_end", reason: "aborted" });
+				return;
+			}
 			stream.push({ type: "turn_start", turnIndex });
 
 			// Check for steering messages before the LLM call
@@ -99,12 +158,19 @@ async function runLoop(
 				if (assistantMessage) break;
 				// Only retry if not aborted and we have retries left
 				if (signal.aborted || attempt === maxRetries) break;
-				// Exponential backoff: 1s, 2s
-				await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+				// Exponential backoff: 1s, 2s — abortable so cancellation isn't delayed
+				try {
+					await abortableSleep(1000 * (attempt + 1), signal);
+				} catch {
+					break;
+				}
 			}
 
 			if (!assistantMessage) {
-				stream.push({ type: "agent_end", reason: "error" });
+				stream.push({
+					type: "agent_end",
+					reason: signal.aborted ? "aborted" : "error",
+				});
 				return;
 			}
 
@@ -132,7 +198,21 @@ async function runLoop(
 						? await executeToolsParallel(toolCalls, context, config, stream, signal)
 						: await executeToolsSequential(toolCalls, context, config, stream, signal);
 
-				context.messages.push(...toolResults);
+				// Structural completeness: every assistant message that contains
+				// N tool_calls must be followed by exactly N toolResults in the
+				// transcript. If we got fewer (because abort interrupted the
+				// batch), pad with synthetic "cancelled" results so the
+				// conversation can be safely persisted, replayed, and resumed.
+				//
+				// We use a plain non-error toolResult (NOT isError=true) to
+				// avoid surfacing "fake" tool-execution failures — the abort
+				// is a control-flow signal, not a tool malfunction.
+				const completeResults =
+					toolResults.length < toolCalls.length
+						? padCancelledToolResults(toolCalls, toolResults)
+						: toolResults;
+
+				context.messages.push(...completeResults);
 			}
 
 			stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
@@ -176,6 +256,9 @@ async function runLoop(
  * Stream an LLM response and emit events.
  *
  * Pipeline: transformContext -> convertToLlm -> streamFn -> forward events
+ *
+ * The signal is passed to transformContext (so compaction LLM calls
+ * cancel correctly) and to the provider's streamFn.
  */
 async function streamAssistantResponse(
 	context: AgentContext,
@@ -183,10 +266,20 @@ async function streamAssistantResponse(
 	agentStream: EventStream<AgentEvent, AgentMessage[]>,
 	signal: AbortSignal,
 ): Promise<AssistantMessage | null> {
-	// Apply context transform (token pruning, etc.)
+	// Apply context transform (token pruning, compaction, etc.)
 	let effectiveContext = context;
 	if (config.transformContext) {
-		effectiveContext = config.transformContext(context);
+		try {
+			effectiveContext = await Promise.resolve(config.transformContext(context, signal));
+		} catch (err) {
+			// If the transform threw because the caller aborted (e.g.,
+			// `createAutoCompactor(..., { onError: "throw" })` propagating
+			// an abort from its summarization LLM call), don't surface
+			// that as a generic "error" outcome — return null so the
+			// outer loop can detect signal.aborted and end as "aborted".
+			if (signal.aborted) return null;
+			throw err;
+		}
 	}
 
 	// Convert to LLM-compatible messages (filters out custom messages)
@@ -269,14 +362,28 @@ async function executeToolsSequential(
 ): Promise<ToolResultMessage[]> {
 	const results: ToolResultMessage[] = [];
 	for (const toolCall of toolCalls) {
-		const result = await executeSingleTool(toolCall, context, config, stream, signal);
-		results.push(result);
+		try {
+			const result = await executeSingleTool(toolCall, context, config, stream, signal);
+			results.push(result);
+		} catch (err) {
+			// Abort propagation from executeSingleTool: stop running further
+			// tools and return whatever genuine successes we already collected.
+			if (signal.aborted) break;
+			throw err;
+		}
 	}
 	return results;
 }
 
 /**
  * Execute tool calls in parallel (faster for independent tools).
+ *
+ * Abort semantics: when `signal` fires, the function returns immediately
+ * with whatever results have already settled. Outstanding tool promises
+ * are NOT awaited — a non-cooperative tool that ignores the signal would
+ * otherwise hang the agent indefinitely. Each tool's promise is wrapped
+ * with a `.catch` so any later rejection from such an outstanding tool
+ * is swallowed and does not surface as an unhandled rejection.
  */
 async function executeToolsParallel(
 	toolCalls: ToolCallContent[],
@@ -285,8 +392,40 @@ async function executeToolsParallel(
 	stream: EventStream<AgentEvent, AgentMessage[]>,
 	signal: AbortSignal,
 ): Promise<ToolResultMessage[]> {
-	const promises = toolCalls.map((tc) => executeSingleTool(tc, context, config, stream, signal));
-	return Promise.all(promises);
+	const results = new Array<ToolResultMessage | undefined>(toolCalls.length);
+	let firstNonAbortError: unknown = null;
+
+	const settled = toolCalls.map((tc, i) =>
+		executeSingleTool(tc, context, config, stream, signal)
+			.then((r) => {
+				results[i] = r;
+			})
+			.catch((err) => {
+				// Capture only NON-abort errors. Abort-induced rejections are
+				// expected control flow and are handled by structural padding
+				// in runLoop.
+				if (!signal.aborted && firstNonAbortError === null) {
+					firstNonAbortError = err;
+				}
+			}),
+	);
+
+	const allFinished = Promise.all(settled);
+	const abortFired = new Promise<void>((resolve) => {
+		if (signal.aborted) return resolve();
+		signal.addEventListener("abort", () => resolve(), { once: true });
+	});
+
+	// Race: either all tools finish, or abort fires. If abort wins, we
+	// return immediately and let outstanding promises clean up out-of-band
+	// (their rejections are already swallowed above).
+	await Promise.race([allFinished, abortFired]);
+
+	if (firstNonAbortError !== null && !signal.aborted) {
+		throw firstNonAbortError;
+	}
+
+	return results.filter((r): r is ToolResultMessage => r !== undefined);
 }
 
 /**
@@ -322,15 +461,19 @@ async function executeSingleTool(
 		return createErrorResult(toolCall, `Failed to parse arguments: ${err}`);
 	}
 
-	// Before hook
+	// Before hook (catch exceptions to prevent crashes)
 	if (config.beforeToolCall) {
-		const hookResult = await config.beforeToolCall({
-			toolCall: { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
-			args,
-			context,
-		});
-		if (hookResult.action === "block") {
-			return createErrorResult(toolCall, `Blocked: ${hookResult.reason}`);
+		try {
+			const hookResult = await config.beforeToolCall({
+				toolCall: { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
+				args,
+				context,
+			});
+			if (hookResult.action === "block") {
+				return createErrorResult(toolCall, `Blocked: ${hookResult.reason}`);
+			}
+		} catch (hookErr) {
+			return createErrorResult(toolCall, `beforeToolCall hook failed: ${hookErr instanceof Error ? hookErr.message : hookErr}`);
 		}
 	}
 
@@ -350,6 +493,14 @@ async function executeSingleTool(
 			stream.push({ type: "tool_execution_update", toolCallId: toolCall.id, update });
 		});
 	} catch (err) {
+		// If the tool failed because the caller aborted, propagate the
+		// error so the loop can end cleanly as "aborted". Without this,
+		// an abort-induced "Operation aborted" exception gets converted
+		// to a synthetic tool error that pollutes the persisted
+		// conversation history with what looks like a real failure.
+		if (signal.aborted) {
+			throw err;
+		}
 		result = {
 			content: [{ type: "text", text: `Error: ${err instanceof Error ? err.message : err}` }],
 			isError: true,
@@ -357,19 +508,23 @@ async function executeSingleTool(
 		isError = true;
 	}
 
-	// After hook
+	// After hook (catch exceptions - don't let hook failure discard tool result)
 	if (config.afterToolCall) {
-		const hookResult = await config.afterToolCall({
-			toolCall: { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
-			args,
-			context,
-			result,
-			isError,
-		});
-		if (hookResult) {
-			if (hookResult.content) result.content = hookResult.content;
-			if (hookResult.details !== undefined) result.details = hookResult.details;
-			if (hookResult.isError !== undefined) isError = hookResult.isError;
+		try {
+			const hookResult = await config.afterToolCall({
+				toolCall: { id: toolCall.id, name: toolCall.name, arguments: toolCall.arguments },
+				args,
+				context,
+				result,
+				isError,
+			});
+			if (hookResult) {
+				if (hookResult.content) result.content = hookResult.content;
+				if (hookResult.details !== undefined) result.details = hookResult.details;
+				if (hookResult.isError !== undefined) isError = hookResult.isError;
+			}
+		} catch {
+			// Hook failure shouldn't discard the tool result - continue with original
 		}
 	}
 
@@ -399,4 +554,34 @@ function createErrorResult(toolCall: ToolCallContent, error: string): ToolResult
 		isError: true,
 		timestamp: Date.now(),
 	};
+}
+
+/**
+ * Fill in synthetic "cancelled" tool results for any tool_call in
+ * `toolCalls` that does not have a corresponding entry in `actual`.
+ *
+ * Preserves call order: the returned array contains one toolResult per
+ * tool_call, in the same order the assistant message produced them. This
+ * matches the shape providers expect when replaying a conversation.
+ *
+ * Synthetic results are NOT marked isError — the cancellation is a
+ * control-flow event from the user, not a tool malfunction. Marking them
+ * as errors would cause downstream auto-retry/recovery logic to misread
+ * the situation as a tool failure.
+ */
+function padCancelledToolResults(
+	toolCalls: ToolCallContent[],
+	actual: ToolResultMessage[],
+): ToolResultMessage[] {
+	const byId = new Map(actual.map((r) => [r.toolCallId, r]));
+	return toolCalls.map(
+		(tc): ToolResultMessage =>
+			byId.get(tc.id) ?? {
+				role: "toolResult",
+				toolCallId: tc.id,
+				toolName: tc.name,
+				content: [{ type: "text", text: "Tool execution cancelled." }],
+				timestamp: Date.now(),
+			},
+	);
 }

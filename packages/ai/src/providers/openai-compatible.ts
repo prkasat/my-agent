@@ -142,7 +142,13 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 
 				if (!response.ok) {
 					const error = await response.text();
-					stream.push({ type: "error", error: `${config.providerName} API ${response.status}: ${error}` });
+					// Include retry hint for rate limits
+					const isRateLimit = response.status === 429;
+					const retryAfter = response.headers.get("retry-after");
+					const errorMsg = isRateLimit && retryAfter
+						? `${config.providerName} API ${response.status}: ${error} (retry after ${retryAfter}s)`
+						: `${config.providerName} API ${response.status}: ${error}`;
+					stream.push({ type: "error", error: errorMsg });
 					return;
 				}
 
@@ -170,7 +176,11 @@ async function parseSSEStream(
 	providerName: string,
 	signal?: AbortSignal,
 ): Promise<void> {
-	const reader = response.body!.getReader();
+	if (!response.body) {
+		stream.push({ type: "error", error: `${providerName} API returned empty body` });
+		return;
+	}
+	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let textContent = "";
@@ -264,13 +274,10 @@ async function parseSSEStream(
 		const content: AssistantMessage["content"] = [];
 		if (textContent) content.push({ type: "text", text: textContent });
 		for (const tc of toolCalls.values()) {
-			let safeArgs = tc.arguments;
-			try {
-				JSON.parse(safeArgs);
-			} catch {
-				safeArgs = "{}";
-			}
-			content.push({ type: "tool_call", id: tc.id, name: tc.name, arguments: safeArgs });
+			// Pass arguments as-is. If the LLM returned malformed JSON, the tool execution
+			// layer will return a validation error, giving the LLM a chance to retry.
+			// Silently rewriting to "{}" would cause unpredictable behavior.
+			content.push({ type: "tool_call", id: tc.id, name: tc.name, arguments: tc.arguments });
 			stream.push({ type: "tool_call_end", id: tc.id });
 		}
 
