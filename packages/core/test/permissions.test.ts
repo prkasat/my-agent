@@ -399,6 +399,79 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-9 regression: bare protected basenames under unlisted keys are blocked", () => {
+	// Pre-pass-9 bug: pass-8's path-shape heuristic only fired on strings
+	// starting with /, ~/, ./, ../, or a Windows drive letter. A bare
+	// basename like ".env" or "id_rsa" carried under an unlisted custom
+	// field (configPath, secretFile, privateKey, …) was never inspected,
+	// so a knownReadOnly custom tool could read those files in deny mode.
+	// The fix: also yield short, filename-safe strings (no whitespace,
+	// only path-safe characters), which catches bare basenames without
+	// flipping on prose.
+	const cases: Array<[string, string]> = [
+		["configPath", ".env"],
+		["secretFile", ".env.local"],
+		["privateKey", "id_rsa"],
+		["sshKey", "id_ed25519"],
+		["credsFile", "credentials.json"],
+		["npmrc", ".npmrc"],
+		["netrc", ".netrc"],
+	];
+
+	for (const [field, value] of cases) {
+		it(`(deny) blocks knownReadOnly tool with bare "${value}" under "${field}"`, async () => {
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set(["custom_read"]),
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: value }));
+			expect(result.action).toBe("block");
+			if (result.action === "block") {
+				expect(result.reason).toMatch(/Protected path/);
+			}
+		});
+
+		it(`(ask) blocks knownReadOnly tool with bare "${value}" under "${field}" before prompting`, async () => {
+			const onAsk = vi
+				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+				.mockResolvedValue("allow_once");
+			const checker = createPermissionChecker("ask", {
+				knownReadOnly: new Set(["custom_read"]),
+				onAsk,
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: value }));
+			expect(result.action).toBe("block");
+			expect(onAsk).not.toHaveBeenCalled();
+		});
+	}
+
+	it("(auto) prose mentioning the same basenames still passes (regression must not undo pass-8)", async () => {
+		// Whitespace disqualifies the string from filename-shape, so the
+		// pass-8 false-positive fix still holds.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("write", {
+				path: "/tmp/note.md",
+				content: "Files like .env, id_rsa, and credentials.json are sensitive.",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) harmless short identifier strings under unlisted keys are not blocked", async () => {
+		// FILENAME_SHAPE_RE matches `abc-123` so it gets yielded, but no
+		// protected pattern matches it — the floor must let it through.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("custom_tool", {
+				userId: "abc-123",
+				version: "1.2.3",
+				slug: "hello.world",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-8 regression: floor does not block freeform text content", () => {
 	// Pre-pass-8 bug: walking every string leaf with `/\.env\b/` etc. meant
 	// any tool argument that mentioned `.env` or `/etc/...` in prose was

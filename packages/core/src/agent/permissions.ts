@@ -173,10 +173,27 @@ const PATH_FIELD_NAMES = new Set([
  */
 const PATH_SHAPE_RE = /^(\/|~\/?|\.\.?\/|[A-Za-z]:[\\/])/;
 
+/**
+ * Filename-safe shape: a short string composed entirely of characters
+ * legal in a filename / relative path (alphanumerics, dot, underscore,
+ * dash, slash variants, tilde). Used to catch BARE protected basenames
+ * like `.env`, `id_rsa`, `credentials.json` when they appear under an
+ * unlisted argument key (e.g. a knownReadOnly custom tool with
+ * `{configPath: ".env"}` or `{privateKey: "id_rsa"}`). Pass-9 finding.
+ *
+ * Length-capped at 256 so we don't fall back to scanning long opaque
+ * tokens (UUIDs in URLs, base64, etc. are typically longer or contain
+ * characters outside this set). Whitespace already rules out prose
+ * before this check fires.
+ */
+const FILENAME_SHAPE_RE = /^[A-Za-z0-9._\-/\\~]+$/;
+
 function looksLikePath(value: string): boolean {
 	if (value.length === 0 || value.length > 4096) return false;
 	if (/[\s\n\r\t]/.test(value)) return false; // Real paths don't have whitespace.
-	return PATH_SHAPE_RE.test(value);
+	if (PATH_SHAPE_RE.test(value)) return true;
+	if (value.length <= 256 && FILENAME_SHAPE_RE.test(value)) return true;
+	return false;
 }
 
 /**
