@@ -8,6 +8,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { redactSecrets, redactValue } from "./redact.js";
 
 /**
  * Audit log entry for a tool execution.
@@ -53,6 +54,14 @@ export interface AuditLoggerConfig {
 	maxFiles?: number;
 	/** Custom log handler (overrides file logging) */
 	handler?: (entry: AuditLogEntry) => void;
+	/**
+	 * Redact known secret patterns (API keys, bearer tokens, KEY=value
+	 * env exports, etc.) from `command`, `error`, and `metadata` before
+	 * persistence. Default: true. Disable only if you have a separate
+	 * upstream redaction step or are auditing in a sealed environment
+	 * where the log is never shared.
+	 */
+	redactSecrets?: boolean;
 }
 
 const DEFAULT_LOG_DIR = join(homedir(), ".my-agent", "logs");
@@ -80,24 +89,49 @@ export class AuditLogger {
 			logDir: config?.logDir ?? DEFAULT_LOG_DIR,
 			maxFileSize: config?.maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
 			maxFiles: config?.maxFiles ?? DEFAULT_MAX_FILES,
+			redactSecrets: config?.redactSecrets ?? true,
 			handler: config?.handler,
 		};
 	}
 
 	/**
 	 * Log a tool execution.
+	 *
+	 * Applies secret redaction (when enabled) BEFORE handing off to the
+	 * custom handler or the file writer, so neither path sees raw
+	 * secrets in command/error/metadata.
 	 */
 	log(entry: AuditLogEntry): void {
 		if (!this.config.enabled) return;
 
+		const sanitized = this.config.redactSecrets ? this.redactEntry(entry) : entry;
+
 		// Use custom handler if provided
 		if (this.config.handler) {
-			this.config.handler(entry);
+			this.config.handler(sanitized);
 			return;
 		}
 
 		// Write to file
-		this.writeToFile(entry);
+		this.writeToFile(sanitized);
+	}
+
+	private redactEntry(entry: AuditLogEntry): AuditLogEntry {
+		// Cheap reference-equality check: only allocate a new object if
+		// at least one field needs rewriting. Most successful tool calls
+		// have no secrets to redact and stay reference-stable.
+		const command = entry.command !== undefined ? redactSecrets(entry.command) : undefined;
+		const error = entry.error !== undefined ? redactSecrets(entry.error) : undefined;
+		const metadata =
+			entry.metadata !== undefined
+				? (redactValue(entry.metadata) as Record<string, unknown>)
+				: undefined;
+		return {
+			...entry,
+			...(entry.command !== undefined ? { command } : {}),
+			...(entry.error !== undefined ? { error } : {}),
+			...(entry.metadata !== undefined ? { metadata } : {}),
+		};
 	}
 
 	/**

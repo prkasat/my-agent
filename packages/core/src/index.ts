@@ -54,6 +54,9 @@ export { getTempFilePath, markForCleanup, preserveTempFile, cleanupTempFile, cle
 export { AuditLogger, ExecutionLogger, getAuditLogger, configureAuditLogger, disableAuditLogging } from "./tools/audit.js";
 export type { AuditLogEntry, AuditLoggerConfig } from "./tools/audit.js";
 
+// Secret redaction (also reused by audit logger)
+export { redactSecrets, redactValue } from "./tools/redact.js";
+
 // Image resize utilities
 export { resizeImage, formatDimensionNote } from "./tools/image-resize.js";
 export type { ImageResizeOptions, ResizedImage } from "./tools/image-resize.js";
