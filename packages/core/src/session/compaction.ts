@@ -620,10 +620,23 @@ export async function generateCompactionSummary(
   const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
   const result: AssistantMessage = await stream.result();
-  return result.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("");
+  // Defensive layer (Codex pass-8): even with input escape and the
+  // "summarize-do-not-continue" system prompt, the LLM CAN echo back
+  // attacker wrapper tags from the transcript verbatim. Persisting
+  // that text and later interpolating it into the next compaction's
+  // <previous-summary> block (or the [Previous conversation summary]
+  // user message at replay) would let an injected `</previous-summary>`
+  // close the wrapper of the downstream prompt. Re-apply the escape on
+  // the OUTPUT so persisted summaries never carry literal wrapper-close
+  // tokens. We don't try to scrub "imperative" prose — that's an
+  // unsolved AI safety problem and a heuristic scrub is more dangerous
+  // than the bug it tries to fix.
+  return escapeWrapperTags(
+    result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join(""),
+  );
 }
 
 // ============================================================================

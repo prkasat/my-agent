@@ -269,19 +269,31 @@ export async function generateBranchSummary(
   const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
   const result: AssistantMessage = await stream.result();
-  let summary = result.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("");
+  // Defensive layer (Codex pass-8): even with the input escape and the
+  // wrapper-only system prompt, the LLM CAN echo back attacker
+  // wrapper tags from the transcript verbatim. Persisting that text and
+  // later interpolating it into a future prompt would let an injected
+  // `</branch-conversation>` close the wrapper of a downstream prompt.
+  // Re-apply the escape on the OUTPUT so persisted summaries cannot
+  // ever carry literal wrapper-close tokens. We are not trying to
+  // sanitize "imperative" prose — that's an unsolved AI safety problem
+  // and trying to scrub it at this layer creates more risk than it
+  // removes (Pi-Mono accepts the same tradeoff).
+  let summary = escapeBranchWrapperTags(
+    result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join(""),
+  );
 
   // Append file list
   if (details.readFiles.length > 0 || details.modifiedFiles.length > 0) {
     summary += "\n\nFiles touched:";
     if (details.readFiles.length > 0) {
-      summary += `\n- Read: ${details.readFiles.join(", ")}`;
+      summary += `\n- Read: ${details.readFiles.map(escapeBranchWrapperTags).join(", ")}`;
     }
     if (details.modifiedFiles.length > 0) {
-      summary += `\n- Modified: ${details.modifiedFiles.join(", ")}`;
+      summary += `\n- Modified: ${details.modifiedFiles.map(escapeBranchWrapperTags).join(", ")}`;
     }
   }
 
