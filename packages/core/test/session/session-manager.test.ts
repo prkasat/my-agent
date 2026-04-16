@@ -873,6 +873,49 @@ describe("SessionManager", () => {
       expect(() => manager.appendExtension("", { x: 1 })).toThrow(/namespace/);
     });
 
+    it("Tier-2 pass-15 regression: SessionManager.flush() first-flush retry does not duplicate", async () => {
+      // Pre-pass-15 bug: flush() looped appendFileSync just like the
+      // old persistEntry first-flush path, so a failed first flush
+      // left a durable prefix on disk and retry re-appended the full
+      // snapshot, duplicating user history. CLI bootstrap calls
+      // flush() in one-shot and stub REPL paths so this was
+      // reachable through the shipped product. Fix matches pass-14:
+      // first flush goes through rewriteFile() (single overwrite).
+      const fs = await import("node:fs");
+      const lockedDir = join(tempDir, "locked-flush");
+      mkdirSync(lockedDir, { recursive: true });
+      const manager = SessionManager.create("/test/cwd", lockedDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      manager.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+      manager.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+
+      fs.chmodSync(lockedDir, 0o500);
+      try {
+        expect(() => manager.flush()).toThrow();
+      } finally {
+        fs.chmodSync(lockedDir, 0o700);
+      }
+
+      // Retry now succeeds.
+      manager.flush();
+
+      // Reload and verify no duplicates.
+      const reopened = SessionManager.open(sessionFile);
+      const userMsgs = reopened.getEntries().filter((e) => e.type === "message");
+      expect(userMsgs.length).toBe(2);
+
+      const lines = readFileSync(sessionFile, "utf8").trim().split("\n");
+      const ids = new Set<string>();
+      for (const line of lines) {
+        const parsed = JSON.parse(line);
+        if (parsed.id) {
+          expect(ids.has(parsed.id)).toBe(false);
+          ids.add(parsed.id);
+        }
+      }
+    });
+
     it("Tier-2 pass-14 regression: forced first-flush is atomic — failed write + retry doesn't duplicate", async () => {
       // Pre-pass-14 bug: the first-flush path appended each queued
       // entry one-by-one with appendFileSync. If a later append failed

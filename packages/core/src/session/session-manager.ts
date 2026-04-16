@@ -721,9 +721,12 @@ export class SessionManager {
     if (!this.persist || !this.sessionFile) return;
     if (this.flushed) return;
     if (this.fileEntries.length === 0) return;
-    for (const e of this.fileEntries) {
-      appendFileSync(this.sessionFile, JSON.stringify(e) + "\n");
-    }
+    // Single overwriting write so a failed first-flush leaves the file
+    // in a state that the next retry overwrites cleanly. Looping
+    // appendFileSync would leave a durable prefix on partial failure,
+    // and retry would duplicate it (Codex Tier-2 pass-15: same bug
+    // class as the pass-14 fix for persistEntry's forced first-flush).
+    this.rewriteFile();
     this.flushed = true;
   }
 
