@@ -151,6 +151,33 @@ describe("openai-compatible usage accounting", () => {
     expect(capturedBody.stream_options.include_usage).toBe(true);
   });
 
+  it("Codex-pass7-fix: includeUsage:false omits stream_options for strict shims", async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(ssePayload([{ choices: [{ delta: { content: "ok" } }] }]));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const stream = createOpenAICompatibleStream({
+      providerName: "test",
+      baseUrl: "http://example.test",
+      envKey: "TEST_KEY",
+      includeUsage: false,
+    })(fakeModel, { messages: [] }, {});
+    await stream.result();
+
+    expect(capturedBody.stream).toBe(true);
+    expect(capturedBody.stream_options).toBeUndefined();
+  });
+
   it("Codex-pass4-fix: accepts intermediate usage once finish_reason has been seen", async () => {
     // If a shim emits usage on the same chunk as finish_reason (no
     // separate terminal chunk), that usage is still final.

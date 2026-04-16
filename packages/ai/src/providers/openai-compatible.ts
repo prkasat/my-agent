@@ -23,6 +23,15 @@ interface OpenAICompatibleConfig {
 	defaultHeaders?: Record<string, string>;
 	envKey: string;
 	providerName: string;
+	/**
+	 * Whether to send `stream_options: { include_usage: true }` with
+	 * streaming requests. OpenAI, OpenRouter, DeepSeek, and most
+	 * compatible shims accept this and emit a terminal usage chunk that
+	 * downstream context-window accounting depends on. Strict shims that
+	 * reject unknown request fields can opt out by setting this to false.
+	 * Default: true.
+	 */
+	includeUsage?: boolean;
 }
 
 function convertMessages(context: Context): Record<string, unknown>[] {
@@ -123,13 +132,17 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 					messages: convertMessages(context),
 					max_tokens: options.maxTokens || model.maxOutputTokens || 4096,
 					stream: true,
-					// Required for the API to emit the terminal usage chunk
-					// the parser reads to fill `usage`. Without this flag
-					// downstream measureContextTokens has no provider-side
-					// signal and falls back to the chars/4 estimate, which
-					// silently disables Tier-1 usage-aware compaction.
-					stream_options: { include_usage: true },
 				};
+				// Required for the API to emit the terminal usage chunk
+				// the parser reads to fill `usage`. Without this flag
+				// downstream measureContextTokens has no provider-side
+				// signal and falls back to the chars/4 estimate, which
+				// silently disables Tier-1 usage-aware compaction.
+				// Capability-gated so strict shims that reject unknown
+				// fields can opt out via OpenAICompatibleConfig.
+				if (config.includeUsage !== false) {
+					body.stream_options = { include_usage: true };
+				}
 
 				const tools = convertTools(context);
 				if (tools) body.tools = tools;
