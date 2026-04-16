@@ -399,6 +399,125 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-10 regression: real paths with spaces + exact protected directories", () => {
+	// Pre-pass-10 issue 1: looksLikePath rejected ANY string with
+	// whitespace, so a custom knownReadOnly tool could pass a real path
+	// containing spaces ("Application Support", "Program Files") under
+	// an unlisted key and bypass the floor entirely.
+	it("(deny) blocks knownReadOnly tool with absolute path containing spaces", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", {
+				privateKey: "/Users/pk/Library/Application Support/id_rsa",
+			}),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) blocks knownReadOnly tool with relative path containing spaces", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", {
+				configPath: "./My Secrets/credentials.json",
+			}),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) blocks Windows-style path with spaces", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(
+			makeCtx("custom_read", {
+				keyfile: "C:\\Users\\Administrator\\.ssh\\id_rsa",
+			}),
+		);
+		expect(result.action).toBe("block");
+	});
+
+	// Pre-pass-10 issue 2: PROTECTED_PATH_PATTERNS required a trailing
+	// slash. ls/find on the exact protected directory bypassed the floor.
+	const exactDirCases: Array<[string, string]> = [
+		["/etc", "ls /etc"],
+		["~/.ssh", "ls ~/.ssh"],
+		["/Users/pk/.aws", "find /Users/pk/.aws"],
+		["/usr", "ls /usr"],
+		["/sys", "ls /sys"],
+		["/boot", "ls /boot"],
+		["~/.gnupg", "ls ~/.gnupg"],
+	];
+
+	for (const [path, label] of exactDirCases) {
+		it(`(deny) blocks built-in read on exact protected dir "${path}" (${label})`, async () => {
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+			});
+			const result = await checker.check(makeCtx("ls", { path }));
+			expect(result.action).toBe("block");
+			if (result.action === "block") {
+				expect(result.reason).toMatch(/Protected path/);
+			}
+		});
+	}
+
+	it("(deny) blocks find tool on exact ~/.ssh", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
+		const result = await checker.check(makeCtx("find", { path: "~/.ssh" }));
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) does NOT block paths that merely have a protected name as a substring", async () => {
+		// Boundary-aware patterns: `/etcetera` is not `/etc`, `.envelope`
+		// is not `.env`, `id_rsa_other` is not `id_rsa`. Verify we don't
+		// over-block in pursuit of catching the exact-dir case.
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
+		const benign = [
+			"/tmp/etcetera/file.txt",
+			"/tmp/.envelope.bak",
+			"/tmp/id_rsa_demo.txt", // demo file with id_rsa in name
+		];
+		for (const path of benign) {
+			const result = await checker.check(makeCtx("ls", { path }));
+			expect(result.action).toBe("allow");
+		}
+	});
+
+	it("(deny) blocks .env.local and similar dotfile variants", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
+		for (const path of ["/repo/.env.local", "./.env.production", ".env.staging"]) {
+			const result = await checker.check(makeCtx("ls", { path }));
+			expect(result.action).toBe("block");
+		}
+	});
+
+	it("(deny) blocks descendant under id_rsa-style key (id_rsa.pub)", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
+		const result = await checker.check(makeCtx("read", { path: "~/.ssh/id_rsa.pub" }));
+		expect(result.action).toBe("block");
+	});
+
+	it("(auto) bash command targeting exact /etc directory is blocked", async () => {
+		// The bash command check uses the same patterns. Verify exact-dir
+		// hardening also covers bash.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("bash", { command: "ls /etc" }));
+		expect(result.action).toBe("block");
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-9 regression: bare protected basenames under unlisted keys are blocked", () => {
 	// Pre-pass-9 bug: pass-8's path-shape heuristic only fired on strings
 	// starting with /, ~/, ./, ../, or a Windows drive letter. A bare

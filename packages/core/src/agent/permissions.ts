@@ -93,23 +93,38 @@ const DESTRUCTIVE_PATTERNS = [
 /**
  * Patterns for protected file paths.
  * Checked against both tool args.path AND inside bash command strings.
+ *
+ * Boundary-aware so they match BOTH the exact directory/file AND any
+ * descendant. e.g. `~/.ssh` and `~/.ssh/id_rsa` both hit `\.ssh`. Pre-
+ * pass-10 the patterns required a trailing slash, so `ls ~/.ssh` /
+ * `find /Users/pk/.aws` / `ls /etc` bypassed the floor.
+ *
+ * Boundary set includes whitespace so bash commands like `cat .env` or
+ * `ls /etc` are caught — in bash, the whitespace-delimited token IS the
+ * path. For args values, the path-shape gate already excludes prose,
+ * so whitespace boundaries don't cause false-positives there either.
  */
 const PROTECTED_PATH_PATTERNS = [
-	/\/etc\//,
-	/\/usr\//,
-	/\/sys\//,
-	/\/boot\//,
-	/\.env\b/,
-	/credentials\.json\b/,
-	/\.ssh\//,
-	/\.aws\//,
-	/\.gnupg\//,
-	/\.npmrc\b/,
-	/\.netrc\b/,
-	/id_rsa/,
-	/id_ed25519/,
-	/\.pem\b/,
-	/\.key\b/,
+	// System directories: match exact dir or descendant.
+	/(?:^|[\s/\\])etc(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])usr(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])sys(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])boot(?:[\s/\\]|$)/,
+	// Dot-directories: match exact dir or descendant.
+	/(?:^|[\s/\\])\.ssh(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])\.aws(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])\.gnupg(?:[\s/\\]|$)/,
+	// Sensitive dotfiles / known basenames: match anywhere as a path
+	// segment, including extension-suffixed variants like `.env.local`.
+	/(?:^|[\s/\\])\.env(?:[\s/\\.]|$)/,
+	/(?:^|[\s/\\])\.npmrc(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])\.netrc(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])credentials\.json(?:[\s/\\]|$)/,
+	/(?:^|[\s/\\])id_rsa(?:[\s/\\.]|$)/,
+	/(?:^|[\s/\\])id_ed25519(?:[\s/\\.]|$)/,
+	// Key file extensions: any path component ending in .pem or .key.
+	/(?:^|[\s/\\])[^/\\\s]+\.pem(?:[\s]|$)/,
+	/(?:^|[\s/\\])[^/\\\s]+\.key(?:[\s]|$)/,
 ];
 
 /**
@@ -166,12 +181,17 @@ const PATH_FIELD_NAMES = new Set([
  * that merely mentions a protected name (e.g. `content: "Don't commit .env"`,
  * a markdown note, an `oldString` for a code edit, etc.).
  *
- * Anchors only at the start of the string so prose containing the
- * substring is left alone. Recognized leading shapes:
+ * Anchors at the start AND requires the next character to be a path-safe
+ * alphanumeric so prose patterns like `// comment` or `/ space` don't
+ * qualify, while real paths like `/Users/pk/Library/Application Support/x`
+ * do (Pass-10: real paths can contain spaces inside; rejecting on any
+ * whitespace was hiding legitimate Mac/Windows paths from the floor).
+ *
+ * Recognized leading shapes:
  *   /abs/unix      ~/home-rel    ./rel    ../rel
  *   C:\windows     C:/forwardslash
  */
-const PATH_SHAPE_RE = /^(\/|~\/?|\.\.?\/|[A-Za-z]:[\\/])/;
+const PATH_SHAPE_RE = /^(\/[A-Za-z0-9._-]|~(?:$|[/\\][A-Za-z0-9._-]?)|\.\.?[/\\][A-Za-z0-9._-]|[A-Za-z]:[/\\])/;
 
 /**
  * Filename-safe shape: a short string composed entirely of characters
@@ -190,9 +210,14 @@ const FILENAME_SHAPE_RE = /^[A-Za-z0-9._\-/\\~]+$/;
 
 function looksLikePath(value: string): boolean {
 	if (value.length === 0 || value.length > 4096) return false;
-	if (/[\s\n\r\t]/.test(value)) return false; // Real paths don't have whitespace.
+	// Newlines and tabs are never legal in filesystem paths. Spaces ARE
+	// allowed (Mac "Application Support", Windows "Program Files"), but
+	// only inside path-shaped strings — the bare-basename fallback below
+	// still rejects whitespace to avoid prose false-positives.
+	if (/[\n\r\t]/.test(value)) return false;
 	if (PATH_SHAPE_RE.test(value)) return true;
-	if (value.length <= 256 && FILENAME_SHAPE_RE.test(value)) return true;
+	// Bare basename: short, no whitespace, only path-safe characters.
+	if (!/\s/.test(value) && value.length <= 256 && FILENAME_SHAPE_RE.test(value)) return true;
 	return false;
 }
 
