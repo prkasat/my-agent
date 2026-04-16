@@ -261,3 +261,40 @@ describe("createPermissionChecker — Tier-2 pass-3 regression: requireConfirmat
 		expect(result.action).toBe("block");
 	});
 });
+
+describe("createPermissionChecker — Tier-2 pass-4 regression: knownReadOnly cannot downgrade built-in writes", () => {
+	for (const tool of ["bash", "write", "edit", "notebook_edit"]) {
+		it(`(deny) blocks built-in write "${tool}" even when listed in knownReadOnly`, async () => {
+			// Pre-pass-4 bug: a host passing knownReadOnly: Set(['bash'])
+			// could reclassify built-in writes as safe and bypass deny
+			// mode entirely. Verified locally against the built output
+			// before the fix: bash command "mkdir /tmp/pwn" returned
+			// {action: "allow"} under deny mode with bash in knownReadOnly.
+			// Built-in writes must be non-overridable.
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set([tool]),
+			});
+			// Use a non-destructive command for bash so the always-blocked
+			// floor isn't what stops execution — we want to prove the
+			// deny-mode classifier specifically blocks it.
+			const args = tool === "bash" ? { command: "mkdir /tmp/safe" } : { path: "/tmp/x" };
+			const result = await checker.check(makeCtx(tool, args));
+			expect(result.action).toBe("block");
+		});
+
+		it(`(ask) prompts for built-in write "${tool}" even when listed in knownReadOnly`, async () => {
+			const onAsk = vi
+				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+				.mockResolvedValue("deny");
+			const checker = createPermissionChecker("ask", {
+				knownReadOnly: new Set([tool]),
+				onAsk,
+			});
+			const args = tool === "bash" ? { command: "mkdir /tmp/safe" } : { path: "/tmp/x" };
+			const result = await checker.check(makeCtx(tool, args));
+			expect(result.action).toBe("block"); // user denied via prompt
+			expect(onAsk).toHaveBeenCalledOnce();
+			expect(onAsk.mock.calls[0][0].toolName).toBe(tool);
+		});
+	}
+});

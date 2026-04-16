@@ -214,13 +214,24 @@ export function createPermissionChecker(
 			// other built-in safe tool) gets exactly that. Without this
 			// override, requireConfirmation would silently fail open for
 			// known-read tools.
+			//
+			// KNOWN_WRITE_TOOLS is non-overridable: a host passing
+			// `knownReadOnly: new Set(['bash'])` MUST NOT bypass the
+			// gating for built-in writes. Without this lockdown a
+			// caller could disable deny/ask checks for the most
+			// dangerous tools by mislabeling them.
+			//
+			// Final precedence (highest first):
+			//   requireConfirmation → KNOWN_WRITE_TOOLS → knownReadOnly
+			//                       → KNOWN_READ_TOOLS  → unknown (write-like)
 			const isExplicitlyConfirmed =
 				options?.requireConfirmation?.has(toolCall.name) === true;
+			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
 			const isKnownRead =
 				!isExplicitlyConfirmed &&
+				!isKnownWrite &&
 				(KNOWN_READ_TOOLS.has(toolCall.name) ||
 					options?.knownReadOnly?.has(toolCall.name) === true);
-			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
 			// Auto mode preserves its old generous behavior — only
 			// known-writes and requireConfirmation tools matter there;
 			// everything else allowed. Ask/deny use the fail-closed
