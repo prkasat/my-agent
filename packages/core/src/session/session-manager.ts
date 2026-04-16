@@ -20,6 +20,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -629,6 +630,38 @@ export class SessionManager {
    * NOTE: Uses appendFileSync which is atomic for small writes on most systems.
    * For multi-process scenarios, use withSessionLock() at a higher level.
    */
+  /**
+   * Snapshot the current on-disk size of the session file.
+   *
+   * Used by `navigateBranch` to roll the JSONL file back to its
+   * pre-navigation state when an in-flight append fails. Returns -1
+   * for in-memory sessions and for sessions whose file has not yet
+   * been created on disk.
+   */
+  private sessionFileBytes(): number {
+    if (!this.persist || !this.sessionFile || !existsSync(this.sessionFile)) {
+      return -1;
+    }
+    try {
+      return statSync(this.sessionFile).size;
+    } catch {
+      return -1;
+    }
+  }
+
+  /**
+   * Truncate the session file back to a snapshot byte count.
+   *
+   * No-op when the snapshot is -1 (no file existed pre-navigation) or
+   * when persistence is disabled. Throws on any other fs failure so
+   * callers can surface a "rollback failed" condition.
+   */
+  private truncateSessionFile(snapshot: number): void {
+    if (!this.persist || !this.sessionFile) return;
+    if (snapshot < 0) return;
+    truncateSync(this.sessionFile, snapshot);
+  }
+
   private persistEntry(entry: SessionEntry): void {
     if (!this.persist || !this.sessionFile) return;
 
@@ -1084,13 +1117,26 @@ export class SessionManager {
     // state half-done unless we undo it explicitly.
     const fileEntriesLen = this.fileEntries.length;
     const flushedSnapshot = this.flushed;
+    const sessionFileSnapshot = this.sessionFileBytes();
 
     // Move to the target FIRST so the summary's parentId chains onto the
     // new branch (not the abandoned one).
     this.leafId = targetId;
 
+    // Suppress summary writes when the abandoned tail is empty or the
+    // two leaves share no common ancestor (disconnected trees, orphaned
+    // branches, navigating "deeper" along the same line). Writing a
+    // summary anchored to oldLeafId in those cases recreates the bogus
+    // cross-branch contamination that collectEntriesForBranchSummary
+    // explicitly returns `null`/`[]` to flag.
+    const shouldWriteSummary =
+      summary &&
+      !!oldLeafId &&
+      commonAncestorId !== null &&
+      abandonedEntries.length > 0;
+
     let summaryEntryId: string | undefined;
-    if (summary && oldLeafId) {
+    if (shouldWriteSummary && oldLeafId) {
       try {
         summaryEntryId = this.appendBranchSummary(oldLeafId, summary, summaryDetails);
       } catch (err) {
@@ -1108,6 +1154,19 @@ export class SessionManager {
           this.fileEntries.length = fileEntriesLen;
         }
         this.flushed = flushedSnapshot;
+        // appendFileSync may have written partial bytes BEFORE throwing,
+        // OR the persist may have succeeded entirely and a later step
+        // threw. Either way, truncate the session file back to the byte
+        // count it had before the navigation started so a reload can't
+        // resurrect the rolled-back entry. Truncation failures are
+        // re-thrown alongside the original — both errors are signal.
+        try {
+          this.truncateSessionFile(sessionFileSnapshot);
+        } catch (truncErr) {
+          // Surface the original error, but annotate with the truncation
+          // failure so the caller knows on-disk state may be inconsistent.
+          (err as Error).message += ` (and rollback truncation failed: ${(truncErr as Error).message})`;
+        }
         throw err;
       }
     }

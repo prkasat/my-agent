@@ -317,6 +317,75 @@ describe("SessionManager", () => {
       (manager as any).persistEntry = original;
     });
 
+    it("Codex-pass2-fix: navigateBranch suppresses summary when abandonedEntries is empty", () => {
+      // Navigating "deeper" along the same line: oldLeaf=A, target=C.
+      // collectEntriesForBranchSummary returns abandonedEntries=[].
+      // navigateBranch MUST NOT write a branch_summary in that case
+      // (it would anchor a phantom entry to oldLeaf with nothing to
+      // describe).
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      manager.branch(a);
+
+      const result = manager.navigateBranch(c, "should be ignored");
+      expect(result.summaryEntryId).toBeUndefined();
+      expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
+    });
+
+    it("Codex-pass2-fix: navigateBranch truncates session file when summary persistence fails", () => {
+      // Drives the disk-rollback path: when persistEntry has already
+      // written bytes (incremental append branch) and a later step
+      // throws, the in-memory rollback must also truncate the file
+      // back to its pre-navigation byte count. Otherwise reloading the
+      // session would resurrect the rolled-back branch_summary entry.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      // Need an assistant message so flushed=true (incremental append).
+      manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      manager.branch(manager.getEntries()[1].id); // back to assistant
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+      manager.branch(c);
+
+      const sessionFile = manager.getSessionFile()!;
+      const bytesBefore = readFileSync(sessionFile).length;
+
+      // Force the SECOND persistEntry call (the branch_summary) to
+      // throw AFTER it would have written. We simulate by patching
+      // appendFileSync via the persistEntry method itself.
+      const originalPersist = (manager as any).persistEntry.bind(manager);
+      let persistCalls = 0;
+      (manager as any).persistEntry = (entry: any) => {
+        persistCalls++;
+        if (persistCalls === 1) {
+          // Let the file actually receive bytes for this call so we
+          // can assert truncation rolls them back.
+          originalPersist(entry);
+          throw new Error("simulated post-write failure");
+        }
+        return originalPersist(entry);
+      };
+
+      expect(() => manager.navigateBranch(d, "fail me")).toThrow(/simulated/);
+
+      // File MUST be back to its original byte count — no phantom
+      // branch_summary line on disk for the next reload to resurrect.
+      expect(readFileSync(sessionFile).length).toBe(bytesBefore);
+      (manager as any).persistEntry = originalPersist;
+    });
+
     it("Tier-1: navigateBranch deeper along the same line abandons nothing", () => {
       // root -> A -> B -> C
       // Leaf is at A. Navigating to C is moving FORWARD along the same line.

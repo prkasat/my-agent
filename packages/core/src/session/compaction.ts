@@ -145,12 +145,21 @@ function isUsableUsage(usage: Usage | undefined): usage is Usage {
     usage.cacheReadTokens ?? 0,
     usage.cacheWriteTokens ?? 0,
   ];
-  let total = 0;
   for (const v of fields) {
     if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
-    total += v;
   }
-  return total > 0;
+  // Prompt-side accounting must be present. A record like
+  // `{ inputTokens: 0, outputTokens: 10 }` looks "non-zero" but
+  // misrepresents the prompt cost — treating it as the anchor would
+  // bill the whole prefix as just the output side and mask overflow.
+  // Cache reads/writes also cover prompt-side accounting (they are
+  // tokens the model loaded from cache instead of input), so any of
+  // those qualifies as "the prompt has been measured."
+  const inputSide =
+    (usage.inputTokens || 0) +
+    (usage.cacheReadTokens ?? 0) +
+    (usage.cacheWriteTokens ?? 0);
+  return inputSide > 0;
 }
 
 /**
@@ -279,11 +288,16 @@ export function findCutPoint(
   // findCutPoint says "nothing to cut", context unchanged, repeat.
   if (cutIndex === messages.length) {
     if (!forceProgress) return 0;
+    // Need at least one kept message AND one summarized message; with
+    // fewer than 2 messages there's nothing meaningful to compact, even
+    // under forceProgress, so bail out rather than produce an empty
+    // summary or an orphaned tail.
+    if (messages.length < 2) return 0;
     // Force-cut at half the messages, then snap forward past any
     // toolResult so we don't orphan a tool_call. This is a degraded
     // path; the regular keepRecentTokens budget still wins whenever
-    // it can.
-    cutIndex = Math.max(1, Math.floor(messages.length / 2));
+    // it can. clamped to keep at least 1 message in the kept tail.
+    cutIndex = Math.max(1, Math.min(messages.length - 1, Math.floor(messages.length / 2)));
   }
 
   // Adjust: don't cut at a toolResult (would orphan it)
@@ -486,22 +500,25 @@ function formatMessagesForSummary(messages: Message[]): string {
 }
 
 /**
- * Neutralize XML-style closing tags inside untrusted content so a
- * malicious or accidental `</conversation>` (or sibling) inside a tool
- * result, file path, or prior summary cannot break out of the wrapper
- * we use in the structured summarization prompt.
+ * Neutralize XML-style wrapper tags inside untrusted content so a
+ * malicious or accidental `<conversation>` / `</previous-summary>`
+ * (etc.) inside a tool result, file path, or prior summary cannot
+ * break out of the wrappers we use in the structured summarization
+ * prompt.
+ *
+ * Both OPENING and CLOSING forms must be escaped:
+ * - Closing tag in user content can split our real wrapper early.
+ * - Opening tag in user content goes unmatched until our REAL closing
+ *   tag, effectively re-scoping later prompt text into the injected
+ *   "section" the model perceives.
  *
  * Why a defense at all: the wrappers are framing for the LLM, not a
- * security boundary, but a closing-tag injection lets an attacker (or a
- * normal user pasting source code that happens to include the markers)
- * change the apparent boundaries of the transcript and the instructions.
- * Replacing only the angle brackets with their HTML entity is enough —
- * the text is still readable to the model but the wrapper boundary
- * survives intact.
- *
- * We deliberately only neutralize the closing form `</…>` for the small
- * set of tags we actually emit. Opening tags inside text are harmless
- * because there's no tag we ever close that the prompt could match.
+ * security boundary, but tag injection lets an attacker (or a normal
+ * user pasting source code that happens to include the markers) change
+ * the apparent boundaries of the transcript and the instructions.
+ * Replacing only the angle brackets with their HTML entity keeps the
+ * text human-readable while preventing the prompt's real wrappers from
+ * being confused with text inside them.
  */
 const PROMPT_WRAPPER_TAGS = [
   "conversation",
@@ -510,13 +527,18 @@ const PROMPT_WRAPPER_TAGS = [
   "modified-files",
 ] as const;
 
-const CLOSING_TAG_RE = new RegExp(
-  `</\\s*(${PROMPT_WRAPPER_TAGS.join("|")})\\s*>`,
+// Match opening (`<tag>`, `<tag/>`) AND closing (`</tag>`) variants of any
+// wrapper tag. Tolerates whitespace and case variation. The `/?` after the
+// optional `/` covers self-closing forms like `<conversation/>`.
+const WRAPPER_TAG_RE = new RegExp(
+  `<\\s*(/?)\\s*(${PROMPT_WRAPPER_TAGS.join("|")})\\s*(/?)\\s*>`,
   "gi",
 );
 
 function escapeWrapperTags(text: string): string {
-  return text.replace(CLOSING_TAG_RE, (_, name: string) => `&lt;/${name}&gt;`);
+  return text.replace(WRAPPER_TAG_RE, (_, lead: string, name: string, trail: string) => {
+    return `&lt;${lead}${name.toLowerCase()}${trail}&gt;`;
+  });
 }
 
 /**
