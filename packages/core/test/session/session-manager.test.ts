@@ -339,14 +339,15 @@ describe("SessionManager", () => {
       expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
     });
 
-    it("Codex-pass2-fix: navigateBranch truncates session file when summary persistence fails", () => {
-      // Drives the disk-rollback path: when persistEntry has already
-      // written bytes (incremental append branch) and a later step
-      // throws, the in-memory rollback must also truncate the file
-      // back to its pre-navigation byte count. Otherwise reloading the
-      // session would resurrect the rolled-back branch_summary entry.
+    it("Codex-pass3-fix: navigateBranch leaves disk untouched on persist failure (in-memory rollback only)", () => {
+      // Pass-2 added a truncateSync rollback to erase phantom on-disk
+      // entries from a failed persist. Pass-3 found that the truncate
+      // is unsafe under concurrent writers: a peer process append
+      // between snapshot and truncate would be erased. The accepted
+      // trade-off is "best-effort in-memory rollback only" — the
+      // on-disk side gets reconciled on reload (or via lock-aware
+      // higher-level retry).
       const manager = SessionManager.create("/test/cwd", tempDir);
-      // Need an assistant message so flushed=true (incremental append).
       manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
       manager.appendMessage({
         role: "assistant",
@@ -355,23 +356,20 @@ describe("SessionManager", () => {
         timestamp: Date.now(),
       });
       const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
-      manager.branch(manager.getEntries()[1].id); // back to assistant
+      manager.branch(manager.getEntries()[1].id);
       const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
       manager.branch(c);
 
-      const sessionFile = manager.getSessionFile()!;
-      const bytesBefore = readFileSync(sessionFile).length;
+      const leafBefore = manager.getLeafId();
+      const inMemoryEntriesBefore = manager.getEntries().length;
 
-      // Force the SECOND persistEntry call (the branch_summary) to
-      // throw AFTER it would have written. We simulate by patching
-      // appendFileSync via the persistEntry method itself.
+      // Force persistEntry to throw AFTER writing — simulates a
+      // partial-write or post-write failure mode.
       const originalPersist = (manager as any).persistEntry.bind(manager);
       let persistCalls = 0;
       (manager as any).persistEntry = (entry: any) => {
         persistCalls++;
         if (persistCalls === 1) {
-          // Let the file actually receive bytes for this call so we
-          // can assert truncation rolls them back.
           originalPersist(entry);
           throw new Error("simulated post-write failure");
         }
@@ -380,9 +378,11 @@ describe("SessionManager", () => {
 
       expect(() => manager.navigateBranch(d, "fail me")).toThrow(/simulated/);
 
-      // File MUST be back to its original byte count — no phantom
-      // branch_summary line on disk for the next reload to resurrect.
-      expect(readFileSync(sessionFile).length).toBe(bytesBefore);
+      // In-memory rollback must succeed: no phantom entry, leaf back at
+      // pre-navigation position. (On-disk side may have residue; that's
+      // the documented trade-off.)
+      expect(manager.getLeafId()).toBe(leafBefore);
+      expect(manager.getEntries().length).toBe(inMemoryEntriesBefore);
       (manager as any).persistEntry = originalPersist;
     });
 

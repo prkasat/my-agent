@@ -262,10 +262,26 @@ async function parseSSEStream(
 					| { prompt_tokens?: number; completion_tokens?: number }
 					| undefined;
 				if (chunkUsage) {
-					usage = {
-						inputTokens: chunkUsage.prompt_tokens || 0,
-						outputTokens: chunkUsage.completion_tokens || 0,
-					};
+					// Only trust usage from chunks that carry final-token
+					// counts. With `include_usage: true`, OpenAI sends a
+					// dedicated trailing chunk where `choices` is empty
+					// and `usage` carries the totals. Some providers also
+					// emit PROVISIONAL usage on intermediate chunks; pinning
+					// the persisted message to a provisional `prompt_tokens`
+					// underestimate misleads downstream compaction. Accept
+					// the usage when EITHER:
+					//  - the chunk has no/empty `choices` (OpenAI's
+					//    terminal usage chunk), OR
+					//  - we've already seen `finish_reason` on a prior or
+					//    this chunk (the stream is wrapping up).
+					const hasNoChoices = !choices || choices.length === 0;
+					const isFinalUsage = hasNoChoices || finishReason !== "";
+					if (isFinalUsage) {
+						usage = {
+							inputTokens: chunkUsage.prompt_tokens || 0,
+							outputTokens: chunkUsage.completion_tokens || 0,
+						};
+					}
 				}
 			}
 		}

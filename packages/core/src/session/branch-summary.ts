@@ -30,6 +30,27 @@ Be concise but preserve information that would help avoid repeating mistakes.
 {CONVERSATION}
 </branch-conversation>`;
 
+/**
+ * Escape wrapper-tag forms so untrusted transcript content can't break
+ * the branch-summary prompt's `<branch-conversation>` envelope. Same
+ * defense as the one in compaction.ts — branch-summaries are persisted
+ * back into the session as a `branch_summary` entry that gets replayed
+ * to the main model on later turns, so a single poisoned tool result
+ * could create durable prompt injection across future runs.
+ *
+ * Both opening and closing forms are neutralized (an unmatched opener
+ * inside transcript text would re-scope later prompt content into the
+ * injected section).
+ */
+const BRANCH_WRAPPER_TAG_RE =
+  /<\s*(\/?)\s*(branch-conversation)\s*(\/?)\s*>/gi;
+
+function escapeBranchWrapperTags(text: string): string {
+  return text.replace(BRANCH_WRAPPER_TAG_RE, (_, lead: string, name: string, trail: string) => {
+    return `&lt;${lead}${name.toLowerCase()}${trail}&gt;`;
+  });
+}
+
 // ============================================================================
 // File Operations
 // ============================================================================
@@ -210,7 +231,10 @@ export async function generateBranchSummary(
     return { summary, details };
   }
 
-  const prompt = BRANCH_SUMMARY_PROMPT.replace("{CONVERSATION}", formatted);
+  const prompt = BRANCH_SUMMARY_PROMPT.replace(
+    "{CONVERSATION}",
+    escapeBranchWrapperTags(formatted),
+  );
 
   // Handle both sync and async stream functions (registry.stream() returns Promise<EventStream>)
   const streamOrPromise = options.streamFn(

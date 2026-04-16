@@ -162,10 +162,16 @@ export function createAutoCompactor(
       // forceProgress: when provider Usage tells us we're over the
       // limit, findCutPoint MUST drop something even if the chars/4
       // budget would have kept everything (otherwise next turn we
-      // re-trigger and skip again — livelock). Only force when the
-      // trigger came from a usage anchor; pure chars/4 overflow is
-      // already self-consistent with findCutPoint.
-      const forceProgress = measurement.lastUsageIndex !== null;
+      // re-trigger and skip again — livelock).
+      //
+      // Only force when the USAGE side specifically caused the overflow
+      // (`usageTokens > limit`). When the trailing chars/4 tail is what
+      // pushes us over, findCutPoint already sees mass to cut and the
+      // regular path is correct. Forcing in that case would over-shrink
+      // the kept tail unnecessarily.
+      const forceProgress =
+        measurement.lastUsageIndex !== null &&
+        measurement.usageTokens > limit;
       result = await compact(context.messages, {
         keepRecentTokens: effectiveKeepRecent,
         model: context.model,

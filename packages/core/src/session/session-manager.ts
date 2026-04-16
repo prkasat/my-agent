@@ -20,7 +20,6 @@ import {
   readFileSync,
   readdirSync,
   statSync,
-  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -649,19 +648,6 @@ export class SessionManager {
     }
   }
 
-  /**
-   * Truncate the session file back to a snapshot byte count.
-   *
-   * No-op when the snapshot is -1 (no file existed pre-navigation) or
-   * when persistence is disabled. Throws on any other fs failure so
-   * callers can surface a "rollback failed" condition.
-   */
-  private truncateSessionFile(snapshot: number): void {
-    if (!this.persist || !this.sessionFile) return;
-    if (snapshot < 0) return;
-    truncateSync(this.sessionFile, snapshot);
-  }
-
   private persistEntry(entry: SessionEntry): void {
     if (!this.persist || !this.sessionFile) return;
 
@@ -1140,11 +1126,11 @@ export class SessionManager {
       try {
         summaryEntryId = this.appendBranchSummary(oldLeafId, summary, summaryDetails);
       } catch (err) {
-        // Roll back ALL state appendEntry could have mutated, not just
-        // the leaf pointer. Otherwise a transient fs / id-collision
-        // failure leaves a phantom branch_summary entry visible to
-        // readers and to a retry — duplicating summaries, or worse,
-        // surfacing a summary the file on disk never received.
+        // Roll back ALL in-memory state appendEntry could have mutated,
+        // not just the leaf pointer. Otherwise a transient fs /
+        // id-collision failure leaves a phantom branch_summary entry
+        // visible in this process — duplicating on retry, or surfacing
+        // a summary the file on disk never received.
         this.leafId = oldLeafId;
         if (this.fileEntries.length > fileEntriesLen) {
           for (let i = this.fileEntries.length - 1; i >= fileEntriesLen; i--) {
@@ -1154,19 +1140,26 @@ export class SessionManager {
           this.fileEntries.length = fileEntriesLen;
         }
         this.flushed = flushedSnapshot;
-        // appendFileSync may have written partial bytes BEFORE throwing,
-        // OR the persist may have succeeded entirely and a later step
-        // threw. Either way, truncate the session file back to the byte
-        // count it had before the navigation started so a reload can't
-        // resurrect the rolled-back entry. Truncation failures are
-        // re-thrown alongside the original — both errors are signal.
-        try {
-          this.truncateSessionFile(sessionFileSnapshot);
-        } catch (truncErr) {
-          // Surface the original error, but annotate with the truncation
-          // failure so the caller knows on-disk state may be inconsistent.
-          (err as Error).message += ` (and rollback truncation failed: ${(truncErr as Error).message})`;
-        }
+        // We deliberately do NOT truncate the on-disk file back to
+        // sessionFileSnapshot. Pass-2 added a `truncateSync(snapshot)`
+        // here, but pass-3 flagged it as a worse-than-the-disease bug:
+        // without holding the cross-process lock for the full mutation,
+        // a concurrent writer's appended bytes after the snapshot would
+        // be erased by the truncate. Erasing peer data is strictly
+        // worse than a phantom entry on reload.
+        //
+        // Trade-off accepted: if appendBranchSummary's persistEntry
+        // wrote bytes before throwing, those bytes survive on disk and
+        // a reload will re-introduce the entry. Recovery options:
+        //   - prefer wrapping navigateBranch in
+        //     `await session.withLock(...)` so the snapshot is exclusive
+        //     and a future revision can safely reintroduce truncation.
+        //   - on reload, the entry's parentId still chains to a real
+        //     ancestor so it's at worst an orphan branch_summary, not
+        //     a corrupted tree.
+        // Reference: sessionFileSnapshot is captured but unused; kept
+        // for the upcoming lock-aware revision.
+        void sessionFileSnapshot;
         throw err;
       }
     }
