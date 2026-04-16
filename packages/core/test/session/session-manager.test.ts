@@ -145,6 +145,118 @@ describe("SessionManager", () => {
       expect((context.messages[2] as any).content).toBe("Different follow up");
     });
 
+    it("Tier-1: navigateBranch records summary on the new branch and returns the abandoned tail", () => {
+      // Build:
+      //          root
+      //           |
+      //           A (user)
+      //           |
+      //           B (assistant)   <-- common ancestor
+      //          / \
+      //         /   \
+      //        C     D            <-- siblings; we'll abandon C->E for D
+      //        |
+      //        E
+      //
+      // Then navigate from leaf E to D, with a summary of "C/E branch".
+      // Expectations:
+      // - abandonedEntries = [C, E] (chronological)
+      // - commonAncestorId = B
+      // - leaf is now D AFTER the appended summary entry
+      // - the branch_summary entry's parentId is D (it lives on the new branch)
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      const e = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "E" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      // Branch off B and create sibling D
+      manager.branch(b);
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+
+      // Move back to E so we can simulate "user is on the C/E branch and now jumps back to D"
+      manager.branch(e);
+
+      const result = manager.navigateBranch(d, "Abandoned C/E branch");
+
+      expect(result.commonAncestorId).toBe(b);
+      expect(result.abandonedEntries.map((x) => x.id)).toEqual([c, e]);
+      expect(result.summaryEntryId).toBeTruthy();
+
+      // The summary's parentId must be D (lives on the new branch).
+      const summary = manager.getEntry(result.summaryEntryId!);
+      expect(summary?.type).toBe("branch_summary");
+      expect(summary?.parentId).toBe(d);
+      expect((summary as any).fromId).toBe(e);
+
+      // Leaf is now the summary entry — next append continues from there.
+      expect(manager.getLeafId()).toBe(result.summaryEntryId);
+    });
+
+    it("Tier-1: navigateBranch with no summary just moves the leaf and returns the abandoned tail", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+
+      manager.branch(b);
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+      manager.branch(c);
+
+      const result = manager.navigateBranch(d);
+      expect(result.summaryEntryId).toBeUndefined();
+      expect(result.commonAncestorId).toBe(b);
+      expect(result.abandonedEntries.map((x) => x.id)).toEqual([c]);
+      expect(manager.getLeafId()).toBe(d);
+    });
+
+    it("Tier-1: navigateBranch is a no-op when target equals current leaf", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const result = manager.navigateBranch(a, "would be ignored");
+      expect(result.summaryEntryId).toBeUndefined();
+      expect(result.abandonedEntries).toHaveLength(0);
+      expect(result.commonAncestorId).toBe(a);
+      // No branch_summary should have been written.
+      expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
+    });
+
+    it("Tier-1: navigateBranch deeper along the same line abandons nothing", () => {
+      // root -> A -> B -> C
+      // Leaf is at A. Navigating to C is moving FORWARD along the same line.
+      // No entries are abandoned.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+
+      manager.branch(a);
+      const result = manager.navigateBranch(c);
+      expect(result.abandonedEntries).toHaveLength(0);
+      expect(result.commonAncestorId).toBe(a);
+      expect(manager.getLeafId()).toBe(c);
+    });
+
     it("should get entries between two points", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
 

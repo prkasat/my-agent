@@ -246,6 +246,103 @@ export async function generateBranchSummary(
   return { summary, details };
 }
 
+// ============================================================================
+// Common-Ancestor Navigation
+// ============================================================================
+
+/**
+ * Minimal read-only view of a SessionManager that we need to walk the tree.
+ *
+ * Pulled into its own type so the helper is independent of the full
+ * SessionManager surface (and so a test can stub it without bringing in the
+ * whole module).
+ */
+export interface BranchTreeReader {
+  /** Walk parent links from `entryId` up to the root, returning root-first. */
+  getBranch: (fromId?: string) => SessionEntry[];
+  /** Look up a single entry by id. */
+  getEntry: (id: string) => SessionEntry | undefined;
+}
+
+export interface CollectEntriesResult {
+  /** Entries that should be summarized (chronological order, oldest first). */
+  entries: SessionEntry[];
+  /**
+   * Deepest node that's on both the old and target paths, or `null` when
+   * the two branches share no ancestor (different roots / freshly-attached).
+   */
+  commonAncestorId: string | null;
+}
+
+/**
+ * Collect the abandoned tail when navigating from one branch leaf to another.
+ *
+ * Walks both paths root-first, finds the DEEPEST node present on both, and
+ * returns the entries between that ancestor and `oldLeafId` (exclusive of
+ * the ancestor itself, inclusive of `oldLeafId`). Those are the entries
+ * that exist on the old branch but not on the target branch — i.e., the
+ * work that's about to be left behind and is a candidate for summarization.
+ *
+ * Returns `entries: []` and `commonAncestorId: null` when there's no old
+ * leaf (first navigation), no common ancestor, or the old leaf already lies
+ * on the target's ancestor chain (navigating "back" toward an ancestor —
+ * nothing is being abandoned).
+ *
+ * Why "common ancestor": pure event sourcing means a session is a tree of
+ * entries, and switching from leaf A to leaf B abandons exactly the entries
+ * on A's path that aren't on B's path. The deepest shared ancestor is the
+ * exact split point.
+ */
+export function collectEntriesForBranchSummary(
+  session: BranchTreeReader,
+  oldLeafId: string | null,
+  targetId: string,
+): CollectEntriesResult {
+  if (!oldLeafId || oldLeafId === targetId) {
+    return { entries: [], commonAncestorId: null };
+  }
+
+  const oldPath = session.getBranch(oldLeafId);
+  const targetPath = session.getBranch(targetId);
+
+  // Build the set of ids on the OLD path so we can scan TARGET path
+  // backwards (deepest first) and stop at the first match.
+  const oldIds = new Set(oldPath.map((e) => e.id));
+
+  let commonAncestorId: string | null = null;
+  for (let i = targetPath.length - 1; i >= 0; i--) {
+    if (oldIds.has(targetPath[i].id)) {
+      commonAncestorId = targetPath[i].id;
+      break;
+    }
+  }
+
+  // Walk OLD leaf -> ancestor, collecting entries strictly between.
+  // Stop when we reach the common ancestor (don't include it — it's
+  // shared with the target path so it's NOT being abandoned).
+  const entries: SessionEntry[] = [];
+  let current: string | null = oldLeafId;
+  while (current && current !== commonAncestorId) {
+    const entry = session.getEntry(current);
+    if (!entry) break;
+    entries.push(entry);
+    current = entry.parentId ?? null;
+  }
+
+  // Pi-Mono parity: caller wants chronological (oldest-first) order so the
+  // summarizer sees the branch as it was lived, not in reverse.
+  entries.reverse();
+
+  // Special case: if the OLD leaf is ITSELF on the target's ancestor chain,
+  // we walked from oldLeafId straight to itself — nothing to summarize.
+  // This happens when navigating "deeper" along the same line.
+  if (entries.length === 1 && entries[0].id === commonAncestorId) {
+    return { entries: [], commonAncestorId };
+  }
+
+  return { entries, commonAncestorId };
+}
+
 /**
  * Check if a branch should have a summary generated.
  *

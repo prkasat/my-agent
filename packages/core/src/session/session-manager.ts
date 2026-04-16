@@ -45,6 +45,7 @@ import type {
   SettingsChangeEntry,
 } from "./types.js";
 import { CURRENT_SESSION_VERSION } from "./types.js";
+import { collectEntriesForBranchSummary } from "./branch-summary.js";
 
 // ============================================================================
 // ID Generation
@@ -1021,6 +1022,59 @@ export class SessionManager {
       throw new Error(`Entry ${toEntryId} not found`);
     }
     this.leafId = toEntryId;
+  }
+
+  /**
+   * Navigate to another branch, optionally summarizing the abandoned tail.
+   *
+   * Computes the deepest common ancestor with the current leaf, gathers the
+   * entries that exist on the OLD branch but not on the target's ancestor
+   * chain, and (if the caller provides a summary) records a `branch_summary`
+   * entry on the TARGET path that captures what was abandoned. The summary
+   * is anchored at `fromId = oldLeafId` so future readers can trace which
+   * branch tip was summarized.
+   *
+   * The summary is appended BEFORE the leaf moves so it lives on the new
+   * branch as a child of the target — i.e., the next append after navigation
+   * sees both the target's history and the abandoned-branch summary.
+   *
+   * Returns the abandoned entries plus the common ancestor id so callers can
+   * decide whether the gap is interesting enough to summarize before calling.
+   * Pass `summary` as `undefined` to navigate without recording anything.
+   */
+  navigateBranch(
+    targetId: string,
+    summary?: string,
+    summaryDetails?: BranchSummaryDetails,
+  ): {
+    abandonedEntries: SessionEntry[];
+    commonAncestorId: string | null;
+    summaryEntryId?: string;
+  } {
+    if (!this.byId.has(targetId)) {
+      throw new Error(`Entry ${targetId} not found`);
+    }
+
+    // Same-position navigation is a no-op — there is nothing to abandon
+    // and nothing to summarize.
+    if (targetId === this.leafId) {
+      return { abandonedEntries: [], commonAncestorId: this.leafId };
+    }
+
+    const oldLeafId = this.leafId;
+    const { entries: abandonedEntries, commonAncestorId } =
+      collectEntriesForBranchSummary(this, oldLeafId, targetId);
+
+    // Move to the target FIRST so the summary's parentId chains onto the
+    // new branch (not the abandoned one).
+    this.leafId = targetId;
+
+    let summaryEntryId: string | undefined;
+    if (summary && oldLeafId) {
+      summaryEntryId = this.appendBranchSummary(oldLeafId, summary, summaryDetails);
+    }
+
+    return { abandonedEntries, commonAncestorId, summaryEntryId };
   }
 
   /**

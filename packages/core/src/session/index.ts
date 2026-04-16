@@ -67,8 +67,11 @@ export type {
 export {
   generateBranchSummary,
   shouldGenerateBranchSummary,
+  collectEntriesForBranchSummary,
 } from "./branch-summary.js";
 export type {
   BranchSummaryResult,
   GenerateBranchSummaryOptions,
+  CollectEntriesResult,
+  BranchTreeReader,
 } from "./branch-summary.js";

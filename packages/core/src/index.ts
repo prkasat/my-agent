@@ -147,6 +147,7 @@ export {
 	// Branch summarization
 	generateBranchSummary,
 	shouldGenerateBranchSummary,
+	collectEntriesForBranchSummary,
 } from "./session/index.js";
 
 export type {
