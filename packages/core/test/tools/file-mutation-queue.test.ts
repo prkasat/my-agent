@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -697,79 +698,82 @@ describe("file-mutation-queue cross-process lock", () => {
 		expect(localResults).toEqual([1, 2, 3]);
 	});
 
-	it("Tier-2 D3: writes heartbeatAt on initial acquire and refresh advances it", async () => {
+	it("Tier-2 D3: refresh creates a token-scoped sidecar without touching info", async () => {
 		const file = path.join(root, "heartbeat-1");
 		writeFileSync(file, "hi");
 		const release = await acquireFileLock(file, { timeout: 200 });
 		try {
-			const infoPath = path.join(locateLockDir(file), "info");
-			const initial = JSON.parse(readFileSync(infoPath, "utf-8"));
-			expect(typeof initial.heartbeatAt).toBe("number");
-			expect(initial.heartbeatAt).toBe(initial.acquiredAt);
+			const lockDir = locateLockDir(file);
+			const infoPath = path.join(lockDir, "info");
+			const infoBefore = readFileSync(infoPath, "utf-8");
+			const initial = JSON.parse(infoBefore);
+			// info itself does not carry heartbeat freshness any more —
+			// the sidecar is the source of truth (Codex Tier-2-pass-1 fix).
+			expect(initial.heartbeatAt).toBeUndefined();
 
-			// Wait long enough that a refresh produces a strictly later ms
-			// timestamp on every reasonable clock resolution.
+			const sidecarPath = path.join(lockDir, `heartbeat.${initial.token}`);
 			await new Promise((r) => setTimeout(r, 5));
 			const ok = refreshLockHeartbeat(infoPath, initial.token);
 			expect(ok).toBe(true);
+			expect(existsSync(sidecarPath)).toBe(true);
 
-			const refreshed = JSON.parse(readFileSync(infoPath, "utf-8"));
-			expect(refreshed.heartbeatAt).toBeGreaterThan(initial.heartbeatAt);
-			expect(refreshed.token).toBe(initial.token);
-			expect(refreshed.acquiredAt).toBe(initial.acquiredAt);
+			// info MUST NOT have been touched — that immutability is what
+			// closes the eviction-clobber race.
+			expect(readFileSync(infoPath, "utf-8")).toBe(infoBefore);
 		} finally {
 			release();
 		}
 	});
 
-	it("Tier-2 D3: heartbeat-aware lock with stale heartbeat (>30s) is evicted even though PID is alive", async () => {
+	it("Tier-2 D3: lock with stale sidecar (>30s) is evicted even though PID is alive", async () => {
 		const file = path.join(root, "heartbeat-2");
 		writeFileSync(file, "hi");
 		const lockDir = locateLockDir(file);
 
 		mkdirSync(lockDir);
-		// Plant a heartbeat-aware lock: PID is alive (us!) and acquiredAt
-		// is recent — but heartbeatAt is 60s stale, well past the 30s
-		// alive-with-heartbeat eviction bound. Pre-D3 this would have
-		// waited the full 5-minute legacy threshold.
+		const token = "stale-heartbeat-holder";
 		const planted = {
 			v: 2,
 			pid: process.pid,
 			hostname: os.hostname(),
 			acquiredAt: Date.now() - 60_000,
-			heartbeatAt: Date.now() - 60_000,
-			token: "stale-heartbeat-holder",
+			token,
 		};
 		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
+		// Sidecar exists but its mtime is 60s stale — >30s bound triggers eviction.
+		const sidecar = path.join(lockDir, `heartbeat.${token}`);
+		writeFileSync(sidecar, "");
+		const staleSec = (Date.now() - 60_000) / 1000;
+		utimesSync(sidecar, staleSec, staleSec);
 
-		// Should evict immediately because the heartbeat went silent.
+		// Should evict immediately because the heartbeat sidecar is stale.
 		const release = await acquireFileLock(file, { timeout: 1_000 });
 		release();
 	});
 
-	it("Tier-2 D3: heartbeat-aware lock with FRESH heartbeat is NOT evicted even after old 30s threshold", async () => {
+	it("Tier-2 D3: lock with FRESH sidecar mtime is NOT evicted even after old 30s threshold", async () => {
 		const file = path.join(root, "heartbeat-3");
 		writeFileSync(file, "hi");
 		const lockDir = locateLockDir(file);
 
 		mkdirSync(lockDir);
-		// Acquired long ago but heartbeated recently — must NOT be evicted
-		// because the holder is proving liveness.
+		const token = "live-heartbeat-holder";
 		const planted = {
 			v: 2,
 			pid: process.pid,
 			hostname: os.hostname(),
 			acquiredAt: Date.now() - 10 * 60_000, // 10 minutes ago
-			heartbeatAt: Date.now() - 1_000, // 1 second ago
-			token: "live-heartbeat-holder",
+			token,
 		};
 		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
+		// Fresh sidecar — proof of life despite the old acquiredAt.
+		writeFileSync(path.join(lockDir, `heartbeat.${token}`), "");
 
 		await expect(acquireFileLock(file, { timeout: 200 })).rejects.toThrow("Timeout");
 		rmSync(lockDir, { recursive: true });
 	});
 
-	it("Tier-2 D3: refreshLockHeartbeat refuses to clobber a successor's lock (token mismatch)", () => {
+	it("Tier-2 D3: refreshLockHeartbeat refuses to write when on-disk owner has a different token", () => {
 		const file = path.join(root, "heartbeat-4");
 		writeFileSync(file, "x");
 		const lockDir = locateLockDir(file);
@@ -779,21 +783,59 @@ describe("file-mutation-queue cross-process lock", () => {
 			pid: process.pid,
 			hostname: os.hostname(),
 			acquiredAt: Date.now(),
-			heartbeatAt: Date.now(),
 			token: "successor-token",
 		};
 		const infoPath = path.join(lockDir, "info");
 		writeFileSync(infoPath, JSON.stringify(successorInfo));
 
 		// We hold a stale token from before being evicted. Refresh must
-		// see the token mismatch and refuse to write — otherwise we'd
-		// silently rewrite the successor's heartbeatAt under their feet.
+		// see the token mismatch and skip the write entirely so we don't
+		// even leave a stray sidecar in the successor's lockDir.
 		const ok = refreshLockHeartbeat(infoPath, "evicted-original-token");
 		expect(ok).toBe(false);
 
 		const after = JSON.parse(readFileSync(infoPath, "utf-8"));
 		expect(after.token).toBe("successor-token");
-		expect(after.heartbeatAt).toBe(successorInfo.heartbeatAt);
+		// And no stray sidecar got planted — refresh skipped the write.
+		expect(existsSync(path.join(lockDir, "heartbeat.evicted-original-token"))).toBe(false);
+
+		rmSync(lockDir, { recursive: true });
+	});
+
+	it("Tier-2 pass-1 regression: stale heartbeat after evict+reacquire CANNOT clobber successor's info", () => {
+		// Exact race Codex flagged: holder A acquired token T_A, peer
+		// evicted+reacquired with token T_C, A's heartbeat fires.
+		// Pre-fix: A's tmp+rename would atomically replace T_C's info
+		// with one containing T_A. Post-fix: the heartbeat is keyed on
+		// the token, so the worst case is A leaves a stray
+		// heartbeat.T_A file in T_C's lockDir, never touching T_C's info.
+		const file = path.join(root, "heartbeat-5");
+		writeFileSync(file, "x");
+		const lockDir = locateLockDir(file);
+		mkdirSync(lockDir);
+		const successor = {
+			v: 2,
+			pid: process.pid,
+			hostname: os.hostname(),
+			acquiredAt: Date.now(),
+			token: "T_C-successor",
+		};
+		const infoPath = path.join(lockDir, "info");
+		writeFileSync(infoPath, JSON.stringify(successor));
+		// Successor's own (fresh) sidecar.
+		writeFileSync(path.join(lockDir, "heartbeat.T_C-successor"), "");
+
+		// A fires its heartbeat with its evicted token T_A.
+		const ok = refreshLockHeartbeat(infoPath, "T_A-evicted");
+		expect(ok).toBe(false);
+
+		// info still reads as T_C — no clobber.
+		const after = JSON.parse(readFileSync(infoPath, "utf-8"));
+		expect(after.token).toBe("T_C-successor");
+		// Successor's own sidecar untouched.
+		expect(existsSync(path.join(lockDir, "heartbeat.T_C-successor"))).toBe(true);
+		// And A didn't manage to leak its sidecar either.
+		expect(existsSync(path.join(lockDir, "heartbeat.T_A-evicted"))).toBe(false);
 
 		rmSync(lockDir, { recursive: true });
 	});

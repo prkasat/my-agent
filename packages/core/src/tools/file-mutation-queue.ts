@@ -244,16 +244,31 @@ interface LockInfo {
 	 */
 	token: string;
 	/**
-	 * Timestamp of the most recent heartbeat refresh. Updated by the
-	 * holder every HEARTBEAT_INTERVAL_MS so peers can prove the holder
-	 * is alive without paying the full STALE_LOCK_MS_UNKNOWN budget.
-	 *
-	 * Optional for back-compat: legacy locks (v ≤ 2 before D3 / Tier 2
-	 * landed) lack the field; eviction logic falls back to acquiredAt
-	 * with the original 5-minute threshold so we don't aggressively
-	 * evict peers running older code.
+	 * @deprecated Tier-2 pass-1 review found that rewriting `info` to
+	 * refresh this field allowed an evicted holder to clobber a
+	 * successor's `info` after the lockDir was rmSync'd and recreated.
+	 * Heartbeats now live in a token-scoped sidecar (`heartbeat.<token>`)
+	 * inside lockDir so the rewrite path can never collide with a new
+	 * generation. This field is kept on the type only so a transitional
+	 * peer running pre-fix code can still parse — eviction logic ignores
+	 * it in favor of the sidecar's mtime.
 	 */
 	heartbeatAt?: number;
+}
+
+/**
+ * Path of the token-scoped heartbeat sidecar.
+ *
+ * Why per-token: if we ever rewrote a shared file (`info`) for
+ * heartbeats, an evicted-but-still-running holder could clobber the
+ * successor's metadata after the lockDir was rmSync'd and recreated by
+ * a peer (Codex Tier-2-pass-1 finding). Using `heartbeat.<token>`
+ * means an evicted holder's writeFileSync at most creates a stray file
+ * that the new owner ignores (different token), and never overwrites
+ * the new holder's own heartbeat sidecar.
+ */
+function heartbeatSidecarPath(lockDir: string, token: string): string {
+	return path.join(lockDir, `heartbeat.${token}`);
 }
 
 function writeLockInfo(infoPath: string, token: string): void {
@@ -264,7 +279,6 @@ function writeLockInfo(infoPath: string, token: string): void {
 		hostname: os.hostname(),
 		acquiredAt: now,
 		token,
-		heartbeatAt: now,
 	};
 	// Open with O_CREAT|O_EXCL|O_WRONLY (+ O_NOFOLLOW on POSIX) so:
 	//  - O_EXCL: fails if `info` already exists (a peer pre-created
@@ -366,6 +380,27 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
+ * Read the heartbeat sidecar's mtime for this lock generation, if any.
+ *
+ * Returns null if the sidecar is missing or unstatable (legacy lock
+ * without a heartbeat, or a generation we evicted before the holder
+ * managed a single refresh). Caller falls back to acquiredAt + the
+ * legacy threshold in that case.
+ *
+ * The sidecar is keyed by the holder's token so a stale write from an
+ * evicted predecessor cannot overwrite the current generation's
+ * freshness signal.
+ */
+function readHeartbeatSidecarMtime(lockDir: string, token: string): number | null {
+	if (!token) return null;
+	try {
+		return fs.statSync(heartbeatSidecarPath(lockDir, token)).mtimeMs;
+	} catch {
+		return null;
+	}
+}
+
+/**
  * Decide whether a lock can be safely evicted.
  *
  * Rules:
@@ -374,13 +409,14 @@ function isProcessAlive(pid: number): boolean {
  * - If the owner PID is dead on this host, evict immediately. The
  *   previous holder crashed without releasing.
  * - If the owner PID is alive on this host:
- *     * heartbeat-aware lock — use heartbeatAt as the freshness signal,
- *       evict after STALE_LOCK_MS_ALIVE (~6 missed heartbeats).
- *     * legacy lock without heartbeatAt — use the older 5-minute
- *       threshold against acquiredAt so we don't aggressively evict
- *       peers running pre-heartbeat code paths.
+ *     * heartbeat sidecar present — use its mtime as the freshness
+ *       signal, evict after STALE_LOCK_MS_ALIVE (~6 missed heartbeats).
+ *     * no sidecar (legacy lock or just-acquired before first refresh) —
+ *       use the older 5-minute threshold against acquiredAt so we don't
+ *       aggressively evict peers running pre-heartbeat code or holders
+ *       in their first 5 seconds of execution.
  */
-function shouldEvictLock(info: LockInfo, now: number): boolean {
+function shouldEvictLock(info: LockInfo, now: number, lockDir: string): boolean {
 	const sameHost = info.hostname && info.hostname === os.hostname();
 
 	if (!sameHost) {
@@ -392,28 +428,30 @@ function shouldEvictLock(info: LockInfo, now: number): boolean {
 		return true;
 	}
 
-	// Holder still alive — choose freshness signal based on whether they
-	// heartbeat. A heartbeat from within HEARTBEAT_INTERVAL_MS proves
-	// active progress; we evict only when 6+ heartbeats are missing.
-	if (typeof info.heartbeatAt === "number") {
-		return now - info.heartbeatAt > STALE_LOCK_MS_ALIVE;
+	const sidecarMtime = readHeartbeatSidecarMtime(lockDir, info.token);
+	if (sidecarMtime !== null) {
+		return now - sidecarMtime > STALE_LOCK_MS_ALIVE;
 	}
+	// No sidecar yet (legacy or pre-first-heartbeat) — use the
+	// conservative legacy threshold so we don't evict a freshly-acquired
+	// lock before its first heartbeat tick fires.
 	return now - info.acquiredAt > STALE_LOCK_MS_ALIVE_LEGACY;
 }
 
 /**
- * Refresh the heartbeat timestamp on an owned lock.
+ * Refresh the heartbeat sidecar for an owned lock.
  *
- * Verifies the on-disk lock still belongs to us (token match) before
- * rewriting — without that, a heartbeat firing after the holder was
- * evicted would clobber the successor's info file. Returns true if the
- * heartbeat was written, false if we discovered we no longer own the
- * lock (caller should stop the heartbeat timer).
+ * Touches `lockDir/heartbeat.<token>` so peers reading the sidecar's
+ * mtime see fresh proof of life. The sidecar's path is token-scoped so
+ * a write firing AFTER eviction can never clobber a successor's
+ * metadata — at worst it deposits a stray file in the successor's
+ * lockDir that the new owner ignores (token mismatch) and which gets
+ * cleaned up when the successor releases (rmSync recursive).
  *
- * Atomic-rename via tmp file so a peer reading mid-write never sees a
- * partial JSON document. Best-effort: any fs error swallows silently
- * and returns false; the next eviction round will catch a truly stuck
- * holder via the alive/dead path in shouldEvictLock.
+ * Returns true if the sidecar was touched, false if we discovered we
+ * no longer own the lock (info missing or token mismatch — caller
+ * should stop the heartbeat timer to avoid leaking stray sidecars in
+ * peers' lockDirs).
  *
  * Exported for tests; production callers don't invoke this directly.
  */
@@ -424,20 +462,20 @@ export function refreshLockHeartbeat(infoPath: string, ourToken: string): boolea
 	} catch {
 		return false;
 	}
+	// Two failure modes both mean "stop heartbeating":
+	//  - info missing → lockDir was evicted (rmSync recursive removed it)
+	//  - token mismatch → lockDir was evicted AND a successor took over
 	if (!current || current.token !== ourToken) return false;
-	const updated: LockInfo = { ...current, heartbeatAt: Date.now() };
-	const tmp = `${infoPath}.tmp.${process.pid}`;
+
+	const lockDir = path.dirname(infoPath);
+	const sidecar = heartbeatSidecarPath(lockDir, ourToken);
 	try {
-		fs.writeFileSync(tmp, JSON.stringify(updated), { mode: 0o600 });
-		fs.renameSync(tmp, infoPath);
+		// Empty content + truncate; the value carrier is the file's mtime.
+		// writeFileSync sets mtime to "now" as a side effect on every
+		// platform we target, so we don't need a follow-up utimesSync.
+		fs.writeFileSync(sidecar, "", { mode: 0o600 });
 		return true;
 	} catch {
-		// Cleanup the tmp if rename failed; ignore errors during cleanup.
-		try {
-			fs.unlinkSync(tmp);
-		} catch {
-			/* tmp may not exist */
-		}
 		return false;
 	}
 }
@@ -452,7 +490,7 @@ function tryEvictStale(lockDir: string, infoPath: string, fallbackStaleMs: numbe
 	const now = Date.now();
 
 	if (info) {
-		if (!shouldEvictLock(info, now)) return false;
+		if (!shouldEvictLock(info, now, lockDir)) return false;
 		try {
 			fs.rmSync(lockDir, { recursive: true });
 			return true;
