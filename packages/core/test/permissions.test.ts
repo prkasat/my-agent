@@ -222,3 +222,42 @@ describe("createPermissionChecker — Tier-2 pass-2 regression: fail-closed for 
 		expect(result.action).toBe("allow");
 	});
 });
+
+describe("createPermissionChecker — Tier-2 pass-3 regression: requireConfirmation overrides knownReadOnly/KNOWN_READ_TOOLS", () => {
+	it("(deny) blocks `read` when listed in requireConfirmation", async () => {
+		// Pre-pass-3 bug: KNOWN_READ_TOOLS lookup happened first so the
+		// host's explicit requireConfirmation policy was silently
+		// ignored for read/ls/find/grep. A host trying to require
+		// approval before any file read would get free file reads.
+		const checker = createPermissionChecker("deny", {
+			requireConfirmation: new Set(["read"]),
+		});
+		const result = await checker.check(makeCtx("read", { path: "/tmp/safe.txt" }));
+		expect(result.action).toBe("block");
+	});
+
+	it("(ask) prompts for `read` when listed in requireConfirmation", async () => {
+		const onAsk = vi
+			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+			.mockResolvedValue("deny");
+		const checker = createPermissionChecker("ask", {
+			requireConfirmation: new Set(["read"]),
+			onAsk,
+		});
+		const result = await checker.check(makeCtx("read", { path: "/tmp/x.txt" }));
+		expect(result.action).toBe("block"); // user denied via prompt
+		expect(onAsk).toHaveBeenCalledOnce();
+		expect(onAsk.mock.calls[0][0].toolName).toBe("read");
+	});
+
+	it("(deny) requireConfirmation also overrides custom-host knownReadOnly extension", async () => {
+		// A host that puts a custom tool in BOTH knownReadOnly and
+		// requireConfirmation gets the requireConfirmation behavior.
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["docs_lookup"]),
+			requireConfirmation: new Set(["docs_lookup"]),
+		});
+		const result = await checker.check(makeCtx("docs_lookup", { topic: "x" }));
+		expect(result.action).toBe("block");
+	});
+});

@@ -203,19 +203,24 @@ export function createPermissionChecker(
 			// === Classify the tool ===
 			// Fail-closed model: a tool is "write-like" (and thus subject
 			// to ask/deny gating) UNLESS it's explicitly known to be
-			// read-only OR explicitly listed in requireConfirmation as
-			// caller-marked safe (no — requireConfirmation FORCES gating).
+			// read-only. Without this default, a host that registered a
+			// custom mutating tool (e.g. `deploy`, `run_sql`,
+			// `github_create_pr`) would have it silently bypass deny mode
+			// just because its name isn't in the built-in WRITE_TOOLS list.
 			//
-			// Without this default, a host that registered a custom
-			// mutating tool (e.g. `deploy`, `run_sql`, `github_create_pr`)
-			// would have it silently bypass deny mode just because its
-			// name isn't in the built-in WRITE_TOOLS list.
-			const isKnownRead =
-				KNOWN_READ_TOOLS.has(toolCall.name) ||
-				options?.knownReadOnly?.has(toolCall.name) === true;
-			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
+			// requireConfirmation is a HARD OVERRIDE: any tool listed
+			// there is gated regardless of read/write classification, so
+			// a host that wants to require approval for `read` (or any
+			// other built-in safe tool) gets exactly that. Without this
+			// override, requireConfirmation would silently fail open for
+			// known-read tools.
 			const isExplicitlyConfirmed =
 				options?.requireConfirmation?.has(toolCall.name) === true;
+			const isKnownRead =
+				!isExplicitlyConfirmed &&
+				(KNOWN_READ_TOOLS.has(toolCall.name) ||
+					options?.knownReadOnly?.has(toolCall.name) === true);
+			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
 			// Auto mode preserves its old generous behavior — only
 			// known-writes and requireConfirmation tools matter there;
 			// everything else allowed. Ask/deny use the fail-closed

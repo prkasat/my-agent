@@ -725,52 +725,56 @@ describe("file-mutation-queue cross-process lock", () => {
 		}
 	});
 
-	it("Tier-2 D3: lock with stale sidecar (>30s) is evicted even though PID is alive", async () => {
+	it("Tier-2 pass-3: alive PID is NOT evicted at 60s (sidecar mtime no longer drives eviction)", async () => {
+		// Pass-2 used the sidecar's mtime to evict at 30s. Pass-3 reverted
+		// to the 5-minute threshold for alive PIDs because sustained
+		// heartbeat-write failure could otherwise lead to dual holders.
+		// The sidecar stays as observability but doesn't drive eviction.
 		const file = path.join(root, "heartbeat-2");
 		writeFileSync(file, "hi");
 		const lockDir = locateLockDir(file);
 
 		mkdirSync(lockDir);
-		const token = "stale-heartbeat-holder";
+		const token = "still-within-5min-budget";
 		const planted = {
 			v: 2,
 			pid: process.pid,
 			hostname: os.hostname(),
-			acquiredAt: Date.now() - 60_000,
+			acquiredAt: Date.now() - 60_000, // 60s — well under the 5-min bound
 			token,
 		};
 		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
-		// Sidecar exists but its mtime is 60s stale — >30s bound triggers eviction.
+		// Stale sidecar — pre-pass-3 this would have triggered 30s eviction.
 		const sidecar = path.join(lockDir, `heartbeat.${token}`);
 		writeFileSync(sidecar, "");
 		const staleSec = (Date.now() - 60_000) / 1000;
 		utimesSync(sidecar, staleSec, staleSec);
 
-		// Should evict immediately because the heartbeat sidecar is stale.
-		const release = await acquireFileLock(file, { timeout: 1_000 });
-		release();
+		// Must time out — alive PID + acquiredAt only 60s old + 5min bound.
+		await expect(acquireFileLock(file, { timeout: 200 })).rejects.toThrow("Timeout");
+		rmSync(lockDir, { recursive: true });
 	});
 
-	it("Tier-2 D3: lock with FRESH sidecar mtime is NOT evicted even after old 30s threshold", async () => {
+	it("Tier-2 pass-3: alive PID IS evicted past the 5-minute safety bound", async () => {
 		const file = path.join(root, "heartbeat-3");
 		writeFileSync(file, "hi");
 		const lockDir = locateLockDir(file);
 
 		mkdirSync(lockDir);
-		const token = "live-heartbeat-holder";
+		const token = "exceeded-5min-budget";
 		const planted = {
 			v: 2,
 			pid: process.pid,
 			hostname: os.hostname(),
-			acquiredAt: Date.now() - 10 * 60_000, // 10 minutes ago
+			acquiredAt: Date.now() - 10 * 60_000, // 10 minutes ago — past 5-min bound
 			token,
 		};
 		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
-		// Fresh sidecar — proof of life despite the old acquiredAt.
+		// Even with a fresh sidecar — eviction key is acquiredAt vs 5min bound.
 		writeFileSync(path.join(lockDir, `heartbeat.${token}`), "");
 
-		await expect(acquireFileLock(file, { timeout: 200 })).rejects.toThrow("Timeout");
-		rmSync(lockDir, { recursive: true });
+		const release = await acquireFileLock(file, { timeout: 1_000 });
+		release();
 	});
 
 	it("Tier-2 D3: refreshLockHeartbeat refuses to write when on-disk owner has a different token", () => {

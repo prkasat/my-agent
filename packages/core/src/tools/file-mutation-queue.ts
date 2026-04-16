@@ -56,26 +56,29 @@ const queues = new Map<string, Promise<void>>();
 const STALE_LOCK_MS_UNKNOWN = 5 * 60_000;
 
 /**
- * Stale lock timeout for verified-alive owners on this host (30 s).
+ * Stale lock timeout for verified-alive owners on this host (5 min).
  *
- * Heartbeat keeps `heartbeatAt` within ~HEARTBEAT_INTERVAL_MS of `now`
- * for any holder that is actually doing work. Six missed heartbeats
- * (≈30s of unresponsiveness) is enough headroom for transient hangs
- * — GC pauses, slow disk, brief network blips — without making peers
- * wait minutes for a frozen holder.
+ * Originally Tier-2 dropped this to 30s on the assumption that
+ * heartbeats kept the sidecar fresh. Codex pass-3 surfaced a real
+ * dual-holder race under SUSTAINED heartbeat-write failure (durable
+ * ENOSPC/EIO/AV interference): the holder kept doing work while its
+ * sidecar mtime aged past 30s, peers evicted, and two processes
+ * mutated the same file under one logical lock.
  *
- * Legacy locks without a heartbeatAt field fall through to
- * STALE_LOCK_MS_ALIVE_LEGACY below so older holders (e.g., a peer
- * running pre-heartbeat code) don't get aggressively evicted.
+ * Reverting to 5 min for alive PIDs eliminates that race — the
+ * eviction window is large enough that any realistic transient I/O
+ * failure either resolves on its own or also breaks the protected
+ * write, in which case both holders fail safely. Heartbeats stay in
+ * place as observability (peers can tell "frozen-but-alive" from
+ * "actively working") but no longer drive eviction decisions.
+ *
+ * The cost is slower stuck-process recovery (5 min vs 30 s) — same as
+ * Pi-Mono's baseline. A faster, safe detection would require either
+ * an OS-level fcntl lock (cross-platform issues) or a preemptive
+ * abort signal threaded through every withCrossProcessLock caller
+ * (wide API change for marginal gain). Both deferred.
  */
-const STALE_LOCK_MS_ALIVE = 30_000;
-
-/**
- * Stale-lock threshold for legacy heartbeat-less locks held by an alive
- * peer. Same as the pre-heartbeat default — gives peers running older
- * code paths the benefit of the doubt for their full original budget.
- */
-const STALE_LOCK_MS_ALIVE_LEGACY = 5 * 60_000;
+const STALE_LOCK_MS_ALIVE = 5 * 60_000;
 
 /**
  * Heartbeat refresh cadence (5s).
@@ -380,27 +383,6 @@ function isProcessAlive(pid: number): boolean {
 }
 
 /**
- * Read the heartbeat sidecar's mtime for this lock generation, if any.
- *
- * Returns null if the sidecar is missing or unstatable (legacy lock
- * without a heartbeat, or a generation we evicted before the holder
- * managed a single refresh). Caller falls back to acquiredAt + the
- * legacy threshold in that case.
- *
- * The sidecar is keyed by the holder's token so a stale write from an
- * evicted predecessor cannot overwrite the current generation's
- * freshness signal.
- */
-function readHeartbeatSidecarMtime(lockDir: string, token: string): number | null {
-	if (!token) return null;
-	try {
-		return fs.statSync(heartbeatSidecarPath(lockDir, token)).mtimeMs;
-	} catch {
-		return null;
-	}
-}
-
-/**
  * Decide whether a lock can be safely evicted.
  *
  * Rules:
@@ -408,15 +390,13 @@ function readHeartbeatSidecarMtime(lockDir: string, token: string): number | nul
  *   verify liveness — fall back to a long age-based threshold.
  * - If the owner PID is dead on this host, evict immediately. The
  *   previous holder crashed without releasing.
- * - If the owner PID is alive on this host:
- *     * heartbeat sidecar present — use its mtime as the freshness
- *       signal, evict after STALE_LOCK_MS_ALIVE (~6 missed heartbeats).
- *     * no sidecar (legacy lock or just-acquired before first refresh) —
- *       use the older 5-minute threshold against acquiredAt so we don't
- *       aggressively evict peers running pre-heartbeat code or holders
- *       in their first 5 seconds of execution.
+ * - If the owner PID is alive on this host, only evict after the safety
+ *   upper bound (STALE_LOCK_MS_ALIVE = 5 min) against acquiredAt. The
+ *   heartbeat sidecar is NOT consulted for eviction — see the comment
+ *   on STALE_LOCK_MS_ALIVE for why a sidecar-driven faster eviction
+ *   would re-introduce a dual-holder race under sustained write failure.
  */
-function shouldEvictLock(info: LockInfo, now: number, lockDir: string): boolean {
+function shouldEvictLock(info: LockInfo, now: number, _lockDir: string): boolean {
 	const sameHost = info.hostname && info.hostname === os.hostname();
 
 	if (!sameHost) {
@@ -428,14 +408,10 @@ function shouldEvictLock(info: LockInfo, now: number, lockDir: string): boolean 
 		return true;
 	}
 
-	const sidecarMtime = readHeartbeatSidecarMtime(lockDir, info.token);
-	if (sidecarMtime !== null) {
-		return now - sidecarMtime > STALE_LOCK_MS_ALIVE;
-	}
-	// No sidecar yet (legacy or pre-first-heartbeat) — use the
-	// conservative legacy threshold so we don't evict a freshly-acquired
-	// lock before its first heartbeat tick fires.
-	return now - info.acquiredAt > STALE_LOCK_MS_ALIVE_LEGACY;
+	// Holder still alive on this host — wait for the safety upper bound.
+	// Sidecar mtime is observable but intentionally not authoritative for
+	// eviction (see STALE_LOCK_MS_ALIVE doc).
+	return now - info.acquiredAt > STALE_LOCK_MS_ALIVE;
 }
 
 /**
