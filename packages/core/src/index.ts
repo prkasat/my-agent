@@ -32,7 +32,7 @@ export type {
 
 // Infrastructure utilities
 export { killProcessTree, createTimeoutController } from "./tools/process-cleanup.js";
-export { withFileLock } from "./tools/file-mutation-queue.js";
+export { withFileLock, withCrossProcessLock, acquireFileLock } from "./tools/file-mutation-queue.js";
 export { computeDiff } from "./tools/diff.js";
 export type { DiffResult } from "./tools/diff.js";
 
@@ -71,7 +71,7 @@ export { truncateHead, truncateTail, truncateLine, formatSize, DEFAULT_MAX_LINES
 export type { TruncationResult, TruncationOptions } from "./tools/truncate.js";
 
 // Path utilities
-export { expandPath, resolveToCwd, resolveReadPath } from "./tools/path-utils.js";
+export { expandPath, resolveToCwd, resolveReadPath, isPathWithinBoundary, resolveAndValidatePath } from "./tools/path-utils.js";
 
 // Edit diff utilities
 export { fuzzyFindText, normalizeForFuzzyMatch, normalizeToLF, detectLineEnding, restoreLineEndings, stripBom, applyEditsToNormalizedContent, generateDiffString } from "./tools/edit-diff.js";
@@ -124,3 +124,49 @@ export type {
 	AfterToolCallContext,
 	AfterToolCallResult,
 } from "./agent/types.js";
+
+// Session persistence
+export {
+	SessionManager,
+	buildSessionContext,
+	CURRENT_SESSION_VERSION,
+	DEFAULT_COMPACTION_SETTINGS,
+	// Compaction
+	estimateTokens,
+	estimateContextTokens,
+	findCutPoint,
+	extractFileOperations,
+	generateCompactionSummary,
+	compact,
+	shouldCompact,
+	// Auto-compaction
+	createAutoCompactor,
+	createAutoCompactorWithPersistence,
+	// Branch summarization
+	generateBranchSummary,
+	shouldGenerateBranchSummary,
+} from "./session/index.js";
+
+export type {
+	SessionHeader,
+	SessionEntryBase,
+	MessageEntry,
+	SettingsChangeEntry,
+	CompactionEntry,
+	BranchSummaryEntry,
+	SessionInfoEntry,
+	SessionEntry,
+	FileEntry,
+	CompactionDetails,
+	BranchSummaryDetails,
+	SessionTreeNode,
+	SessionContext,
+	SessionInfo,
+	CompactionSettings,
+	CompactionResult,
+	CompactOptions,
+	AutoCompactorOptions,
+	CompactionCallback,
+	BranchSummaryResult,
+	GenerateBranchSummaryOptions,
+} from "./session/index.js";
