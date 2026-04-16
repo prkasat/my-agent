@@ -2,17 +2,45 @@ import type { BeforeToolCallContext, BeforeToolCallResult } from "./types.js";
 
 /**
  * Permission modes:
- * - "auto": all non-destructive operations allowed, destructive always blocked
- * - "read-only": only read operations allowed, all writes and executions blocked
+ * - "auto": destructive blocked, everything else allowed without prompting
+ * - "ask":  destructive blocked, write tools trigger a user-confirmation
+ *           callback (default-deny if no callback supplied)
+ * - "deny": destructive blocked, ALL write tools blocked unconditionally
+ * - "read-only": back-compat alias for "deny"
  *
- * Destructive commands and protected paths are ALWAYS blocked regardless of mode.
+ * Destructive commands and protected paths are ALWAYS blocked regardless
+ * of mode — that floor never relaxes.
  *
- * NOTE: Regex-based command parsing is inherently incomplete. A determined LLM
- * could bypass these checks via encoding tricks, scripting interpreters, or
- * uncommon command variants. For full safety, consider a real shell parser or
- * sandboxed execution environment. This is a pragmatic first layer of defense.
+ * NOTE: Regex-based command parsing is inherently incomplete. A
+ * determined LLM could bypass these checks via encoding tricks, scripting
+ * interpreters, or uncommon command variants. For full safety, consider
+ * a real shell parser or sandboxed execution environment. This is a
+ * pragmatic first layer of defense.
  */
-export type PermissionMode = "auto" | "read-only";
+export type PermissionMode = "auto" | "ask" | "deny" | "read-only";
+
+/**
+ * Decision returned by the user-confirmation callback for ask mode.
+ *
+ * - "allow_once":    permit this single tool call
+ * - "allow_session": permit this AND every subsequent call to the same
+ *                    tool name within the current PermissionChecker
+ *                    instance (tab-style "always allow")
+ * - "deny":          block this tool call
+ */
+export type AskDecision = "allow_once" | "allow_session" | "deny";
+
+/**
+ * Context passed to the ask callback so a UI can render a useful prompt.
+ */
+export interface PermissionAskContext {
+	toolName: string;
+	args: unknown;
+	/** Bash-tool command, if applicable. */
+	command?: string;
+	/** Tool argument's `path` field, if applicable. */
+	filePath?: string;
+}
 
 /**
  * Patterns that indicate destructive or dangerous commands.
@@ -93,12 +121,24 @@ interface PermissionChecker {
 export interface PermissionCheckerOptions {
 	/** Additional tool names that require confirmation (tool-level overrides) */
 	requireConfirmation?: Set<string>;
+	/**
+	 * User-confirmation callback for "ask" mode. Receives the tool's
+	 * name + arguments and returns a decision. Default-deny if absent
+	 * (so a misconfigured ask mode fails closed, never silently
+	 * permissive).
+	 */
+	onAsk?: (ctx: PermissionAskContext) => Promise<AskDecision>;
 }
 
 export function createPermissionChecker(
 	mode: PermissionMode,
 	options?: PermissionCheckerOptions,
 ): PermissionChecker {
+	// Per-checker memory of "allow_session" decisions so a user who
+	// approved a tool once isn't prompted again for the same tool name
+	// in the same session.
+	const sessionAllowed = new Set<string>();
+
 	return {
 		async check(ctx) {
 			const { toolCall, args } = ctx;
@@ -134,13 +174,62 @@ export function createPermissionChecker(
 			}
 
 			// === Tool-level permission overrides ===
-			if (options?.requireConfirmation?.has(toolCall.name)) {
-				return { action: "block", reason: `Tool "${toolCall.name}" requires explicit confirmation` };
+			// Tools listed in requireConfirmation behave as if they're write
+			// tools regardless of WRITE_TOOLS membership: they get blocked
+			// in deny mode, ask in ask mode.
+			const isWrite =
+				WRITE_TOOLS.has(toolCall.name) ||
+				options?.requireConfirmation?.has(toolCall.name) === true;
+
+			// === Deny / read-only mode: block all writes ===
+			if ((mode === "deny" || mode === "read-only") && isWrite) {
+				return { action: "block", reason: "Write operations blocked in deny mode" };
 			}
 
-			// === Read-only mode: block all write operations ===
-			if (mode === "read-only" && WRITE_TOOLS.has(toolCall.name)) {
-				return { action: "block", reason: "Write operations blocked in read-only mode" };
+			// === Ask mode: prompt for write tools, default-deny on missing callback ===
+			if (mode === "ask" && isWrite) {
+				if (sessionAllowed.has(toolCall.name)) {
+					return { action: "allow" };
+				}
+				if (!options?.onAsk) {
+					return {
+						action: "block",
+						reason: `Ask mode requires an onAsk callback; defaulting to deny for "${toolCall.name}"`,
+					};
+				}
+				const askCtx: PermissionAskContext = {
+					toolName: toolCall.name,
+					args,
+					command:
+						typeof typedArgs?.command === "string"
+							? (typedArgs.command as string)
+							: undefined,
+					filePath:
+						typeof typedArgs?.path === "string"
+							? (typedArgs.path as string)
+							: undefined,
+				};
+				const decision = await options.onAsk(askCtx);
+				if (decision === "allow_once") return { action: "allow" };
+				if (decision === "allow_session") {
+					sessionAllowed.add(toolCall.name);
+					return { action: "allow" };
+				}
+				return {
+					action: "block",
+					reason: `User denied execution of "${toolCall.name}"`,
+				};
+			}
+
+			// === Auto mode: requireConfirmation tools still need explicit allow ===
+			// Pre-existing behavior: in auto mode, a tool listed in
+			// requireConfirmation is blocked outright (because there's no
+			// callback to ask). Preserved for back-compat.
+			if (mode === "auto" && options?.requireConfirmation?.has(toolCall.name)) {
+				return {
+					action: "block",
+					reason: `Tool "${toolCall.name}" requires explicit confirmation`,
+				};
 			}
 
 			return { action: "allow" };

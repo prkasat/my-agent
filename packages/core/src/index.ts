@@ -14,7 +14,12 @@ export type { DiscoveryResult } from "./agent/resource-discovery.js";
 
 // Permissions
 export { createPermissionChecker } from "./agent/permissions.js";
-export type { PermissionMode, PermissionCheckerOptions } from "./agent/permissions.js";
+export type {
+	PermissionMode,
+	PermissionCheckerOptions,
+	AskDecision,
+	PermissionAskContext,
+} from "./agent/permissions.js";
 
 // Cost tracking
 export { CostTracker } from "./agent/cost-tracker.js";
