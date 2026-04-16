@@ -171,3 +171,54 @@ describe("createPermissionChecker — ask mode", () => {
 		expect(seen[1].command).toBeUndefined();
 	});
 });
+
+describe("createPermissionChecker — Tier-2 pass-2 regression: fail-closed for unknown tools", () => {
+	it("(deny) blocks an unknown custom tool even though it's not in the built-in WRITE_TOOLS set", async () => {
+		// Pre-fix: a host registers a custom tool `deploy`, sets mode to
+		// deny expecting writes blocked, and the model invokes it
+		// successfully because `deploy` ∉ {write, edit, bash, notebook_edit}.
+		// That's a real permission-boundary bypass.
+		const checker = createPermissionChecker("deny");
+		const result = await checker.check(makeCtx("deploy", { env: "prod" }));
+		expect(result.action).toBe("block");
+	});
+
+	it("(ask) prompts for an unknown custom tool instead of silently allowing", async () => {
+		const onAsk = vi
+			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+			.mockResolvedValue("deny");
+		const checker = createPermissionChecker("ask", { onAsk });
+		const result = await checker.check(makeCtx("github_create_pr", { title: "x" }));
+		expect(result.action).toBe("block"); // user denied via prompt
+		expect(onAsk).toHaveBeenCalledOnce();
+		expect(onAsk.mock.calls[0][0].toolName).toBe("github_create_pr");
+	});
+
+	it("(ask) default-denies an unknown tool when no onAsk callback is supplied", async () => {
+		const checker = createPermissionChecker("ask");
+		const result = await checker.check(makeCtx("run_sql", { query: "DROP TABLE x" }));
+		expect(result.action).toBe("block");
+		if (result.action === "block") {
+			expect(result.reason).toMatch(/onAsk callback/);
+		}
+	});
+
+	it("(deny) knownReadOnly extends the safe set for caller-registered read tools", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["docs_lookup", "fetch_url"]),
+		});
+		const r1 = await checker.check(makeCtx("docs_lookup", { topic: "react" }));
+		const r2 = await checker.check(makeCtx("fetch_url", { url: "https://example.com" }));
+		expect(r1.action).toBe("allow");
+		expect(r2.action).toBe("allow");
+	});
+
+	it("(auto) preserves back-compat — unknown tools still allowed in auto mode", async () => {
+		// Auto mode is the existing permissive default; we only fail-closed
+		// in ask/deny because that's where users explicitly request gating.
+		// Tightening auto would be a behavior break for existing hosts.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("custom_tool", { x: 1 }));
+		expect(result.action).toBe("allow");
+	});
+});

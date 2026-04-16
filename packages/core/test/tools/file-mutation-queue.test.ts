@@ -713,8 +713,8 @@ describe("file-mutation-queue cross-process lock", () => {
 
 			const sidecarPath = path.join(lockDir, `heartbeat.${initial.token}`);
 			await new Promise((r) => setTimeout(r, 5));
-			const ok = refreshLockHeartbeat(infoPath, initial.token);
-			expect(ok).toBe(true);
+			const outcome = refreshLockHeartbeat(infoPath, initial.token);
+			expect(outcome).toBe("ok");
 			expect(existsSync(sidecarPath)).toBe(true);
 
 			// info MUST NOT have been touched — that immutability is what
@@ -791,8 +791,8 @@ describe("file-mutation-queue cross-process lock", () => {
 		// We hold a stale token from before being evicted. Refresh must
 		// see the token mismatch and skip the write entirely so we don't
 		// even leave a stray sidecar in the successor's lockDir.
-		const ok = refreshLockHeartbeat(infoPath, "evicted-original-token");
-		expect(ok).toBe(false);
+		const outcome = refreshLockHeartbeat(infoPath, "evicted-original-token");
+		expect(outcome).toBe("lost");
 
 		const after = JSON.parse(readFileSync(infoPath, "utf-8"));
 		expect(after.token).toBe("successor-token");
@@ -826,8 +826,8 @@ describe("file-mutation-queue cross-process lock", () => {
 		writeFileSync(path.join(lockDir, "heartbeat.T_C-successor"), "");
 
 		// A fires its heartbeat with its evicted token T_A.
-		const ok = refreshLockHeartbeat(infoPath, "T_A-evicted");
-		expect(ok).toBe(false);
+		const outcome = refreshLockHeartbeat(infoPath, "T_A-evicted");
+		expect(outcome).toBe("lost");
 
 		// info still reads as T_C — no clobber.
 		const after = JSON.parse(readFileSync(infoPath, "utf-8"));
@@ -838,5 +838,55 @@ describe("file-mutation-queue cross-process lock", () => {
 		expect(existsSync(path.join(lockDir, "heartbeat.T_A-evicted"))).toBe(false);
 
 		rmSync(lockDir, { recursive: true });
+	});
+
+	it("Tier-2 pass-2 regression: transient sidecar write failure does NOT report 'lost'", () => {
+		// Pre-fix bug: refresh returned a single boolean, so any
+		// writeFileSync error (ENOSPC/EIO/AV interference) signaled
+		// "stop the timer" identically to "lost ownership". The holder
+		// kept working, but its sidecar mtime aged past 30s, peers
+		// evicted, and two processes could mutate the protected file.
+		// Fix: 3-state RefreshOutcome — only definitive ownership loss
+		// returns "lost"; transient I/O returns "transient" so the timer
+		// keeps trying.
+		const file = path.join(root, "heartbeat-6");
+		writeFileSync(file, "x");
+		const lockDir = locateLockDir(file);
+		mkdirSync(lockDir);
+		const owner = {
+			v: 2,
+			pid: process.pid,
+			hostname: os.hostname(),
+			acquiredAt: Date.now(),
+			token: "owner-token",
+		};
+		const infoPath = path.join(lockDir, "info");
+		writeFileSync(infoPath, JSON.stringify(owner));
+
+		// Force the next sidecar write to fail by making the sidecar
+		// path point to an existing directory (writeFileSync to a
+		// directory throws EISDIR cross-platform). We can't directly
+		// mkdir the heartbeat path because it has dots in it, but we
+		// can mkdir the entire lockDir's heartbeat.<token> as a directory.
+		const sidecarPath = path.join(lockDir, "heartbeat.owner-token");
+		mkdirSync(sidecarPath); // now writeFileSync to this path will fail
+
+		const outcome = refreshLockHeartbeat(infoPath, "owner-token");
+		// Token matches and lockDir exists — only the sidecar write failed.
+		// MUST report transient, not lost.
+		expect(outcome).toBe("transient");
+
+		rmSync(lockDir, { recursive: true });
+	});
+
+	it("Tier-2 pass-2 regression: lockDir gone reports 'lost' (timer must stop)", () => {
+		// Sanity check the other direction: a definitively-evicted lock
+		// (lockDir rmSync'd) MUST report "lost" so the heartbeat timer
+		// shuts down and stops leaking writes against a peer's directory.
+		const lockDir = path.join(root, "vanished-lock-" + Math.random().toString(36).slice(2));
+		const infoPath = path.join(lockDir, "info");
+		// lockDir was never created — refresh sees no directory, returns lost.
+		const outcome = refreshLockHeartbeat(infoPath, "any-token");
+		expect(outcome).toBe("lost");
 	});
 });

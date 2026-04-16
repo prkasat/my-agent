@@ -439,6 +439,28 @@ function shouldEvictLock(info: LockInfo, now: number, lockDir: string): boolean 
 }
 
 /**
+ * Outcome of a heartbeat refresh attempt.
+ *
+ * - "ok":        sidecar touched, holder confirmed live
+ * - "lost":      we definitively no longer own this lock — the lockDir
+ *                is gone, info is missing, or info's token differs from
+ *                ours. Caller MUST stop the heartbeat timer; we've been
+ *                evicted (or replaced by a successor) and any further
+ *                writes would just leak stray sidecars in another
+ *                holder's lockDir.
+ * - "transient": refresh failed for a non-ownership reason (sidecar
+ *                writeFileSync threw — ENOSPC / EIO / antivirus
+ *                interference / tempdir glitch). Caller MUST keep the
+ *                timer alive and retry on the next tick. Stopping on a
+ *                single transient I/O error would silently age the
+ *                sidecar past 30s, peers would evict the still-running
+ *                holder, and two processes could mutate the protected
+ *                file concurrently — the exact safety failure the
+ *                heartbeat was meant to prevent.
+ */
+export type RefreshOutcome = "ok" | "lost" | "transient";
+
+/**
  * Refresh the heartbeat sidecar for an owned lock.
  *
  * Touches `lockDir/heartbeat.<token>` so peers reading the sidecar's
@@ -448,35 +470,45 @@ function shouldEvictLock(info: LockInfo, now: number, lockDir: string): boolean 
  * lockDir that the new owner ignores (token mismatch) and which gets
  * cleaned up when the successor releases (rmSync recursive).
  *
- * Returns true if the sidecar was touched, false if we discovered we
- * no longer own the lock (info missing or token mismatch — caller
- * should stop the heartbeat timer to avoid leaking stray sidecars in
- * peers' lockDirs).
+ * Returns a 3-state RefreshOutcome so the caller can distinguish
+ * "stop the timer" (lost) from "keep trying" (transient I/O blip).
  *
  * Exported for tests; production callers don't invoke this directly.
  */
-export function refreshLockHeartbeat(infoPath: string, ourToken: string): boolean {
-	let current: LockInfo | null;
-	try {
-		current = readLockInfo(infoPath);
-	} catch {
-		return false;
-	}
-	// Two failure modes both mean "stop heartbeating":
-	//  - info missing → lockDir was evicted (rmSync recursive removed it)
-	//  - token mismatch → lockDir was evicted AND a successor took over
-	if (!current || current.token !== ourToken) return false;
-
+export function refreshLockHeartbeat(infoPath: string, ourToken: string): RefreshOutcome {
 	const lockDir = path.dirname(infoPath);
+
+	// Differentiate "lockDir gone" (definitive eviction) from "info read
+	// failed transiently". stat the directory: if it's gone we're lost,
+	// otherwise we treat info-read failures as transient.
+	const lockDirExists = (() => {
+		try {
+			return fs.statSync(lockDir).isDirectory();
+		} catch {
+			return false;
+		}
+	})();
+	if (!lockDirExists) return "lost";
+
+	const current = readLockInfo(infoPath);
+	if (!current) {
+		// Dir exists but info is unreadable — treat as transient. A real
+		// peer-eviction would have removed the dir entirely (rmSync
+		// recursive), so a present dir + missing/unparseable info is
+		// most likely a partial fs state, not lost ownership.
+		return "transient";
+	}
+	if (current.token !== ourToken) return "lost";
+
 	const sidecar = heartbeatSidecarPath(lockDir, ourToken);
 	try {
 		// Empty content + truncate; the value carrier is the file's mtime.
 		// writeFileSync sets mtime to "now" as a side effect on every
 		// platform we target, so we don't need a follow-up utimesSync.
 		fs.writeFileSync(sidecar, "", { mode: 0o600 });
-		return true;
+		return "ok";
 	} catch {
-		return false;
+		return "transient";
 	}
 }
 
@@ -638,12 +670,16 @@ export async function acquireFileLock(
 			// still see proof-of-life every ~5s, so the eviction threshold
 			// can drop to 30s without false positives. unref() so the timer
 			// alone never keeps a process alive past its natural exit.
+			//
+			// Only stop on "lost" (definitive ownership loss). Transient
+			// fs errors keep the timer alive and retry on the next tick —
+			// otherwise a single ENOSPC/EIO during a long critical
+			// section would silently age the sidecar past 30s, peers
+			// would evict, and two processes could mutate the protected
+			// file under one logical lock.
 			const heartbeatTimer: NodeJS.Timeout = setInterval(() => {
-				const ok = refreshLockHeartbeat(infoPath, ourToken);
-				if (!ok) {
-					// We no longer own the lock (evicted, info corrupted,
-					// or fs error). Stop heartbeating so we don't keep
-					// firing forever.
+				const outcome = refreshLockHeartbeat(infoPath, ourToken);
+				if (outcome === "lost") {
 					clearInterval(heartbeatTimer);
 				}
 			}, HEARTBEAT_INTERVAL_MS);

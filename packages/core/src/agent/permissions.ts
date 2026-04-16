@@ -112,15 +112,42 @@ const PROTECTED_PATH_PATTERNS = [
 	/\.key\b/,
 ];
 
-const WRITE_TOOLS = new Set(["write", "edit", "bash", "notebook_edit"]);
+/**
+ * Built-in tools known to be side-effecting. Always treated as writes
+ * in ask/deny modes regardless of caller-supplied classification.
+ */
+const KNOWN_WRITE_TOOLS = new Set(["write", "edit", "bash", "notebook_edit"]);
+
+/**
+ * Built-in tools known to be side-effect-free. Bypass ask prompts and
+ * deny blocks. The set is small and explicit on purpose: anything not
+ * here defaults to write-like in ask/deny modes (fail-closed) so a
+ * custom MCP/plugin tool with side effects (e.g. `deploy`, `run_sql`,
+ * `github_create_pr`) cannot bypass the boundary by virtue of having a
+ * name not on the WRITE_TOOLS list.
+ *
+ * Callers can extend this via PermissionCheckerOptions.knownReadOnly
+ * for their own safe custom read tools.
+ */
+const KNOWN_READ_TOOLS = new Set(["read", "ls", "find", "grep"]);
 
 interface PermissionChecker {
 	check: (ctx: BeforeToolCallContext) => Promise<BeforeToolCallResult>;
 }
 
 export interface PermissionCheckerOptions {
-	/** Additional tool names that require confirmation (tool-level overrides) */
+	/**
+	 * Additional tool names that require confirmation (tool-level
+	 * overrides). In auto mode these are blocked outright; in ask mode
+	 * they go through the onAsk prompt; in deny mode they are blocked.
+	 */
 	requireConfirmation?: Set<string>;
+	/**
+	 * Additional tool names known to be side-effect-free. Extends
+	 * KNOWN_READ_TOOLS so callers can register custom tools (read_url,
+	 * docs_lookup, etc.) without forcing them through ask prompts.
+	 */
+	knownReadOnly?: Set<string>;
 	/**
 	 * User-confirmation callback for "ask" mode. Receives the tool's
 	 * name + arguments and returns a decision. Default-deny if absent
@@ -173,21 +200,36 @@ export function createPermissionChecker(
 				}
 			}
 
-			// === Tool-level permission overrides ===
-			// Tools listed in requireConfirmation behave as if they're write
-			// tools regardless of WRITE_TOOLS membership: they get blocked
-			// in deny mode, ask in ask mode.
-			const isWrite =
-				WRITE_TOOLS.has(toolCall.name) ||
+			// === Classify the tool ===
+			// Fail-closed model: a tool is "write-like" (and thus subject
+			// to ask/deny gating) UNLESS it's explicitly known to be
+			// read-only OR explicitly listed in requireConfirmation as
+			// caller-marked safe (no — requireConfirmation FORCES gating).
+			//
+			// Without this default, a host that registered a custom
+			// mutating tool (e.g. `deploy`, `run_sql`, `github_create_pr`)
+			// would have it silently bypass deny mode just because its
+			// name isn't in the built-in WRITE_TOOLS list.
+			const isKnownRead =
+				KNOWN_READ_TOOLS.has(toolCall.name) ||
+				options?.knownReadOnly?.has(toolCall.name) === true;
+			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
+			const isExplicitlyConfirmed =
 				options?.requireConfirmation?.has(toolCall.name) === true;
+			// Auto mode preserves its old generous behavior — only
+			// known-writes and requireConfirmation tools matter there;
+			// everything else allowed. Ask/deny use the fail-closed
+			// classification so unknown custom tools don't slip through.
+			const isWriteForAuto = isKnownWrite || isExplicitlyConfirmed;
+			const isWriteForAskDeny = !isKnownRead;
 
-			// === Deny / read-only mode: block all writes ===
-			if ((mode === "deny" || mode === "read-only") && isWrite) {
+			// === Deny / read-only mode: block all writes (fail-closed) ===
+			if ((mode === "deny" || mode === "read-only") && isWriteForAskDeny) {
 				return { action: "block", reason: "Write operations blocked in deny mode" };
 			}
 
-			// === Ask mode: prompt for write tools, default-deny on missing callback ===
-			if (mode === "ask" && isWrite) {
+			// === Ask mode: prompt for writes (and unknowns); default-deny without callback ===
+			if (mode === "ask" && isWriteForAskDeny) {
 				if (sessionAllowed.has(toolCall.name)) {
 					return { action: "allow" };
 				}
@@ -225,7 +267,7 @@ export function createPermissionChecker(
 			// Pre-existing behavior: in auto mode, a tool listed in
 			// requireConfirmation is blocked outright (because there's no
 			// callback to ask). Preserved for back-compat.
-			if (mode === "auto" && options?.requireConfirmation?.has(toolCall.name)) {
+			if (mode === "auto" && isWriteForAuto && isExplicitlyConfirmed) {
 				return {
 					action: "block",
 					reason: `Tool "${toolCall.name}" requires explicit confirmation`,
