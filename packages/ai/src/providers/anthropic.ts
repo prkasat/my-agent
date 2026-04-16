@@ -315,6 +315,14 @@ interface BlockState {
 	toolId?: string;
 	toolName?: string;
 	toolJson?: string;
+	/**
+	 * Tool-use `input` value from content_block_start. Some Anthropic-
+	 * compatible proxies populate input eagerly in the start event and
+	 * never send any `input_json_delta` chunks. We keep this as a
+	 * fallback for content_block_stop when toolJson stayed empty
+	 * (Codex Tier-3 pass-1 finding).
+	 */
+	seededInput?: unknown;
 }
 
 async function parseSSEStream(
@@ -332,10 +340,144 @@ async function parseSSEStream(
 	let buffer = "";
 	let usage: Usage = { inputTokens: 0, outputTokens: 0 };
 	let stopReason: "stop" | "length" | "toolUse" | "error" = "stop";
+	let errored = false;
 	const blocks = new Map<number, BlockState>();
 	const finalContent: AssistantMessage["content"] = [];
 
 	stream.push({ type: "start", message: { role: "assistant", content: [] } });
+
+	// Split buffer into complete events (separated by blank line),
+	// returning the leftover trailing buffer. Tolerates both LF
+	// (`\n\n`) and CRLF (`\r\n\r\n`) framing — the SSE spec allows
+	// either, and CRLF appears in real Anthropic-compatible proxies.
+	// Codex Tier-3 pass-1 finding.
+	const splitEvents = (buf: string, drain: boolean): { events: string[]; rest: string } => {
+		const normalized = buf.replace(/\r\n/g, "\n");
+		const parts = normalized.split("\n\n");
+		if (drain) return { events: parts, rest: "" };
+		const rest = parts.pop() || "";
+		return { events: parts, rest };
+	};
+
+	const processData = (data: Record<string, unknown>): void => {
+		const eventType = data.type as string | undefined;
+		if (eventType === "message_start") {
+			const msg = data.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+			if (msg?.usage) {
+				usage = {
+					inputTokens: msg.usage.input_tokens || 0,
+					outputTokens: msg.usage.output_tokens || 0,
+					cacheReadTokens: msg.usage.cache_read_input_tokens,
+					cacheWriteTokens: msg.usage.cache_creation_input_tokens,
+				};
+			}
+		} else if (eventType === "content_block_start") {
+			const idx = data.index as number;
+			const cb = data.content_block as { type: string; id?: string; name?: string; text?: string; thinking?: string; input?: unknown };
+			if (cb.type === "text") {
+				blocks.set(idx, { type: "text", text: cb.text || "" });
+			} else if (cb.type === "thinking") {
+				blocks.set(idx, { type: "thinking", text: cb.thinking || "" });
+			} else if (cb.type === "tool_use") {
+				blocks.set(idx, {
+					type: "tool_use",
+					text: "",
+					toolId: cb.id || "",
+					toolName: cb.name || "",
+					toolJson: "",
+					seededInput: cb.input,
+				});
+				stream.push({ type: "tool_call_start", id: cb.id || "", name: cb.name || "" });
+			}
+		} else if (eventType === "content_block_delta") {
+			const idx = data.index as number;
+			const delta = data.delta as {
+				type: string;
+				text?: string;
+				thinking?: string;
+				signature?: string;
+				partial_json?: string;
+			};
+			const block = blocks.get(idx);
+			if (!block) return;
+			if (delta.type === "text_delta" && delta.text) {
+				block.text += delta.text;
+				stream.push({ type: "text_delta", text: delta.text });
+			} else if (delta.type === "thinking_delta" && delta.thinking) {
+				block.text += delta.thinking;
+				stream.push({ type: "thinking_delta", text: delta.thinking });
+			} else if (delta.type === "signature_delta" && delta.signature) {
+				block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
+			} else if (delta.type === "input_json_delta" && delta.partial_json !== undefined) {
+				block.toolJson = (block.toolJson || "") + delta.partial_json;
+				stream.push({ type: "tool_call_delta", id: block.toolId || "", arguments: delta.partial_json });
+			}
+		} else if (eventType === "content_block_stop") {
+			const idx = data.index as number;
+			const block = blocks.get(idx);
+			if (!block) return;
+			if (block.type === "text") {
+				finalContent.push({ type: "text", text: block.text });
+			} else if (block.type === "thinking") {
+				finalContent.push({ type: "thinking", text: block.text });
+			} else if (block.type === "tool_use") {
+				// Prefer streamed partial_json, fall back to the seeded
+				// input from content_block_start when no deltas arrived
+				// (compatible-proxy quirk).
+				let args = block.toolJson || "";
+				if (!args && block.seededInput !== undefined) {
+					try {
+						args = JSON.stringify(block.seededInput);
+					} catch {
+						args = "";
+					}
+				}
+				finalContent.push({
+					type: "tool_call",
+					id: block.toolId || "",
+					name: block.toolName || "",
+					arguments: args,
+				});
+				stream.push({ type: "tool_call_end", id: block.toolId || "" });
+			}
+		} else if (eventType === "message_delta") {
+			const delta = data.delta as { stop_reason?: string };
+			if (delta?.stop_reason) {
+				stopReason = mapStopReason(delta.stop_reason);
+			}
+			const usageDelta = data.usage as
+				| { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+				| undefined;
+			if (usageDelta) {
+				usage = {
+					inputTokens: usageDelta.input_tokens ?? usage.inputTokens,
+					outputTokens: usageDelta.output_tokens ?? usage.outputTokens,
+					cacheReadTokens: usageDelta.cache_read_input_tokens ?? usage.cacheReadTokens,
+					cacheWriteTokens: usageDelta.cache_creation_input_tokens ?? usage.cacheWriteTokens,
+				};
+			}
+		} else if (eventType === "error") {
+			const err = data.error as { message?: string } | undefined;
+			stream.push({ type: "error", error: err?.message || "anthropic stream error" });
+			errored = true;
+		}
+	};
+
+	const handleEvent = (evt: string): void => {
+		for (const line of evt.split("\n")) {
+			if (!line.startsWith("data: ")) continue;
+			const raw = line.slice(6).trim();
+			if (!raw || raw === "[DONE]") continue;
+			let data: Record<string, unknown>;
+			try {
+				data = JSON.parse(raw);
+			} catch {
+				continue;
+			}
+			processData(data);
+			if (errored) return;
+		}
+	};
 
 	try {
 		while (true) {
@@ -346,144 +488,26 @@ async function parseSSEStream(
 			const { done, value } = await reader.read();
 			if (done) break;
 			buffer += decoder.decode(value, { stream: true });
-
-			// Anthropic SSE: events are separated by blank lines. Each
-			// event has `event: <name>` and `data: <json>` lines.
-			const events = buffer.split("\n\n");
-			buffer = events.pop() || "";
-
+			const { events, rest } = splitEvents(buffer, false);
+			buffer = rest;
 			for (const evt of events) {
-				let data: Record<string, unknown> | null = null;
-				for (const line of evt.split("\n")) {
-					if (line.startsWith("data: ")) {
-						const raw = line.slice(6).trim();
-						if (raw && raw !== "[DONE]") {
-							try {
-								data = JSON.parse(raw);
-							} catch {
-								data = null;
-							}
-						}
-					}
-				}
-				if (!data) continue;
-
-				const eventType = data.type as string | undefined;
-
-				if (eventType === "message_start") {
-					const msg = data.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
-					if (msg?.usage) {
-						usage = {
-							inputTokens: msg.usage.input_tokens || 0,
-							outputTokens: msg.usage.output_tokens || 0,
-							cacheReadTokens: msg.usage.cache_read_input_tokens,
-							cacheWriteTokens: msg.usage.cache_creation_input_tokens,
-						};
-					}
-				} else if (eventType === "content_block_start") {
-					const idx = data.index as number;
-					const cb = data.content_block as { type: string; id?: string; name?: string; text?: string; thinking?: string };
-					if (cb.type === "text") {
-						blocks.set(idx, { type: "text", text: cb.text || "" });
-					} else if (cb.type === "thinking") {
-						blocks.set(idx, { type: "thinking", text: cb.thinking || "" });
-					} else if (cb.type === "tool_use") {
-						blocks.set(idx, {
-							type: "tool_use",
-							text: "",
-							toolId: cb.id || "",
-							toolName: cb.name || "",
-							toolJson: "",
-						});
-						stream.push({
-							type: "tool_call_start",
-							id: cb.id || "",
-							name: cb.name || "",
-						});
-					}
-				} else if (eventType === "content_block_delta") {
-					const idx = data.index as number;
-					const delta = data.delta as {
-						type: string;
-						text?: string;
-						thinking?: string;
-						signature?: string;
-						partial_json?: string;
-					};
-					const block = blocks.get(idx);
-					if (!block) continue;
-					if (delta.type === "text_delta" && delta.text) {
-						block.text += delta.text;
-						stream.push({ type: "text_delta", text: delta.text });
-					} else if (delta.type === "thinking_delta" && delta.thinking) {
-						block.text += delta.thinking;
-						stream.push({ type: "thinking_delta", text: delta.thinking });
-					} else if (delta.type === "signature_delta" && delta.signature) {
-						block.thinkingSignature = (block.thinkingSignature || "") + delta.signature;
-					} else if (delta.type === "input_json_delta" && delta.partial_json !== undefined) {
-						block.toolJson = (block.toolJson || "") + delta.partial_json;
-						stream.push({
-							type: "tool_call_delta",
-							id: block.toolId || "",
-							arguments: delta.partial_json,
-						});
-					}
-				} else if (eventType === "content_block_stop") {
-					const idx = data.index as number;
-					const block = blocks.get(idx);
-					if (!block) continue;
-					if (block.type === "text") {
-						finalContent.push({ type: "text", text: block.text });
-					} else if (block.type === "thinking") {
-						finalContent.push({ type: "thinking", text: block.text });
-					} else if (block.type === "tool_use") {
-						finalContent.push({
-							type: "tool_call",
-							id: block.toolId || "",
-							name: block.toolName || "",
-							arguments: block.toolJson || "",
-						});
-						stream.push({ type: "tool_call_end", id: block.toolId || "" });
-					}
-				} else if (eventType === "message_delta") {
-					const delta = data.delta as { stop_reason?: string };
-					if (delta?.stop_reason) {
-						stopReason = mapStopReason(delta.stop_reason);
-					}
-					const usageDelta = data.usage as
-						| { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
-						| undefined;
-					if (usageDelta) {
-						// message_delta carries the FINAL output_tokens (and sometimes
-						// updated cache figures). Input tokens come from message_start.
-						usage = {
-							inputTokens: usageDelta.input_tokens ?? usage.inputTokens,
-							outputTokens: usageDelta.output_tokens ?? usage.outputTokens,
-							cacheReadTokens: usageDelta.cache_read_input_tokens ?? usage.cacheReadTokens,
-							cacheWriteTokens: usageDelta.cache_creation_input_tokens ?? usage.cacheWriteTokens,
-						};
-					}
-				} else if (eventType === "message_stop") {
-					// Terminal event — break out via the loop condition.
-				} else if (eventType === "error") {
-					const err = data.error as { message?: string } | undefined;
-					stream.push({ type: "error", error: err?.message || "anthropic stream error" });
-					return;
-				}
+				handleEvent(evt);
+				if (errored) return;
 			}
 		}
 
-		stream.push({ type: "usage", usage });
-
-		const finalMessage: AssistantMessage = {
-			role: "assistant",
-			content: finalContent,
-			model: modelId,
-			provider: "anthropic",
-			usage,
-			stopReason,
-		};
-		stream.push({ type: "done", message: finalMessage });
+		// Drain any final buffered event the server didn't terminate
+		// with a trailing blank line. Without this, the last
+		// message_delta / message_stop could be silently dropped if it
+		// arrived in the same chunk as EOF (Codex Tier-3 pass-1).
+		if (buffer.length > 0) {
+			const { events } = splitEvents(buffer, true);
+			for (const evt of events) {
+				handleEvent(evt);
+				if (errored) return;
+			}
+			buffer = "";
+		}
 	} catch (err) {
 		if (signal?.aborted) {
 			stream.end();
@@ -493,5 +517,19 @@ async function parseSSEStream(
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
+		return;
 	}
+
+	stream.push({ type: "usage", usage });
+	stream.push({
+		type: "done",
+		message: {
+			role: "assistant",
+			content: finalContent,
+			model: modelId,
+			provider: "anthropic",
+			usage,
+			stopReason,
+		},
+	});
 }

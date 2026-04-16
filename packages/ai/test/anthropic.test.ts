@@ -444,6 +444,112 @@ describe("anthropic provider", () => {
 		expect(assistantMsg.content[0].input).toEqual({});
 	});
 
+	it("Tier-3 pass-1 regression: tool_use input from content_block_start when no input_json_delta arrives", async () => {
+		// Some Anthropic-compatible proxies populate input eagerly in
+		// the start event and never send partial_json deltas. The
+		// parser must not silently drop the args.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{
+				event: "content_block_start",
+				data: {
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "tool_use", id: "toolu_x", name: "read", input: { path: "/tmp/seeded" } },
+				},
+			},
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.content).toEqual([
+			{ type: "tool_call", id: "toolu_x", name: "read", arguments: '{"path":"/tmp/seeded"}' },
+		]);
+	});
+
+	it("Tier-3 pass-1 regression: streaming partial_json overrides seededInput when both present", async () => {
+		// Defensive: if a server sends BOTH a seeded input AND
+		// partial_json deltas, we should use the streamed deltas (which
+		// is what the spec actually does).
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{
+				event: "content_block_start",
+				data: {
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "tool_use", id: "toolu_y", name: "read", input: { path: "/tmp/SEEDED" } },
+				},
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/streamed"}' } },
+			},
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.content).toEqual([
+			{ type: "tool_call", id: "toolu_y", name: "read", arguments: '{"path":"/tmp/streamed"}' },
+		]);
+	});
+
+	it("Tier-3 pass-1 regression: parses CRLF-framed SSE the same as LF-framed", async () => {
+		// Build the same event stream but with CRLF line endings (the
+		// SSE spec allows either; some intermediaries normalize to CRLF).
+		const events = [
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello CRLF" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		];
+		const crlfBody = events
+			.map((e) => `event: ${e.event}\r\ndata: ${JSON.stringify(e.data)}\r\n`)
+			.join("\r\n") + "\r\n";
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(crlfBody));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.content).toEqual([{ type: "text", text: "Hello CRLF" }]);
+		expect(msg.stopReason).toBe("stop");
+		expect(msg.usage?.outputTokens).toBe(3);
+	});
+
+	it("Tier-3 pass-1 regression: drains the final buffered event when EOF arrives without a trailing blank line", async () => {
+		// Build a body that DOES NOT end with the canonical \n\n
+		// terminator on the final event. The parser must drain the
+		// trailing buffer or it would silently drop message_stop /
+		// message_delta and emit empty content.
+		const events = [
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "tail-buffered" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		];
+		// Use single \n separators (instead of \n\n) so the LAST event
+		// gets stuck in the trailing buffer when EOF hits.
+		const drainBody = events
+			.map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}`)
+			.join("\n\n");
+		// Note: NO trailing "\n\n" — final event has no blank line
+		// after it, so it must come from the EOF drain path.
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(drainBody));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.content).toEqual([{ type: "text", text: "tail-buffered" }]);
+		expect(msg.stopReason).toBe("stop");
+		expect(msg.usage?.outputTokens).toBe(2);
+	});
+
 	it("captures cache_read_input_tokens and cache_creation_input_tokens in usage", async () => {
 		const body = sse([
 			{
