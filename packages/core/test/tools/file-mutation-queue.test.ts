@@ -14,6 +14,7 @@ import * as path from "node:path";
 import {
 	acquireFileLock,
 	lockDirFor,
+	refreshLockHeartbeat,
 	verifyLockRoot,
 	withCrossProcessLock,
 	withFileMutationLock,
@@ -694,5 +695,106 @@ describe("file-mutation-queue cross-process lock", () => {
 		// flake on slow CI but tight enough to catch real starvation.
 		expect(externalElapsed).toBeLessThan(1_000);
 		expect(localResults).toEqual([1, 2, 3]);
+	});
+
+	it("Tier-2 D3: writes heartbeatAt on initial acquire and refresh advances it", async () => {
+		const file = path.join(root, "heartbeat-1");
+		writeFileSync(file, "hi");
+		const release = await acquireFileLock(file, { timeout: 200 });
+		try {
+			const infoPath = path.join(locateLockDir(file), "info");
+			const initial = JSON.parse(readFileSync(infoPath, "utf-8"));
+			expect(typeof initial.heartbeatAt).toBe("number");
+			expect(initial.heartbeatAt).toBe(initial.acquiredAt);
+
+			// Wait long enough that a refresh produces a strictly later ms
+			// timestamp on every reasonable clock resolution.
+			await new Promise((r) => setTimeout(r, 5));
+			const ok = refreshLockHeartbeat(infoPath, initial.token);
+			expect(ok).toBe(true);
+
+			const refreshed = JSON.parse(readFileSync(infoPath, "utf-8"));
+			expect(refreshed.heartbeatAt).toBeGreaterThan(initial.heartbeatAt);
+			expect(refreshed.token).toBe(initial.token);
+			expect(refreshed.acquiredAt).toBe(initial.acquiredAt);
+		} finally {
+			release();
+		}
+	});
+
+	it("Tier-2 D3: heartbeat-aware lock with stale heartbeat (>30s) is evicted even though PID is alive", async () => {
+		const file = path.join(root, "heartbeat-2");
+		writeFileSync(file, "hi");
+		const lockDir = locateLockDir(file);
+
+		mkdirSync(lockDir);
+		// Plant a heartbeat-aware lock: PID is alive (us!) and acquiredAt
+		// is recent — but heartbeatAt is 60s stale, well past the 30s
+		// alive-with-heartbeat eviction bound. Pre-D3 this would have
+		// waited the full 5-minute legacy threshold.
+		const planted = {
+			v: 2,
+			pid: process.pid,
+			hostname: os.hostname(),
+			acquiredAt: Date.now() - 60_000,
+			heartbeatAt: Date.now() - 60_000,
+			token: "stale-heartbeat-holder",
+		};
+		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
+
+		// Should evict immediately because the heartbeat went silent.
+		const release = await acquireFileLock(file, { timeout: 1_000 });
+		release();
+	});
+
+	it("Tier-2 D3: heartbeat-aware lock with FRESH heartbeat is NOT evicted even after old 30s threshold", async () => {
+		const file = path.join(root, "heartbeat-3");
+		writeFileSync(file, "hi");
+		const lockDir = locateLockDir(file);
+
+		mkdirSync(lockDir);
+		// Acquired long ago but heartbeated recently — must NOT be evicted
+		// because the holder is proving liveness.
+		const planted = {
+			v: 2,
+			pid: process.pid,
+			hostname: os.hostname(),
+			acquiredAt: Date.now() - 10 * 60_000, // 10 minutes ago
+			heartbeatAt: Date.now() - 1_000, // 1 second ago
+			token: "live-heartbeat-holder",
+		};
+		writeFileSync(path.join(lockDir, "info"), JSON.stringify(planted));
+
+		await expect(acquireFileLock(file, { timeout: 200 })).rejects.toThrow("Timeout");
+		rmSync(lockDir, { recursive: true });
+	});
+
+	it("Tier-2 D3: refreshLockHeartbeat refuses to clobber a successor's lock (token mismatch)", () => {
+		const file = path.join(root, "heartbeat-4");
+		writeFileSync(file, "x");
+		const lockDir = locateLockDir(file);
+		mkdirSync(lockDir);
+		const successorInfo = {
+			v: 2,
+			pid: process.pid,
+			hostname: os.hostname(),
+			acquiredAt: Date.now(),
+			heartbeatAt: Date.now(),
+			token: "successor-token",
+		};
+		const infoPath = path.join(lockDir, "info");
+		writeFileSync(infoPath, JSON.stringify(successorInfo));
+
+		// We hold a stale token from before being evicted. Refresh must
+		// see the token mismatch and refuse to write — otherwise we'd
+		// silently rewrite the successor's heartbeatAt under their feet.
+		const ok = refreshLockHeartbeat(infoPath, "evicted-original-token");
+		expect(ok).toBe(false);
+
+		const after = JSON.parse(readFileSync(infoPath, "utf-8"));
+		expect(after.token).toBe("successor-token");
+		expect(after.heartbeatAt).toBe(successorInfo.heartbeatAt);
+
+		rmSync(lockDir, { recursive: true });
 	});
 });

@@ -49,19 +49,42 @@ const queues = new Map<string, Promise<void>>();
  *
  * Used when we cannot verify the owner is alive — different host, missing
  * info file, or legacy info format. Set high enough to cover legitimate
- * long-running operations (e.g., compaction LLM calls); a real fix for
- * stuck processes is D3 (heartbeat-based liveness) in a later tier.
+ * long-running operations (e.g., compaction LLM calls). Heartbeats only
+ * help when we can read the holder's info — for cross-host or legacy
+ * locks we still rely on this conservative wall-clock bound.
  */
 const STALE_LOCK_MS_UNKNOWN = 5 * 60_000;
 
 /**
- * Stale lock timeout for verified-alive owners on this host (also 5 min).
+ * Stale lock timeout for verified-alive owners on this host (30 s).
  *
- * Even when the PID is alive, we evict after this much wall-clock time as
- * a safety upper bound — assumes the holder is stuck. With heartbeats
- * (D3) we can drop this much lower without false positives.
+ * Heartbeat keeps `heartbeatAt` within ~HEARTBEAT_INTERVAL_MS of `now`
+ * for any holder that is actually doing work. Six missed heartbeats
+ * (≈30s of unresponsiveness) is enough headroom for transient hangs
+ * — GC pauses, slow disk, brief network blips — without making peers
+ * wait minutes for a frozen holder.
+ *
+ * Legacy locks without a heartbeatAt field fall through to
+ * STALE_LOCK_MS_ALIVE_LEGACY below so older holders (e.g., a peer
+ * running pre-heartbeat code) don't get aggressively evicted.
  */
-const STALE_LOCK_MS_ALIVE = 5 * 60_000;
+const STALE_LOCK_MS_ALIVE = 30_000;
+
+/**
+ * Stale-lock threshold for legacy heartbeat-less locks held by an alive
+ * peer. Same as the pre-heartbeat default — gives peers running older
+ * code paths the benefit of the doubt for their full original budget.
+ */
+const STALE_LOCK_MS_ALIVE_LEGACY = 5 * 60_000;
+
+/**
+ * Heartbeat refresh cadence (5s).
+ *
+ * Sized so STALE_LOCK_MS_ALIVE / HEARTBEAT_INTERVAL_MS = 6 missed
+ * heartbeats before eviction. Smaller intervals churn the info file
+ * needlessly; larger intervals push the eviction threshold up.
+ */
+const HEARTBEAT_INTERVAL_MS = 5_000;
 
 /**
  * Maximum time to wait for a lock (5 seconds).
@@ -220,15 +243,28 @@ interface LockInfo {
 	 * Empty string for legacy v1 locks (before the token was added).
 	 */
 	token: string;
+	/**
+	 * Timestamp of the most recent heartbeat refresh. Updated by the
+	 * holder every HEARTBEAT_INTERVAL_MS so peers can prove the holder
+	 * is alive without paying the full STALE_LOCK_MS_UNKNOWN budget.
+	 *
+	 * Optional for back-compat: legacy locks (v ≤ 2 before D3 / Tier 2
+	 * landed) lack the field; eviction logic falls back to acquiredAt
+	 * with the original 5-minute threshold so we don't aggressively
+	 * evict peers running older code.
+	 */
+	heartbeatAt?: number;
 }
 
 function writeLockInfo(infoPath: string, token: string): void {
+	const now = Date.now();
 	const info: LockInfo = {
 		v: LOCK_INFO_VERSION,
 		pid: process.pid,
 		hostname: os.hostname(),
-		acquiredAt: Date.now(),
+		acquiredAt: now,
 		token,
+		heartbeatAt: now,
 	};
 	// Open with O_CREAT|O_EXCL|O_WRONLY (+ O_NOFOLLOW on POSIX) so:
 	//  - O_EXCL: fails if `info` already exists (a peer pre-created
@@ -292,6 +328,8 @@ function readLockInfo(infoPath: string): LockInfo | null {
 				hostname: parsed.hostname,
 				acquiredAt: parsed.acquiredAt,
 				token: typeof parsed.token === "string" ? parsed.token : "",
+				heartbeatAt:
+					typeof parsed.heartbeatAt === "number" ? parsed.heartbeatAt : undefined,
 			};
 		}
 	} catch {
@@ -335,15 +373,18 @@ function isProcessAlive(pid: number): boolean {
  *   verify liveness — fall back to a long age-based threshold.
  * - If the owner PID is dead on this host, evict immediately. The
  *   previous holder crashed without releasing.
- * - If the owner PID is alive on this host, only evict after the
- *   safety upper bound — the process may legitimately be doing long work.
+ * - If the owner PID is alive on this host:
+ *     * heartbeat-aware lock — use heartbeatAt as the freshness signal,
+ *       evict after STALE_LOCK_MS_ALIVE (~6 missed heartbeats).
+ *     * legacy lock without heartbeatAt — use the older 5-minute
+ *       threshold against acquiredAt so we don't aggressively evict
+ *       peers running pre-heartbeat code paths.
  */
 function shouldEvictLock(info: LockInfo, now: number): boolean {
-	const age = now - info.acquiredAt;
 	const sameHost = info.hostname && info.hostname === os.hostname();
 
 	if (!sameHost) {
-		return age > STALE_LOCK_MS_UNKNOWN;
+		return now - info.acquiredAt > STALE_LOCK_MS_UNKNOWN;
 	}
 
 	if (!isProcessAlive(info.pid)) {
@@ -351,8 +392,54 @@ function shouldEvictLock(info: LockInfo, now: number): boolean {
 		return true;
 	}
 
-	// Holder still alive — only evict if we've crossed the safety bound
-	return age > STALE_LOCK_MS_ALIVE;
+	// Holder still alive — choose freshness signal based on whether they
+	// heartbeat. A heartbeat from within HEARTBEAT_INTERVAL_MS proves
+	// active progress; we evict only when 6+ heartbeats are missing.
+	if (typeof info.heartbeatAt === "number") {
+		return now - info.heartbeatAt > STALE_LOCK_MS_ALIVE;
+	}
+	return now - info.acquiredAt > STALE_LOCK_MS_ALIVE_LEGACY;
+}
+
+/**
+ * Refresh the heartbeat timestamp on an owned lock.
+ *
+ * Verifies the on-disk lock still belongs to us (token match) before
+ * rewriting — without that, a heartbeat firing after the holder was
+ * evicted would clobber the successor's info file. Returns true if the
+ * heartbeat was written, false if we discovered we no longer own the
+ * lock (caller should stop the heartbeat timer).
+ *
+ * Atomic-rename via tmp file so a peer reading mid-write never sees a
+ * partial JSON document. Best-effort: any fs error swallows silently
+ * and returns false; the next eviction round will catch a truly stuck
+ * holder via the alive/dead path in shouldEvictLock.
+ *
+ * Exported for tests; production callers don't invoke this directly.
+ */
+export function refreshLockHeartbeat(infoPath: string, ourToken: string): boolean {
+	let current: LockInfo | null;
+	try {
+		current = readLockInfo(infoPath);
+	} catch {
+		return false;
+	}
+	if (!current || current.token !== ourToken) return false;
+	const updated: LockInfo = { ...current, heartbeatAt: Date.now() };
+	const tmp = `${infoPath}.tmp.${process.pid}`;
+	try {
+		fs.writeFileSync(tmp, JSON.stringify(updated), { mode: 0o600 });
+		fs.renameSync(tmp, infoPath);
+		return true;
+	} catch {
+		// Cleanup the tmp if rename failed; ignore errors during cleanup.
+		try {
+			fs.unlinkSync(tmp);
+		} catch {
+			/* tmp may not exist */
+		}
+		return false;
+	}
 }
 
 /**
@@ -508,7 +595,24 @@ export async function acquireFileLock(
 				throw new Error("Aborted");
 			}
 
+			// Start heartbeat. Lets us hold the lock for arbitrarily long
+			// operations (compaction LLM call, large bash) while peers
+			// still see proof-of-life every ~5s, so the eviction threshold
+			// can drop to 30s without false positives. unref() so the timer
+			// alone never keeps a process alive past its natural exit.
+			const heartbeatTimer: NodeJS.Timeout = setInterval(() => {
+				const ok = refreshLockHeartbeat(infoPath, ourToken);
+				if (!ok) {
+					// We no longer own the lock (evicted, info corrupted,
+					// or fs error). Stop heartbeating so we don't keep
+					// firing forever.
+					clearInterval(heartbeatTimer);
+				}
+			}, HEARTBEAT_INTERVAL_MS);
+			heartbeatTimer.unref?.();
+
 			return () => {
+				clearInterval(heartbeatTimer);
 				try {
 					// Read current on-disk owner. If the token differs (or
 					// info is unreadable but the directory still exists), our
