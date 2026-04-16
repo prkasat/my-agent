@@ -1,5 +1,6 @@
 import { registerProvider } from "./registry.js";
 import { createOpenAICompatibleStream } from "./openai-compatible.js";
+import { createAnthropicStream } from "./anthropic.js";
 
 /**
  * Register built-in providers.
@@ -17,6 +18,7 @@ export function registerBuiltinProviders(): void {
 				providerName: "openrouter",
 			}),
 	);
+	registerProvider("anthropic", async () => createAnthropicStream());
 }
 
 // Auto-register on import

@@ -32,5 +32,11 @@ export { models, getModel, getModelsByProvider, calculateCost } from "./models.j
 export { createMockStream } from "./providers/mock.js";
 export type { MockProviderConfig } from "./providers/mock.js";
 
+// Anthropic provider factory (for custom registration / configuration)
+export { createAnthropicStream } from "./providers/anthropic.js";
+
+// OpenAI-compatible provider factory (for custom registration)
+export { createOpenAICompatibleStream } from "./providers/openai-compatible.js";
+
 // Register built-in providers on import
 import "./providers/index.js";
