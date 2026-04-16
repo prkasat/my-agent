@@ -203,6 +203,7 @@ async function parseSSEStream(
 	const decoder = new TextDecoder();
 	let buffer = "";
 	let textContent = "";
+	let thinkingContent = "";
 	const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 	let usage: Usage = { inputTokens: 0, outputTokens: 0 };
 	// Start as empty so the usage gate below can distinguish "stream
@@ -276,6 +277,22 @@ async function parseSSEStream(
 				const delta = choices?.[0]?.delta;
 				if (!delta) continue;
 
+				// Reasoning content (provider-specific field name normalization).
+				// DeepSeek R1 and several OpenRouter routes emit `reasoning_content`;
+				// other shims (Together, Groq with reasoning models, some
+				// OpenRouter routes) emit `reasoning`. Both shapes mean the same
+				// thing — the model's chain-of-thought before it commits to its
+				// final answer — so we collapse them to a single `thinking` block
+				// in the AssistantMessage so downstream code (compaction, branch
+				// summary, persistence) doesn't need provider-specific knowledge.
+				const reasoningDelta =
+					(delta.reasoning_content as string | undefined) ??
+					(delta.reasoning as string | undefined);
+				if (reasoningDelta) {
+					thinkingContent += reasoningDelta;
+					stream.push({ type: "thinking_delta", text: reasoningDelta });
+				}
+
 				// Text content
 				if (delta.content) {
 					textContent += delta.content;
@@ -313,8 +330,11 @@ async function parseSSEStream(
 			}
 		}
 
-		// Build final message
+		// Build final message — order matches Anthropic's convention so
+		// downstream code that walks content blocks behaves uniformly across
+		// providers: thinking first, then text, then tool_calls.
 		const content: AssistantMessage["content"] = [];
+		if (thinkingContent) content.push({ type: "thinking", text: thinkingContent });
 		if (textContent) content.push({ type: "text", text: textContent });
 		for (const tc of toolCalls.values()) {
 			// Pass arguments as-is. If the LLM returned malformed JSON, the tool execution
