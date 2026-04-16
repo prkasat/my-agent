@@ -688,6 +688,18 @@ export class SessionManager {
     return this.persist;
   }
 
+  /**
+   * Convenience: list every session for THIS manager's cwd.
+   *
+   * Equivalent to `SessionManager.listSessions(this.getCwd(), this.sessionDir)`,
+   * exposed as an instance method so callers (notably the CLI's `/sessions`
+   * slash command) don't have to know how to derive the per-cwd session
+   * directory themselves.
+   */
+  listSessionsForCwd(): Promise<SessionInfo[]> {
+    return SessionManager.listSessions(this.cwd, this.sessionDir);
+  }
+
   getLeafId(): string | null {
     return this.leafId;
   }
