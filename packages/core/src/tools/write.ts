@@ -2,8 +2,8 @@ import { mkdir as fsMkdir, writeFile as fsWriteFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool } from "../agent/types.js";
-import { withFileLock } from "./file-mutation-queue.js";
-import { resolveToCwd } from "./path-utils.js";
+import { withFileMutationLock } from "./file-mutation-queue.js";
+import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
 
@@ -42,17 +42,23 @@ export function createWriteToolDefinition(
 		promptGuidelines: ["Use write only for new files or complete rewrites."],
 		parameters: writeSchema,
 		async execute(_toolCallId, { path, content }, signal) {
-			const absolutePath = resolveToCwd(path, cwd);
-			return withFileLock(absolutePath, async () => {
-				if (signal?.aborted) throw new Error("Operation aborted");
-				await ops.mkdir(dirname(absolutePath));
-				if (signal?.aborted) throw new Error("Operation aborted");
-				await ops.writeFile(absolutePath, content);
-				return {
-					content: [{ type: "text" as const, text: `Successfully wrote ${content.length} bytes to ${path}` }],
-					details: undefined,
-				};
-			});
+			const absolutePath = resolveAndValidatePath(path, cwd);
+			return withFileMutationLock(
+				absolutePath,
+				async () => {
+					if (signal?.aborted) throw new Error("Operation aborted");
+					await ops.mkdir(dirname(absolutePath));
+					if (signal?.aborted) throw new Error("Operation aborted");
+					await ops.writeFile(absolutePath, content);
+					return {
+						content: [
+							{ type: "text" as const, text: `Successfully wrote ${content.length} bytes to ${path}` },
+						],
+						details: undefined,
+					};
+				},
+				{ signal },
+			);
 		},
 	};
 }

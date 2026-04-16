@@ -2,7 +2,7 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool } from "../agent/types.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
 import { DEFAULT_MAX_BYTES, type TruncationResult, formatSize, truncateHead } from "./truncate.js";
@@ -54,7 +54,7 @@ export function createLsToolDefinition(
 				throw new Error("limit must be a positive integer");
 			}
 
-			const dirPath = resolveToCwd(path || ".", cwd);
+			const dirPath = resolveAndValidatePath(path || ".", cwd);
 			const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
 			if (!(await ops.exists(dirPath))) throw new Error(`Path not found: ${dirPath}`);

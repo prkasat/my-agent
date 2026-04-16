@@ -4,7 +4,7 @@ import path from "node:path";
 import { createInterface } from "node:readline";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool } from "../agent/types.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveAndValidatePath } from "./path-utils.js";
 import { sanitizeOutput } from "./sanitize-output.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
@@ -105,7 +105,7 @@ export function createGrepToolDefinition(
 						}
 						const rgPath = rgResult.path;
 
-						const searchPath = resolveToCwd(searchDir || ".", cwd);
+						const searchPath = resolveAndValidatePath(searchDir || ".", cwd);
 						const ops = customOps ?? defaultGrepOperations;
 						let isDirectory: boolean;
 						try {

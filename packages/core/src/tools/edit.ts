@@ -11,8 +11,8 @@ import {
 	restoreLineEndings,
 	stripBom,
 } from "./edit-diff.js";
-import { withFileLock } from "./file-mutation-queue.js";
-import { resolveToCwd } from "./path-utils.js";
+import { withFileMutationLock } from "./file-mutation-queue.js";
+import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
 
@@ -109,40 +109,44 @@ export function createEditToolDefinition(
 		prepareArguments: prepareEditArguments,
 		async execute(_toolCallId, input, signal) {
 			const { path, edits } = validateEditInput(input);
-			const absolutePath = resolveToCwd(path, cwd);
+			const absolutePath = resolveAndValidatePath(path, cwd);
 
-			return withFileLock(absolutePath, async () => {
-				if (signal?.aborted) throw new Error("Operation aborted");
+			return withFileMutationLock(
+				absolutePath,
+				async () => {
+					if (signal?.aborted) throw new Error("Operation aborted");
 
-				try {
-					await ops.access(absolutePath);
-				} catch {
-					throw new Error(`File not found: ${path}`);
-				}
+					try {
+						await ops.access(absolutePath);
+					} catch {
+						throw new Error(`File not found: ${path}`);
+					}
 
-				if (signal?.aborted) throw new Error("Operation aborted");
+					if (signal?.aborted) throw new Error("Operation aborted");
 
-				const buffer = await ops.readFile(absolutePath);
-				const rawContent = buffer.toString("utf-8");
+					const buffer = await ops.readFile(absolutePath);
+					const rawContent = buffer.toString("utf-8");
 
-				if (signal?.aborted) throw new Error("Operation aborted");
+					if (signal?.aborted) throw new Error("Operation aborted");
 
-				const { bom, text: content } = stripBom(rawContent);
-				const originalEnding = detectLineEnding(content);
-				const normalizedContent = normalizeToLF(content);
-				const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
+					const { bom, text: content } = stripBom(rawContent);
+					const originalEnding = detectLineEnding(content);
+					const normalizedContent = normalizeToLF(content);
+					const { baseContent, newContent } = applyEditsToNormalizedContent(normalizedContent, edits, path);
 
-				if (signal?.aborted) throw new Error("Operation aborted");
+					if (signal?.aborted) throw new Error("Operation aborted");
 
-				const finalContent = bom + restoreLineEndings(newContent, originalEnding);
-				await ops.writeFile(absolutePath, finalContent);
+					const finalContent = bom + restoreLineEndings(newContent, originalEnding);
+					await ops.writeFile(absolutePath, finalContent);
 
-				const diffResult = generateDiffString(baseContent, newContent);
-				return {
-					content: [{ type: "text" as const, text: `Successfully replaced ${edits.length} block(s) in ${path}.` }],
-					details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
-				};
-			});
+					const diffResult = generateDiffString(baseContent, newContent);
+					return {
+						content: [{ type: "text" as const, text: `Successfully replaced ${edits.length} block(s) in ${path}.` }],
+						details: { diff: diffResult.diff, firstChangedLine: diffResult.firstChangedLine },
+					};
+				},
+				{ signal },
+			);
 		},
 	};
 }

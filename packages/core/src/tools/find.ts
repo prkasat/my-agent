@@ -4,7 +4,7 @@ import { glob as nodeGlob } from "node:fs/promises";
 import nodePath from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool } from "../agent/types.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
 import { DEFAULT_MAX_BYTES, type TruncationResult, formatSize, truncateHead } from "./truncate.js";
@@ -74,7 +74,7 @@ export function createFindToolDefinition(
 				throw new Error("limit must be a positive integer");
 			}
 
-			const searchPath = resolveToCwd(searchDir || ".", cwd);
+			const searchPath = resolveAndValidatePath(searchDir || ".", cwd);
 			const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
 			// Use custom operations if provided
