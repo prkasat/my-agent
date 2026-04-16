@@ -674,14 +674,14 @@ export class SessionManager {
     }
   }
 
-  private persistEntry(entry: SessionEntry): void {
+  private persistEntry(entry: SessionEntry, force = false): void {
     if (!this.persist || !this.sessionFile) return;
 
     const hasAssistant = this.fileEntries.some(
       (e) => e.type === "message" && (e as MessageEntry).message.role === "assistant"
     );
 
-    if (!hasAssistant) {
+    if (!hasAssistant && !force) {
       // Don't write yet - wait for assistant message
       this.flushed = false;
       return;
@@ -737,7 +737,7 @@ export class SessionManager {
    * the lock we still revert in-memory state so this process stays
    * consistent with whatever partial disk state remains.
    */
-  private appendEntry(entry: SessionEntry): void {
+  private appendEntry(entry: SessionEntry, force = false): void {
     const fileEntriesLen = this.fileEntries.length;
     const prevLeafId = this.leafId;
     const prevLeafSelected = this.leafSelectedByUser;
@@ -752,7 +752,7 @@ export class SessionManager {
     // the new on-disk state is rather than try to restore this id.
     this.leafSelectedByUser = false;
     try {
-      this.persistEntry(entry);
+      this.persistEntry(entry, force);
     } catch (err) {
       this.fileEntries.length = fileEntriesLen;
       this.byId.delete(entry.id);
@@ -941,6 +941,14 @@ export class SessionManager {
    * unique to the plugin (reverse-DNS, package name, or short slug).
    * Core never reads the payload — it only round-trips it through
    * reads, writes, and migrations.
+   *
+   * Persistence: written through immediately, bypassing the deferred-
+   * flush window that exists for message entries. Plugins commonly call
+   * this during startup, auth bootstrap, or other pre-assistant flows;
+   * deferring those writes would silently drop the state if the process
+   * exits before the first assistant turn. This is the durability
+   * contract for the plugin-persistence surface — it is part of the
+   * extension API, not an implementation detail.
    */
   appendExtension(
     namespace: string,
@@ -959,7 +967,7 @@ export class SessionManager {
       payload,
       ...(subtype !== undefined ? { subtype } : {}),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, /* force */ true);
     return entry.id;
   }
 

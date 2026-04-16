@@ -872,6 +872,37 @@ describe("SessionManager", () => {
       const manager = SessionManager.inMemory("/test/cwd");
       expect(() => manager.appendExtension("", { x: 1 })).toThrow(/namespace/);
     });
+
+    it("Tier-2 pass-6 regression: extension entries persist before the first assistant turn", () => {
+      // Pre-pass-6 bug: appendExtension routed through persistEntry's
+      // deferred-flush gate. A plugin that wrote state during startup,
+      // auth bootstrap, or any pre-assistant flow would see the entry
+      // only in memory, and a process exit before the first assistant
+      // turn would silently drop it on the floor. Plugins MUST be able
+      // to rely on durability the moment appendExtension returns.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      // No assistant turn yet — only a user message and an extension.
+      manager.appendMessage({ role: "user", content: "u", timestamp: Date.now() });
+      const extId = manager.appendExtension("plugin.startup", {
+        bootstrapped: true,
+      });
+
+      // Reopen as if the process exited right after appendExtension.
+      const reopened = SessionManager.open(sessionFile);
+      const ext = reopened.getExtensionEntries("plugin.startup");
+      expect(ext.length).toBe(1);
+      expect(ext[0].id).toBe(extId);
+      expect(ext[0].payload).toEqual({ bootstrapped: true });
+
+      // The user message that preceded it must also survive (the force-
+      // flush writes everything queued, not just the extension entry).
+      const userMsgs = reopened
+        .getEntries()
+        .filter((e) => e.type === "message");
+      expect(userMsgs.length).toBe(1);
+    });
   });
 });
 
