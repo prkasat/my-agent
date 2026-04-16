@@ -54,11 +54,22 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
 
     if (line.startsWith("/")) {
       const result = await handleSlashCommand(line, deps.getSession());
+      if (result?.action === "switch-session") {
+        // Try the switch BEFORE printing the success line, otherwise
+        // a corrupted/unreadable target session would print "branched
+        // session -> X" and then crash the REPL on a SessionManager
+        // exception. Keep the old session active and surface the
+        // failure as a recoverable command error instead.
+        try {
+          await deps.switchSession(result.sessionPath);
+          if (result.output) writeLine(result.output);
+        } catch (err) {
+          writeLine(`branch failed: ${(err as Error).message}`);
+        }
+        continue;
+      }
       if (result?.output) writeLine(result.output);
       if (result?.action === "quit") break;
-      if (result?.action === "switch-session") {
-        await deps.switchSession(result.sessionPath);
-      }
       continue;
     }
 

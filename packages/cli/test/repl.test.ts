@@ -127,6 +127,32 @@ describe("runRepl", () => {
     expect(read()).toMatch(/after \(0 msgs\) <- current/);
   });
 
+  it("Codex-pass6-fix: switchSession failure does not crash the REPL", async () => {
+    // The REPL used to print "branched session -> X" and then await
+    // switchSession unguarded — a corrupted/unreadable target file
+    // would crash the whole REPL with a fatal error. The fix wraps
+    // switchSession in try/catch and prints a recoverable error
+    // instead of the success line.
+    const { input, output, read } = captureStreams(["/branch", "/quit"]);
+    const session = makeSession({
+      forkSession: () => "/sessions/forked.jsonl",
+    });
+    await runRepl({
+      getSession: () => session,
+      switchSession: async () => {
+        throw new Error("session file corrupted");
+      },
+      runPrompt: async () => {},
+      input,
+      output,
+    });
+    // No "branched session ->" success line because the switch failed.
+    expect(read()).not.toMatch(/branched session ->/);
+    expect(read()).toMatch(/branch failed: session file corrupted/);
+    // Loop continues to the /quit.
+    expect(read()).toMatch(/bye\./);
+  });
+
   it("surfaces exceptions from runPrompt without exiting", async () => {
     const { input, output, read } = captureStreams(["boom", "/quit"]);
     let session = makeSession();

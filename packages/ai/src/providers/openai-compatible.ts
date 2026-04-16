@@ -123,6 +123,12 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 					messages: convertMessages(context),
 					max_tokens: options.maxTokens || model.maxOutputTokens || 4096,
 					stream: true,
+					// Required for the API to emit the terminal usage chunk
+					// the parser reads to fill `usage`. Without this flag
+					// downstream measureContextTokens has no provider-side
+					// signal and falls back to the chars/4 estimate, which
+					// silently disables Tier-1 usage-aware compaction.
+					stream_options: { include_usage: true },
 				};
 
 				const tools = convertTools(context);

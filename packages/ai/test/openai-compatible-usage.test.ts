@@ -116,6 +116,41 @@ describe("openai-compatible usage accounting", () => {
     expect(message.usage?.outputTokens).toBe(50);
   });
 
+  it("Codex-pass6-fix: outbound request includes stream_options.include_usage", async () => {
+    // Without `include_usage: true`, OpenAI streaming APIs never emit
+    // the terminal usage chunk and the parser's careful capture logic
+    // is moot in production. This test inspects the outgoing request
+    // body to make sure we ask for usage every time.
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      const data = ssePayload([
+        { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+      ]);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(data);
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const stream = createOpenAICompatibleStream({
+      providerName: "test",
+      baseUrl: "http://example.test",
+      envKey: "TEST_KEY",
+    })(fakeModel, { messages: [] }, {});
+    await stream.result();
+
+    expect(capturedBody).toBeDefined();
+    expect(capturedBody.stream).toBe(true);
+    expect(capturedBody.stream_options).toBeDefined();
+    expect(capturedBody.stream_options.include_usage).toBe(true);
+  });
+
   it("Codex-pass4-fix: accepts intermediate usage once finish_reason has been seen", async () => {
     // If a shim emits usage on the same chunk as finish_reason (no
     // separate terminal chunk), that usage is still final.
