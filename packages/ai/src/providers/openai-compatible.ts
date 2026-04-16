@@ -186,7 +186,12 @@ async function parseSSEStream(
 	let textContent = "";
 	const toolCalls = new Map<number, { id: string; name: string; arguments: string }>();
 	let usage: Usage = { inputTokens: 0, outputTokens: 0 };
-	let finishReason = "stop";
+	// Start as empty so the usage gate below can distinguish "stream
+	// hasn't reported finish yet" from "stream said stop". mapFinishReason
+	// defaults to "stop" for unknown values, so leaving this empty until
+	// a chunk actually carries a finish_reason is safe for the persisted
+	// stopReason but lets us tell apart provisional and final usage.
+	let finishReason = "";
 
 	stream.push({ type: "start", message: { role: "assistant", content: [] } });
 
@@ -219,6 +224,36 @@ async function parseSSEStream(
 				}
 
 				const choices = chunk.choices as { delta?: Record<string, unknown>; finish_reason?: string }[];
+
+				// Capture finish_reason and usage BEFORE the delta-skip
+				// below: OpenAI's terminal usage chunk has empty `choices`
+				// (so no delta), but it carries the final usage totals
+				// we need. Skipping it here would silently drop them.
+				if (choices?.[0]?.finish_reason) {
+					finishReason = choices[0].finish_reason as string;
+				}
+				const earlyChunkUsage = chunk.usage as
+					| { prompt_tokens?: number; completion_tokens?: number }
+					| undefined;
+				if (earlyChunkUsage) {
+					// Trust this usage when EITHER:
+					//  - choices is empty (the spec's terminal usage chunk
+					//    has `choices: []`), OR
+					//  - finish_reason has been observed (this chunk or a
+					//    prior one — the stream is wrapping up).
+					// Otherwise the chunk is provisional and we ignore it
+					// to avoid pinning the persisted message to an early
+					// underestimate.
+					const hasNoChoices = !choices || choices.length === 0;
+					const isFinalUsage = hasNoChoices || finishReason !== "";
+					if (isFinalUsage) {
+						usage = {
+							inputTokens: earlyChunkUsage.prompt_tokens || 0,
+							outputTokens: earlyChunkUsage.completion_tokens || 0,
+						};
+					}
+				}
+
 				const delta = choices?.[0]?.delta;
 				if (!delta) continue;
 
@@ -254,35 +289,8 @@ async function parseSSEStream(
 					}
 				}
 
-				if (choices?.[0]?.finish_reason) {
-					finishReason = choices[0].finish_reason as string;
-				}
-
-				const chunkUsage = chunk.usage as
-					| { prompt_tokens?: number; completion_tokens?: number }
-					| undefined;
-				if (chunkUsage) {
-					// Only trust usage from chunks that carry final-token
-					// counts. With `include_usage: true`, OpenAI sends a
-					// dedicated trailing chunk where `choices` is empty
-					// and `usage` carries the totals. Some providers also
-					// emit PROVISIONAL usage on intermediate chunks; pinning
-					// the persisted message to a provisional `prompt_tokens`
-					// underestimate misleads downstream compaction. Accept
-					// the usage when EITHER:
-					//  - the chunk has no/empty `choices` (OpenAI's
-					//    terminal usage chunk), OR
-					//  - we've already seen `finish_reason` on a prior or
-					//    this chunk (the stream is wrapping up).
-					const hasNoChoices = !choices || choices.length === 0;
-					const isFinalUsage = hasNoChoices || finishReason !== "";
-					if (isFinalUsage) {
-						usage = {
-							inputTokens: chunkUsage.prompt_tokens || 0,
-							outputTokens: chunkUsage.completion_tokens || 0,
-						};
-					}
-				}
+				// finish_reason / usage handled above the delta-skip — see
+				// the early capture block at the top of the per-chunk loop.
 			}
 		}
 

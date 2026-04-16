@@ -20,6 +20,7 @@ import {
   readFileSync,
   readdirSync,
   statSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -373,6 +374,16 @@ export class SessionManager {
   private cwd: string;
   private persist: boolean;
   private flushed: boolean = false;
+  /**
+   * Tracks whether the cross-process lock is currently held via withLock.
+   *
+   * navigateBranch's rollback truncate is only safe under exclusive
+   * access — without the lock, a peer process appending to the file
+   * between our snapshot and our truncate would have its bytes erased.
+   * We use this flag to enable the durable rollback path only when the
+   * caller has wrapped navigateBranch in withLock.
+   */
+  private lockHeld: boolean = false;
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private leafId: string | null = null;
@@ -1140,26 +1151,22 @@ export class SessionManager {
           this.fileEntries.length = fileEntriesLen;
         }
         this.flushed = flushedSnapshot;
-        // We deliberately do NOT truncate the on-disk file back to
-        // sessionFileSnapshot. Pass-2 added a `truncateSync(snapshot)`
-        // here, but pass-3 flagged it as a worse-than-the-disease bug:
-        // without holding the cross-process lock for the full mutation,
-        // a concurrent writer's appended bytes after the snapshot would
-        // be erased by the truncate. Erasing peer data is strictly
-        // worse than a phantom entry on reload.
-        //
-        // Trade-off accepted: if appendBranchSummary's persistEntry
-        // wrote bytes before throwing, those bytes survive on disk and
-        // a reload will re-introduce the entry. Recovery options:
-        //   - prefer wrapping navigateBranch in
-        //     `await session.withLock(...)` so the snapshot is exclusive
-        //     and a future revision can safely reintroduce truncation.
-        //   - on reload, the entry's parentId still chains to a real
-        //     ancestor so it's at worst an orphan branch_summary, not
-        //     a corrupted tree.
-        // Reference: sessionFileSnapshot is captured but unused; kept
-        // for the upcoming lock-aware revision.
-        void sessionFileSnapshot;
+        // Disk-side rollback is conditional on holding the cross-process
+        // lock. WITHOUT the lock, truncate-to-snapshot could erase a
+        // peer process's bytes appended between the snapshot and the
+        // failure. WITH the lock, no peer can have written, so truncate
+        // is safe and prevents a thrown navigation from becoming durable
+        // session state on reopen (loadSessionFile + buildIndex resume
+        // from the last entry on disk, so a phantom branch_summary
+        // would silently teleport the user to the target branch on next
+        // launch).
+        if (this.lockHeld && sessionFileSnapshot >= 0 && this.persist && this.sessionFile) {
+          try {
+            truncateSync(this.sessionFile, sessionFileSnapshot);
+          } catch (truncErr) {
+            (err as Error).message += ` (and disk rollback failed: ${(truncErr as Error).message})`;
+          }
+        }
         throw err;
       }
     }
@@ -1333,7 +1340,12 @@ export class SessionManager {
   async withLock<T>(fn: () => Promise<T>): Promise<T> {
     if (!this.sessionFile) {
       // In-memory session - no locking needed
-      return fn();
+      this.lockHeld = true;
+      try {
+        return await fn();
+      } finally {
+        this.lockHeld = false;
+      }
     }
     const sessionFile = this.sessionFile;
     return withCrossProcessLock(sessionFile, async () => {
@@ -1356,7 +1368,12 @@ export class SessionManager {
         this.buildIndex();
         this.flushed = true;
       }
-      return fn();
+      this.lockHeld = true;
+      try {
+        return await fn();
+      } finally {
+        this.lockHeld = false;
+      }
     });
   }
 

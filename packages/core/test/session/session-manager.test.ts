@@ -339,6 +339,66 @@ describe("SessionManager", () => {
       expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
     });
 
+    it("Codex-pass4-fix: navigateBranch under withLock truncates disk so reopen sees the original leaf", async () => {
+      // Pass-3 punted on disk rollback because cross-process truncate
+      // could erase peer writes. Pass-4 surfaced that the punt let a
+      // thrown navigation become durable session state — reopen would
+      // resume on the target branch, silently. Pass-4 fix: re-enable
+      // truncate when withLock is held (no peer can be writing).
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      manager.branch(manager.getEntries()[1].id);
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+      const sessionFile = manager.getSessionFile()!;
+
+      // withLock reloads from disk and rebuilds leafId from the LAST
+      // entry, so we must do the navigate-from-c setup INSIDE the lock
+      // (not before it). The patch on persistEntry survives the reload
+      // since it's an instance-method override.
+      const originalPersist = (manager as any).persistEntry.bind(manager);
+      let persistCallsAfterSetup = 0;
+      let leafBefore: string | null = null;
+
+      await expect(
+        manager.withLock(async () => {
+          manager.branch(c); // simulate user backing up to the C branch tip
+          leafBefore = manager.getLeafId();
+          // Patch persistEntry NOW so the navigate-time append throws.
+          (manager as any).persistEntry = (entry: any) => {
+            persistCallsAfterSetup++;
+            if (persistCallsAfterSetup === 1) {
+              originalPersist(entry);
+              throw new Error("simulated post-write failure");
+            }
+            return originalPersist(entry);
+          };
+          manager.navigateBranch(d, "fail me");
+        }),
+      ).rejects.toThrow(/simulated/);
+
+      (manager as any).persistEntry = originalPersist;
+      expect(leafBefore).toBe(c);
+
+      // Reopen the file: WITHOUT the under-lock truncate, the phantom
+      // branch_summary on disk would survive — buildIndex would expose
+      // it as a real entry and a future user navigating to it would
+      // see context from a navigation that THREW. With pass-4's fix
+      // the disk is back to its pre-navigation byte count and no
+      // branch_summary entry exists on reopen.
+      const reopened = SessionManager.open(sessionFile);
+      expect(reopened.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
+      // And the reopened file's entry list matches what existed
+      // pre-navigation (4 message entries: A, B, C, D — no extra).
+      expect(reopened.getEntries()).toHaveLength(4);
+    });
+
     it("Codex-pass3-fix: navigateBranch leaves disk untouched on persist failure (in-memory rollback only)", () => {
       // Pass-2 added a truncateSync rollback to erase phantom on-disk
       // entries from a failed persist. Pass-3 found that the truncate
