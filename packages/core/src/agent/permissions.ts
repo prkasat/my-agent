@@ -119,17 +119,21 @@ const PROTECTED_PATH_PATTERNS = [
 const KNOWN_WRITE_TOOLS = new Set(["write", "edit", "bash", "notebook_edit"]);
 
 /**
- * Built-in tools known to be side-effect-free. Bypass ask prompts and
- * deny blocks. The set is small and explicit on purpose: anything not
- * here defaults to write-like in ask/deny modes (fail-closed) so a
- * custom MCP/plugin tool with side effects (e.g. `deploy`, `run_sql`,
- * `github_create_pr`) cannot bypass the boundary by virtue of having a
- * name not on the WRITE_TOOLS list.
+ * Names of the bundled side-effect-free tools. Exported as a constant
+ * so a host that wants safe defaults can opt in explicitly:
  *
- * Callers can extend this via PermissionCheckerOptions.knownReadOnly
- * for their own safe custom read tools.
+ *   createPermissionChecker("deny", {
+ *     knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+ *   })
+ *
+ * The checker does NOT consult this list automatically. A previous
+ * implementation auto-whitelisted these names, but Codex pass-5
+ * showed that a host running in deny mode could be subverted by a
+ * plugin/MCP tool registered with a colliding name (e.g. a custom
+ * mutating tool named `read`). Identity-by-name is unreliable when
+ * the tool registry is open, so safety classification is opt-in.
  */
-const KNOWN_READ_TOOLS = new Set(["read", "ls", "find", "grep"]);
+export const BUILTIN_READ_TOOL_NAMES = ["read", "ls", "find", "grep"] as const;
 
 interface PermissionChecker {
 	check: (ctx: BeforeToolCallContext) => Promise<BeforeToolCallResult>;
@@ -202,36 +206,34 @@ export function createPermissionChecker(
 
 			// === Classify the tool ===
 			// Fail-closed model: a tool is "write-like" (and thus subject
-			// to ask/deny gating) UNLESS it's explicitly known to be
-			// read-only. Without this default, a host that registered a
-			// custom mutating tool (e.g. `deploy`, `run_sql`,
-			// `github_create_pr`) would have it silently bypass deny mode
-			// just because its name isn't in the built-in WRITE_TOOLS list.
+			// to ask/deny gating) UNLESS the host explicitly marks it
+			// safe via knownReadOnly. There is no name-based built-in
+			// allowlist — a host's tool registry is open (MCP, plugins,
+			// re-exported core tools), and trusting "read"/"ls"/"find"/"grep"
+			// by name lets a custom mutating tool registered with a
+			// colliding name bypass deny mode entirely (Codex pass-5).
+			//
+			// Hosts that want the bundled safe defaults pass:
+			//   knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES)
+			// — opt-in is explicit and visible in code review.
 			//
 			// requireConfirmation is a HARD OVERRIDE: any tool listed
-			// there is gated regardless of read/write classification, so
-			// a host that wants to require approval for `read` (or any
-			// other built-in safe tool) gets exactly that. Without this
-			// override, requireConfirmation would silently fail open for
-			// known-read tools.
+			// there is gated regardless of read/write classification.
 			//
 			// KNOWN_WRITE_TOOLS is non-overridable: a host passing
 			// `knownReadOnly: new Set(['bash'])` MUST NOT bypass the
-			// gating for built-in writes. Without this lockdown a
-			// caller could disable deny/ask checks for the most
-			// dangerous tools by mislabeling them.
+			// gating for built-in writes.
 			//
 			// Final precedence (highest first):
 			//   requireConfirmation → KNOWN_WRITE_TOOLS → knownReadOnly
-			//                       → KNOWN_READ_TOOLS  → unknown (write-like)
+			//                       → unknown (write-like)
 			const isExplicitlyConfirmed =
 				options?.requireConfirmation?.has(toolCall.name) === true;
 			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
 			const isKnownRead =
 				!isExplicitlyConfirmed &&
 				!isKnownWrite &&
-				(KNOWN_READ_TOOLS.has(toolCall.name) ||
-					options?.knownReadOnly?.has(toolCall.name) === true);
+				options?.knownReadOnly?.has(toolCall.name) === true;
 			// Auto mode preserves its old generous behavior — only
 			// known-writes and requireConfirmation tools matter there;
 			// everything else allowed. Ask/deny use the fail-closed

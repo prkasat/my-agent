@@ -13,7 +13,7 @@ export { discoverProjectContext } from "./agent/resource-discovery.js";
 export type { DiscoveryResult } from "./agent/resource-discovery.js";
 
 // Permissions
-export { createPermissionChecker } from "./agent/permissions.js";
+export { createPermissionChecker, BUILTIN_READ_TOOL_NAMES } from "./agent/permissions.js";
 export type {
 	PermissionMode,
 	PermissionCheckerOptions,

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+	BUILTIN_READ_TOOL_NAMES,
 	createPermissionChecker,
 	type AskDecision,
 	type PermissionAskContext,
@@ -69,8 +70,10 @@ describe("createPermissionChecker — deny mode", () => {
 		}
 	});
 
-	it("allows read tools", async () => {
-		const checker = createPermissionChecker("deny");
+	it("allows read tools when host opts in via knownReadOnly", async () => {
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
 		const result = await checker.check(makeCtx("read", { path: "/tmp/safe.txt" }));
 		expect(result.action).toBe("allow");
 	});
@@ -133,9 +136,12 @@ describe("createPermissionChecker — ask mode", () => {
 		}
 	});
 
-	it("read tools never trigger onAsk", async () => {
+	it("read tools never trigger onAsk when host opts in via knownReadOnly", async () => {
 		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>();
-		const checker = createPermissionChecker("ask", { onAsk });
+		const checker = createPermissionChecker("ask", {
+			onAsk,
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
 		const r = await checker.check(makeCtx("read", { path: "/tmp/x" }));
 		expect(r.action).toBe("allow");
 		expect(onAsk).not.toHaveBeenCalled();
@@ -259,6 +265,44 @@ describe("createPermissionChecker — Tier-2 pass-3 regression: requireConfirmat
 		});
 		const result = await checker.check(makeCtx("docs_lookup", { topic: "x" }));
 		expect(result.action).toBe("block");
+	});
+});
+
+describe("createPermissionChecker — Tier-2 pass-5 regression: no implicit name-based read allowlist", () => {
+	for (const name of BUILTIN_READ_TOOL_NAMES) {
+		it(`(deny) blocks bare-name "${name}" when host did not opt in via knownReadOnly`, async () => {
+			// Pre-pass-5 bug: KNOWN_READ_TOOLS was an internal allowlist
+			// applied automatically by name. A host running deny mode that
+			// registered a *custom* mutating tool with a colliding name
+			// (e.g. an MCP plugin tool literally named "read" that writes
+			// remote state) would have it auto-classified as safe and
+			// silently allowed. Identity-by-name is unreliable when the
+			// tool registry is open — safety classification is now opt-in
+			// only via knownReadOnly.
+			const checker = createPermissionChecker("deny");
+			const result = await checker.check(makeCtx(name, { path: "/tmp/safe.txt" }));
+			expect(result.action).toBe("block");
+		});
+
+		it(`(ask) prompts for bare-name "${name}" when host did not opt in via knownReadOnly`, async () => {
+			const onAsk = vi
+				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
+				.mockResolvedValue("deny");
+			const checker = createPermissionChecker("ask", { onAsk });
+			const result = await checker.check(makeCtx(name, { path: "/tmp/safe.txt" }));
+			expect(result.action).toBe("block");
+			expect(onAsk).toHaveBeenCalledOnce();
+			expect(onAsk.mock.calls[0][0].toolName).toBe(name);
+		});
+	}
+
+	it("BUILTIN_READ_TOOL_NAMES contains the historical bundled-read names", async () => {
+		// Lock the constant so a future refactor renaming a built-in read
+		// tool can't silently shrink the published opt-in set without
+		// updating the export contract.
+		expect(new Set(BUILTIN_READ_TOOL_NAMES)).toEqual(
+			new Set(["read", "ls", "find", "grep"]),
+		);
 	});
 });
 

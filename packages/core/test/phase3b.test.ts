@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { buildSystemPrompt, SAFETY_RULES } from "../src/agent/system-prompt.js";
-import { createPermissionChecker } from "../src/agent/permissions.js";
+import {
+	BUILTIN_READ_TOOL_NAMES,
+	createPermissionChecker,
+} from "../src/agent/permissions.js";
 import { CostTracker } from "../src/agent/cost-tracker.js";
 import { defaultConvertToLlm } from "../src/agent/convert.js";
 import { customMessageToLlm } from "../src/agent/custom-messages.js";
@@ -168,8 +171,10 @@ describe("Permission System", () => {
 		expect(result.action).toBe("block");
 	});
 
-	it("should allow reads in read-only mode", async () => {
-		const checker = createPermissionChecker("read-only");
+	it("should allow reads in read-only mode when host opts in via knownReadOnly", async () => {
+		const checker = createPermissionChecker("read-only", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
 		const result = await checker.check(makeCtx("read", { path: "/test/file.ts" }));
 		expect(result.action).toBe("allow");
 	});
