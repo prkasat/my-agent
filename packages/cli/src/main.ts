@@ -31,8 +31,12 @@ async function main(): Promise<void> {
   if (argv.length > 0 && !argv[0].startsWith("-")) {
     // One-shot prompt mode — Tier 2 will plug a streaming agent loop here.
     // For now we just record the user message so the session file is real.
+    // SessionManager defers the first write until an assistant message
+    // arrives, so without an explicit flush() this stub-only entry would
+    // be lost on process exit. Force the flush so /sessions surfaces it.
     const prompt = argv.join(" ");
     session.appendMessage({ role: "user", content: prompt, timestamp: Date.now() });
+    session.flush();
     process.stdout.write(`(stub) recorded prompt: ${prompt}\n`);
     return;
   }
@@ -45,8 +49,11 @@ async function main(): Promise<void> {
     runPrompt: async (prompt) => {
       // Hook point for the agent loop. Until Tier 2 wires the streaming
       // agent in, just echo the prompt and persist it so /sessions has
-      // something to show.
+      // something to show. Same flush rationale as the one-shot path —
+      // without it, a REPL that exits before any assistant turn loses
+      // every prompt typed.
       session.appendMessage({ role: "user", content: prompt, timestamp: Date.now() });
+      session.flush();
       process.stdout.write(`(stub) you said: ${prompt}\n`);
     },
   });

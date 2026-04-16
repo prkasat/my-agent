@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { SessionManager, buildSessionContext } from "../../src/session/session-manager.js";
@@ -601,6 +601,73 @@ describe("SessionManager", () => {
       const content = readFileSync(sessionFile, "utf-8");
       const lines = content.trim().split("\n");
       expect(lines.length).toBe(3); // header + 2 messages
+    });
+
+    it("regression (pass-12): flush() forces deferred entries to disk for stub-only sessions", () => {
+      // Without flush(), a one-shot CLI invocation that only appends a
+      // user message before exiting silently loses the prompt because
+      // persistEntry waits for an assistant message. Callers that need
+      // durability without an assistant turn use flush() to force-write.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      manager.appendMessage({ role: "user", content: "lone prompt", timestamp: Date.now() });
+      expect(existsSync(sessionFile)).toBe(false);
+
+      manager.flush();
+      expect(existsSync(sessionFile)).toBe(true);
+
+      const reopened = SessionManager.open(sessionFile);
+      const entries = reopened.getEntries();
+      const user = entries.find(
+        (e): e is MessageEntry => e.type === "message" && e.message.role === "user",
+      );
+      expect(user).toBeDefined();
+      expect(typeof user!.message.content === "string" ? user!.message.content : "").toBe(
+        "lone prompt",
+      );
+    });
+
+    it("regression (pass-12): appendEntry rolls back in-memory state on persist failure", () => {
+      // appendEntry mutates fileEntries/byId/leafId BEFORE persistEntry
+      // attempts the disk write. Without rollback, an ENOSPC/EIO mid-append
+      // would leave this process believing the entry exists, then chain
+      // future appends off an ID that never hit disk — silent tree
+      // corruption that surfaces as missing prior history on reopen.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      // Get the session file written first (deferred-flush window passed)
+      manager.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+      const a1 = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a1" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      expect(existsSync(sessionFile)).toBe(true);
+
+      const goodLeaf = manager.getLeafId();
+      const goodEntryCount = manager.getEntries().length;
+
+      // Force the next persistEntry to fail by replacing the session
+      // file path with a directory of the same name. appendFileSync to
+      // a directory throws EISDIR cross-platform.
+      rmSync(sessionFile);
+      mkdirSync(sessionFile);
+
+      let thrown: unknown = null;
+      try {
+        manager.appendMessage({ role: "user", content: "doomed", timestamp: Date.now() });
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).not.toBeNull();
+
+      // In-memory state must be rolled back to pre-append values.
+      expect(manager.getLeafId()).toBe(goodLeaf);
+      expect(manager.getLeafId()).toBe(a1);
+      expect(manager.getEntries().length).toBe(goodEntryCount);
     });
 
     it("should load existing session", () => {

@@ -699,9 +699,50 @@ export class SessionManager {
   }
 
   /**
+   * Force any deferred entries to disk now.
+   *
+   * `persistEntry` defers the first write until an assistant message
+   * arrives, so a session that only has user-side entries (e.g., a
+   * one-shot prompt that exits before any assistant turn) never reaches
+   * disk and is lost on process exit. Callers that know they want
+   * durability without an assistant turn (CLI bootstrap, tests, host
+   * integrations) call this to flush immediately.
+   *
+   * No-op for in-memory or non-persistent sessions, and no-op when
+   * everything is already on disk.
+   */
+  flush(): void {
+    if (!this.persist || !this.sessionFile) return;
+    if (this.flushed) return;
+    if (this.fileEntries.length === 0) return;
+    for (const e of this.fileEntries) {
+      appendFileSync(this.sessionFile, JSON.stringify(e) + "\n");
+    }
+    this.flushed = true;
+  }
+
+  /**
    * Append an entry as child of current leaf.
+   *
+   * Transactional: any persist failure (ENOSPC/EIO/etc.) rolls the
+   * in-memory tree back to its pre-append state and rethrows. Without
+   * this, a process whose disk fills mid-write would keep building a
+   * tree in memory whose parent IDs never hit disk — and on reopen,
+   * `getBranch()` would stop at the missing parent and silently lose
+   * everything appended after the failure.
+   *
+   * On-disk rollback (truncateSync) is only safe when we hold the
+   * cross-process lock, otherwise we could erase a peer's bytes. Without
+   * the lock we still revert in-memory state so this process stays
+   * consistent with whatever partial disk state remains.
    */
   private appendEntry(entry: SessionEntry): void {
+    const fileEntriesLen = this.fileEntries.length;
+    const prevLeafId = this.leafId;
+    const prevLeafSelected = this.leafSelectedByUser;
+    const prevFlushed = this.flushed;
+    const sessionFileSnapshot = this.sessionFileBytes();
+
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
@@ -709,7 +750,30 @@ export class SessionManager {
     // user-selected branch tip. Future locked reloads should accept whatever
     // the new on-disk state is rather than try to restore this id.
     this.leafSelectedByUser = false;
-    this.persistEntry(entry);
+    try {
+      this.persistEntry(entry);
+    } catch (err) {
+      this.fileEntries.length = fileEntriesLen;
+      this.byId.delete(entry.id);
+      this.leafId = prevLeafId;
+      this.leafSelectedByUser = prevLeafSelected;
+      this.flushed = prevFlushed;
+      if (
+        this.lockHeld &&
+        sessionFileSnapshot >= 0 &&
+        this.persist &&
+        this.sessionFile
+      ) {
+        try {
+          truncateSync(this.sessionFile, sessionFileSnapshot);
+        } catch (truncErr) {
+          (err as Error).message += ` (and disk rollback failed: ${
+            (truncErr as Error).message
+          })`;
+        }
+      }
+      throw err;
+    }
   }
 
   // ==========================================================================
