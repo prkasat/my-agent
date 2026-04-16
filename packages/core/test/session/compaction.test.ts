@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { EventStream } from "@my-agent/ai";
+import type { AssistantMessage, AssistantMessageEvent } from "@my-agent/ai";
 import {
   estimateTokens,
   estimateContextTokens,
   findCutPoint,
   extractFileOperations,
+  generateCompactionSummary,
   shouldCompact,
 } from "../../src/session/compaction.js";
 import type { AgentMessage } from "../../src/agent/types.js";
@@ -252,6 +255,118 @@ describe("shouldCompact", () => {
 
   it("should return false for empty messages", () => {
     expect(shouldCompact([], 128000, 16000)).toBe(false);
+  });
+
+  it("Tier-1: tool results in summary input are truncated past TOOL_RESULT_MAX_CHARS", () => {
+    // Threat model: a single grep result returning megabytes of text
+    // would otherwise blow the summarization-LLM context budget. The
+    // formatMessagesForSummary path must keep tool results below
+    // TOOL_RESULT_MAX_CHARS and signal that truncation happened so the
+    // summarizer doesn't pretend it saw the full content.
+    //
+    // Verified end-to-end through the structured prompt that the
+    // summarization stream sees (captured here via a tracking streamFn).
+    const huge = "X".repeat(50_000);
+    const trackingStreamFn: any = (_m: any, ctx: any) => {
+      capturedPrompt = (ctx.messages[0] as any).content;
+      const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+        (e) => e.type === "done",
+        (e) => {
+          if (e.type === "done") return e.message;
+          throw new Error("unexpected");
+        },
+      );
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", message });
+        stream.push({ type: "done", message });
+      });
+      return stream;
+    };
+
+    let capturedPrompt = "";
+
+    return (async () => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "search please", timestamp: Date.now() },
+        {
+          role: "assistant",
+          content: [
+            { type: "tool_call", id: "tc1", name: "grep", arguments: '{"pattern":"x"}' },
+          ],
+          stopReason: "toolUse",
+          timestamp: Date.now(),
+        },
+        {
+          role: "toolResult",
+          toolCallId: "tc1",
+          toolName: "grep",
+          content: [{ type: "text", text: huge }],
+          timestamp: Date.now(),
+        },
+        { role: "user", content: "thanks", timestamp: Date.now() },
+      ];
+
+      const fakeModel = {
+        id: "test",
+        name: "Test",
+        provider: "test",
+        contextWindow: 1000,
+      } as any;
+      await generateCompactionSummary(messages, fakeModel, trackingStreamFn, {});
+
+      // The huge string MUST be truncated; the marker must be present.
+      expect(capturedPrompt).toContain("more characters truncated]");
+      // And the captured prompt must be much smaller than the raw input
+      expect(capturedPrompt.length).toBeLessThan(huge.length / 5);
+    })();
+  });
+
+  it("Tier-1: structured prompt uses a system message scoping the model to summarize-only", () => {
+    let capturedSystemPrompt: string | undefined;
+    const trackingStreamFn: any = (_m: any, ctx: any) => {
+      capturedSystemPrompt = ctx.systemPrompt;
+      const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+        (e) => e.type === "done",
+        (e) => {
+          if (e.type === "done") return e.message;
+          throw new Error("unexpected");
+        },
+      );
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", message });
+        stream.push({ type: "done", message });
+      });
+      return stream;
+    };
+
+    return (async () => {
+      const messages: AgentMessage[] = [
+        { role: "user", content: "Hi", timestamp: Date.now() },
+      ];
+      const fakeModel = {
+        id: "test",
+        name: "Test",
+        provider: "test",
+        contextWindow: 1000,
+      } as any;
+      await generateCompactionSummary(messages, fakeModel, trackingStreamFn, {});
+      expect(capturedSystemPrompt).toBeDefined();
+      expect(capturedSystemPrompt!.toLowerCase()).toContain("summariz");
+      // Critical: must instruct NOT to continue the conversation
+      expect(capturedSystemPrompt!.toLowerCase()).toContain("not continue");
+    })();
   });
 
   it("regression: clamps reserveTokens for small context windows", () => {

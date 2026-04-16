@@ -246,8 +246,11 @@ describe("regression A4 — repeated-compaction double-count", () => {
 		const summaryOccurrences = round2Prompt.split("SUMMARY-ROUND-1").length - 1;
 		expect(summaryOccurrences).toBe(1);
 
-		// And specifically not inside the new-conversation block
-		const conversationMatch = round2Prompt.match(/<new-conversation>([\s\S]*?)<\/new-conversation>/);
+		// And specifically not inside the conversation block. The structured
+		// prompt now uses one <conversation> tag for the transcript and a
+		// separate <previous-summary> tag for the prior summary, so the
+		// prior summary must appear in the latter, never inside the former.
+		const conversationMatch = round2Prompt.match(/<conversation>([\s\S]*?)<\/conversation>/);
 		expect(conversationMatch).not.toBeNull();
 		expect(conversationMatch![1]).not.toContain("SUMMARY-ROUND-1");
 		expect(conversationMatch![1]).not.toContain("[Previous conversation summary]");

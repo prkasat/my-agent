@@ -203,71 +203,148 @@ export function extractFileOperations(
 // Summarization Prompts
 // ============================================================================
 
-const SUMMARIZATION_PROMPT = `Summarize the following conversation between a user and an AI coding assistant.
+/**
+ * System prompt scoping the model to "summarize, do not continue."
+ *
+ * The summarization LLM receives a serialized transcript as its USER
+ * message. Without an explicit "do not continue the conversation"
+ * instruction at the system level, models commonly try to answer the
+ * questions inside the transcript instead of summarizing them.
+ */
+const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the format specified.
 
-Focus on:
-1. What tasks were being worked on
-2. What decisions were made and why
-3. What files were modified and what changes were made
-4. Any important context or constraints mentioned
-5. Current state and what was being worked on most recently
+Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
-Be concise but preserve all information needed to continue the work.
-Do NOT include greetings, pleasantries, or meta-commentary.
+/**
+ * Body of the summarization request appended after the transcript.
+ *
+ * Bullet-list focus areas keep the summary small and consistent across
+ * compaction rounds. Tracked file operations are emitted by the calling
+ * code as XML sections (<read-files>, <modified-files>) AFTER the
+ * summary text — those are deterministic and don't need the LLM.
+ */
+const SUMMARIZATION_INSTRUCTIONS = `Summarize the conversation above into a structured handoff that the AI assistant can use to continue the work seamlessly. Focus on:
 
-<conversation>
-{CONVERSATION}
-</conversation>`;
+1. The user's most recent request and any in-flight task
+2. Decisions made and the reasoning behind them
+3. Files modified and the nature of the changes
+4. Constraints, conventions, or preferences the assistant must keep honoring
+5. The state of work right before this summary (what was just completed, what's next)
 
-const UPDATE_SUMMARIZATION_PROMPT = `Update the following summary with new conversation context.
-Merge the new information into a cohesive summary, keeping all important details.
+Be concise but preserve all information needed to continue without re-asking. Do NOT include greetings, meta-commentary, or invitations to continue the conversation.`;
 
-<previous-summary>
-{PREVIOUS_SUMMARY}
-</previous-summary>
+const SUMMARIZATION_INSTRUCTIONS_WITH_PRIOR = `${SUMMARIZATION_INSTRUCTIONS}
 
-<new-conversation>
-{CONVERSATION}
-</new-conversation>`;
+A previous summary is provided in <previous-summary>. Merge its content with the new conversation into ONE cohesive summary — do not append, do not duplicate.`;
+
+/** Maximum chars per tool result in the serialized summary input. */
+export const TOOL_RESULT_MAX_CHARS = 2000;
+
+/**
+ * Truncate a tool result for summarization. Keeps the head and adds an
+ * explicit truncation marker so the summarizer knows information was
+ * elided. We always need SOME of the result (file paths, error
+ * messages, structural cues) but rarely the full body.
+ */
+function truncateForSummary(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const truncated = text.length - maxChars;
+  return `${text.slice(0, maxChars)}\n\n[... ${truncated} more characters truncated]`;
+}
 
 // ============================================================================
 // Summarization
 // ============================================================================
 
 /**
- * Format messages for the summarization prompt.
+ * Serialize a conversation into a flat transcript for the summarization LLM.
+ *
+ * Structured per-turn markers ([User], [Assistant], [Assistant thinking],
+ * [Assistant tool calls], [Tool result]) help the model grasp the turn
+ * structure without re-engaging with the transcript as a live chat.
+ *
+ * Tool results are truncated to TOOL_RESULT_MAX_CHARS — full results are
+ * not needed for an effective summary, and unbounded tool output (e.g.,
+ * a 200KB grep result) would otherwise blow the summarization budget.
  */
 function formatMessagesForSummary(messages: Message[]): string {
   const parts: string[] = [];
 
   for (const msg of messages) {
     if (msg.role === "user") {
-      const text = typeof msg.content === "string"
-        ? msg.content
-        : msg.content
-            .filter((c): c is { type: "text"; text: string } => c.type === "text")
-            .map((c) => c.text)
-            .join(" ");
-      if (text) parts.push(`User: ${text}`);
+      const text =
+        typeof msg.content === "string"
+          ? msg.content
+          : msg.content
+              .filter((c): c is { type: "text"; text: string } => c.type === "text")
+              .map((c) => c.text)
+              .join("");
+      if (text) parts.push(`[User]: ${text}`);
     } else if (msg.role === "assistant") {
-      const textParts = msg.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text);
-      const toolCalls = msg.content
-        .filter((c) => c.type === "tool_call")
-        .map((c) => `[tool: ${(c as { name: string }).name}]`);
-      const text = [...textParts, ...toolCalls].join(" ");
-      if (text) parts.push(`Assistant: ${text}`);
+      const textParts: string[] = [];
+      const thinkingParts: string[] = [];
+      const toolCalls: string[] = [];
+
+      for (const block of msg.content) {
+        if (block.type === "text") {
+          textParts.push(block.text);
+        } else if (block.type === "thinking") {
+          thinkingParts.push(block.text);
+        } else if (block.type === "tool_call") {
+          let argsStr = "";
+          try {
+            const args = JSON.parse(block.arguments) as Record<string, unknown>;
+            argsStr = Object.entries(args)
+              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+              .join(", ");
+          } catch {
+            // Malformed arguments — fall back to the raw string. Better
+            // to expose the broken call than silently drop it from the
+            // summary.
+            argsStr = block.arguments;
+          }
+          toolCalls.push(`${block.name}(${argsStr})`);
+        }
+      }
+
+      if (thinkingParts.length > 0) {
+        parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
+      }
+      if (textParts.length > 0) {
+        parts.push(`[Assistant]: ${textParts.join("\n")}`);
+      }
+      if (toolCalls.length > 0) {
+        parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+      }
     } else if (msg.role === "toolResult") {
       const text = msg.content
         .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text.slice(0, 200))
-        .join(" ");
-      if (text) parts.push(`Tool(${msg.toolName}): ${text}...`);
+        .map((c) => c.text)
+        .join("");
+      if (text) {
+        const label = msg.isError ? "Tool result (error)" : "Tool result";
+        parts.push(`[${label} ${msg.toolName}]: ${truncateForSummary(text, TOOL_RESULT_MAX_CHARS)}`);
+      }
     }
   }
 
   return parts.join("\n\n");
+}
+
+/**
+ * Format file operations as XML sections appended after the summary.
+ * Empty when both lists are empty.
+ */
+function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+  const sections: string[] = [];
+  if (readFiles.length > 0) {
+    sections.push(`<read-files>\n${readFiles.slice().sort().join("\n")}\n</read-files>`);
+  }
+  if (modifiedFiles.length > 0) {
+    sections.push(`<modified-files>\n${modifiedFiles.slice().sort().join("\n")}\n</modified-files>`);
+  }
+  if (sections.length === 0) return "";
+  return `\n\n${sections.join("\n\n")}`;
 }
 
 /**
@@ -286,16 +363,27 @@ export async function generateCompactionSummary(
   const llmMessages = defaultConvertToLlm(messages);
   const formatted = formatMessagesForSummary(llmMessages);
 
-  const prompt = options?.previousSummary
-    ? UPDATE_SUMMARIZATION_PROMPT
-        .replace("{PREVIOUS_SUMMARY}", options.previousSummary)
-        .replace("{CONVERSATION}", formatted)
-    : SUMMARIZATION_PROMPT.replace("{CONVERSATION}", formatted);
+  // Structured prompt body: <conversation> then optional
+  // <previous-summary> then instructions. Wrapping the transcript in
+  // an XML section makes the boundary between "what to summarize" and
+  // "the instruction" unambiguous so the model doesn't mistake the
+  // last user turn in the transcript for a fresh request.
+  const sections: string[] = [`<conversation>\n${formatted}\n</conversation>`];
+  if (options?.previousSummary) {
+    sections.push(`<previous-summary>\n${options.previousSummary}\n</previous-summary>`);
+  }
+  sections.push(
+    options?.previousSummary
+      ? SUMMARIZATION_INSTRUCTIONS_WITH_PRIOR
+      : SUMMARIZATION_INSTRUCTIONS,
+  );
+  const prompt = sections.join("\n\n");
 
   // Handle both sync and async stream functions (registry.stream() returns Promise<EventStream>)
   const streamOrPromise = streamFn(
     model,
     {
+      systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
       messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
     },
     {
@@ -448,17 +536,10 @@ export async function compact(
   const details = extractFileOperations(messagesToSummarize, options.previousCompaction);
   details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
 
-  // Enrich summary with file list
-  let enrichedSummary = summary;
-  if (details.readFiles.length > 0 || details.modifiedFiles.length > 0) {
-    enrichedSummary += "\n\n---\nFiles involved in this session:";
-    if (details.readFiles.length > 0) {
-      enrichedSummary += `\nRead: ${details.readFiles.join(", ")}`;
-    }
-    if (details.modifiedFiles.length > 0) {
-      enrichedSummary += `\nModified: ${details.modifiedFiles.join(", ")}`;
-    }
-  }
+  // Enrich summary with file-operation XML sections so future calls
+  // (and human readers) can quickly recover what files this branch
+  // has touched without re-parsing the prose.
+  const enrichedSummary = summary + formatFileOperations(details.readFiles, details.modifiedFiles);
 
   return {
     summary: enrichedSummary,
