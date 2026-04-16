@@ -873,6 +873,67 @@ describe("SessionManager", () => {
       expect(() => manager.appendExtension("", { x: 1 })).toThrow(/namespace/);
     });
 
+    it("Tier-2 pass-14 regression: forced first-flush is atomic — failed write + retry doesn't duplicate", async () => {
+      // Pre-pass-14 bug: the first-flush path appended each queued
+      // entry one-by-one with appendFileSync. If a later append failed
+      // (ENOSPC etc.), the earlier prefix stayed on disk, in-memory
+      // state was rolled back for the LAST entry only, and a retry
+      // re-appended the entire queued snapshot — producing duplicates.
+      // Fix: first flush now uses a single overwriting writeFileSync
+      // (rewriteFile) so a failed write leaves the file in some bad
+      // state that the next retry overwrites cleanly.
+      const fs = await import("node:fs");
+      // Use a per-test sub-directory we can lock down read-only to
+      // force a write failure on the first appendExtension. ESM module
+      // exports can't be monkey-patched, so we provoke the failure at
+      // the filesystem layer.
+      const lockedDir = join(tempDir, "locked");
+      mkdirSync(lockedDir, { recursive: true });
+      const manager = SessionManager.create("/test/cwd", lockedDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      manager.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+      manager.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+
+      // Make the directory read-only — the first writeFileSync to
+      // create the session file will fail with EACCES.
+      fs.chmodSync(lockedDir, 0o500);
+      try {
+        expect(() => manager.appendExtension("plugin.x", { v: 1 })).toThrow();
+      } finally {
+        fs.chmodSync(lockedDir, 0o700);
+      }
+
+      // After the failure: in-memory state has the user msgs but the
+      // extension entry was rolled back. Disk should NOT have a
+      // partial prefix because the first-flush was a single write.
+      // (We don't assert that the file doesn't exist — depends on the
+      // OS behavior when writeFileSync fails on a locked dir — only
+      // that retry doesn't produce duplicates.)
+
+      // Retry succeeds now that the dir is writable.
+      const id = manager.appendExtension("plugin.x", { v: 1 });
+      expect(id).toBeTruthy();
+
+      // Reload and verify no duplicates.
+      const reopened = SessionManager.open(sessionFile);
+      const userMsgs = reopened.getEntries().filter((e) => e.type === "message");
+      const extEntries = reopened.getExtensionEntries("plugin.x");
+      expect(userMsgs.length).toBe(2);
+      expect(extEntries.length).toBe(1);
+
+      // Sanity: every JSONL line has a unique id.
+      const lines = readFileSync(sessionFile, "utf8").trim().split("\n");
+      const ids = new Set<string>();
+      for (const line of lines) {
+        const parsed = JSON.parse(line);
+        if (parsed.id) {
+          expect(ids.has(parsed.id)).toBe(false);
+          ids.add(parsed.id);
+        }
+      }
+    });
+
     it("Tier-2 pass-6 regression: extension entries persist before the first assistant turn", () => {
       // Pre-pass-6 bug: appendExtension routed through persistEntry's
       // deferred-flush gate. A plugin that wrote state during startup,

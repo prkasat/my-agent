@@ -688,10 +688,15 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      // First flush - write all entries
-      for (const e of this.fileEntries) {
-        appendFileSync(this.sessionFile, JSON.stringify(e) + "\n");
-      }
+      // First flush — write all queued entries in ONE atomic
+      // writeFileSync rather than looping appendFileSync. The loop
+      // could leave a durable prefix on disk if a later write failed
+      // (ENOSPC mid-flush), and a retry would then re-append the same
+      // prefix, duplicating entries (Codex Tier-2 pass-14). A single
+      // overwriting write keeps first-flush idempotent: failure
+      // leaves the file in some bad state, but the next retry
+      // overwrites it cleanly with the current snapshot.
+      this.rewriteFile();
       this.flushed = true;
     } else {
       // Incremental append
