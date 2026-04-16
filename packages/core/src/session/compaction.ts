@@ -743,25 +743,6 @@ export async function compact(
       }
       continue;
     }
-    // Legacy user-role summary prefix (older sessions before custom-role)
-    if ("role" in msg && msg.role === "user") {
-      const content =
-        typeof msg.content === "string"
-          ? msg.content
-          : Array.isArray(msg.content)
-            ? msg.content
-                .filter((c): c is { type: "text"; text: string } => c.type === "text")
-                .map((c) => c.text)
-                .join("")
-            : "";
-      if (
-        content.startsWith("[Conversation summary") ||
-        content.startsWith("[Previous conversation")
-      ) {
-        if (!inferredPreviousSummary) inferredPreviousSummary = content;
-        continue;
-      }
-    }
     filteredToSummarize.push(msg);
   }
 
