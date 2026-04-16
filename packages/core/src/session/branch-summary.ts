@@ -317,6 +317,15 @@ export function collectEntriesForBranchSummary(
     }
   }
 
+  // No shared ancestor: the two leaves are on disconnected trees (orphaned
+  // branch, missing parent in the index, separate root). Returning the OLD
+  // path as "abandoned" would inject a bogus branch summary onto the target,
+  // so we surface this as nothing-to-summarize and let the caller decide
+  // (typically: log an integrity warning, navigate without a summary).
+  if (commonAncestorId === null) {
+    return { entries: [], commonAncestorId: null };
+  }
+
   // Walk OLD leaf -> ancestor, collecting entries strictly between.
   // Stop when we reach the common ancestor (don't include it — it's
   // shared with the target path so it's NOT being abandoned).
@@ -333,12 +342,10 @@ export function collectEntriesForBranchSummary(
   // summarizer sees the branch as it was lived, not in reverse.
   entries.reverse();
 
-  // Special case: if the OLD leaf is ITSELF on the target's ancestor chain,
-  // we walked from oldLeafId straight to itself — nothing to summarize.
-  // This happens when navigating "deeper" along the same line.
-  if (entries.length === 1 && entries[0].id === commonAncestorId) {
-    return { entries: [], commonAncestorId };
-  }
+  // Note: when oldLeafId is itself on the target's ancestor chain (navigating
+  // forward along the same line), the loop's first check sees
+  // `current === commonAncestorId` and exits with `entries = []`. No
+  // additional guard is needed.
 
   return { entries, commonAncestorId };
 }

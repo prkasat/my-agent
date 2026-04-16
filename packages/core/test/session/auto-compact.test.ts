@@ -204,6 +204,60 @@ describe("Tier-1: usage-based trigger", () => {
 	});
 });
 
+describe("Codex-fix: forceProgress breaks usage>limit livelock", () => {
+	it("makes a real cut when measureContextTokens overflows but chars/4 fits", async () => {
+		// Setup: chars/4 of all messages is small (well inside
+		// keepRecentTokens), but the last assistant turn reports usage
+		// far past the model window. WITHOUT forceProgress, findCutPoint
+		// returns 0 and the auto-compactor silently no-ops every time.
+		// WITH forceProgress, the compactor must drop oldest content.
+		let cutsAttempted = 0;
+		const trackingStreamFn = ((_m: Model, _ctx: any, _opts: any) => {
+			cutsAttempted++;
+			return fakeStreamFn("forced summary")();
+		}) as any;
+
+		const compactor = createAutoCompactor({
+			streamFn: trackingStreamFn,
+			settings: { reserveTokens: 100, keepRecentTokens: 100_000 },
+		});
+
+		// Four short messages; last assistant turn reports 5000 tokens
+		// (well past the 1000-token model window).
+		const messages: AgentMessage[] = [
+			{ role: "user", content: "hi", timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "ok" }],
+				usage: { inputTokens: 4500, outputTokens: 500 },
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage,
+			{ role: "user", content: "more", timestamp: Date.now() },
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "yep" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as unknown as AgentMessage,
+		];
+
+		const context: AgentContext = {
+			messages,
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		const before = context.messages.length;
+		await compactor(context);
+		// Summarization MUST have been called (no silent skip).
+		expect(cutsAttempted).toBe(1);
+		// And the in-memory context MUST be smaller than what we started with.
+		expect(context.messages.length).toBeLessThan(before);
+	});
+});
+
 describe("regression A5 — small context window", () => {
 	it("does not collapse history when contextWindow < default reserveTokens", async () => {
 		// 4K context window with default 16K reserve — the original code computed

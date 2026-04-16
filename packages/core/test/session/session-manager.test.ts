@@ -236,6 +236,87 @@ describe("SessionManager", () => {
       expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
     });
 
+    it("Tier-1: navigateBranch rolls leaf back when summary persistence throws", () => {
+      // Exercises the atomicity guard: appendBranchSummary failing must
+      // NOT leave the leaf pointing at the new target with no summary
+      // recorded. Otherwise the next user action commits to the new branch
+      // and the abandoned tail's context is silently lost.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      manager.branch(b);
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+      manager.branch(c);
+
+      const originalLeaf = manager.getLeafId();
+      // Force appendBranchSummary to throw.
+      const original = manager.appendBranchSummary.bind(manager);
+      manager.appendBranchSummary = () => {
+        throw new Error("simulated fs failure");
+      };
+
+      expect(() => manager.navigateBranch(d, "Should fail")).toThrow(
+        /simulated fs failure/,
+      );
+
+      // Leaf MUST still be at the original position (c), not d.
+      expect(manager.getLeafId()).toBe(originalLeaf);
+      expect(manager.getEntries().filter((e) => e.type === "branch_summary")).toHaveLength(0);
+
+      // Restore so the manager can be cleaned up properly.
+      manager.appendBranchSummary = original;
+    });
+
+    it("Codex-fix: navigateBranch summary failure leaves zero half-done state in fileEntries/byId", () => {
+      // The earlier rollback only reset leafId. appendEntry mutates
+      // fileEntries / byId BEFORE persistEntry runs, so a fs failure
+      // would leave a phantom branch_summary entry in memory even
+      // though the navigation was reported as failed. This test forces
+      // persistEntry to throw and asserts NO phantom state survives.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "B" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const c = manager.appendMessage({ role: "user", content: "C", timestamp: Date.now() });
+      manager.branch(b);
+      const d = manager.appendMessage({ role: "user", content: "D", timestamp: Date.now() });
+      manager.branch(c);
+
+      const entriesBefore = manager.getEntries().length;
+      const idsBefore = manager.getEntries().map((e) => e.id);
+      const leafBefore = manager.getLeafId();
+
+      // Patch the private persistEntry to throw on the next call.
+      const original = (manager as any).persistEntry.bind(manager);
+      let calls = 0;
+      (manager as any).persistEntry = (entry: any) => {
+        calls++;
+        if (calls === 1) throw new Error("simulated fs failure");
+        return original(entry);
+      };
+
+      expect(() => manager.navigateBranch(d, "Should fail")).toThrow(
+        /simulated fs failure/,
+      );
+
+      // No phantom entry, no shifted leaf, no orphan id in the byId index.
+      expect(manager.getEntries().length).toBe(entriesBefore);
+      expect(manager.getEntries().map((e) => e.id)).toEqual(idsBefore);
+      expect(manager.getLeafId()).toBe(leafBefore);
+      // Restore so cleanup works
+      (manager as any).persistEntry = original;
+    });
+
     it("Tier-1: navigateBranch deeper along the same line abandons nothing", () => {
       // root -> A -> B -> C
       // Leaf is at A. Navigating to C is moving FORWARD along the same line.

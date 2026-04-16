@@ -128,7 +128,8 @@ export function createAutoCompactor(
     // user-cancellation state, while options.signal was bound at setup time.
     const effectiveSignal = signal ?? options.signal;
 
-    const currentTokens = measureContextTokens(context.messages).tokens;
+    const measurement = measureContextTokens(context.messages);
+    const currentTokens = measurement.tokens;
     const contextWindow = context.model.contextWindow ?? 128_000;
 
     // Clamp reserveTokens against the model's actual context window.
@@ -158,6 +159,13 @@ export function createAutoCompactor(
       );
       const effectiveKeepRecent = Math.min(settings.keepRecentTokens, availableForKept);
 
+      // forceProgress: when provider Usage tells us we're over the
+      // limit, findCutPoint MUST drop something even if the chars/4
+      // budget would have kept everything (otherwise next turn we
+      // re-trigger and skip again — livelock). Only force when the
+      // trigger came from a usage anchor; pure chars/4 overflow is
+      // already self-consistent with findCutPoint.
+      const forceProgress = measurement.lastUsageIndex !== null;
       result = await compact(context.messages, {
         keepRecentTokens: effectiveKeepRecent,
         model: context.model,
@@ -166,6 +174,7 @@ export function createAutoCompactor(
         previousSummary: state.lastSummary,
         apiKey,
         signal: effectiveSignal,
+        forceProgress,
       });
     } catch (err) {
       if (errorPolicy === "throw") {

@@ -121,10 +121,45 @@ export function calculateContextTokens(usage: Usage): number {
 }
 
 /**
+ * Decide whether a Usage record is trustworthy enough to anchor the
+ * context-window estimate.
+ *
+ * Reject:
+ * - all-zero usage: the openai-compatible provider initializes
+ *   `usage = { inputTokens: 0, outputTokens: 0 }` BEFORE the API has
+ *   reported anything, so a missing-usage response is indistinguishable
+ *   from a "real" zero-token turn. Falling back to chars/4 is strictly
+ *   safer than anchoring on a phantom zero.
+ * - non-finite values (NaN / Infinity): malformed providers shouldn't be
+ *   able to silently disable compaction.
+ * - negative values: nonsensical; treat as missing.
+ *
+ * A turn legitimately costs > 0 tokens, so dropping pure-zero records is
+ * not a real false-negative.
+ */
+function isUsableUsage(usage: Usage | undefined): usage is Usage {
+  if (!usage) return false;
+  const fields = [
+    usage.inputTokens,
+    usage.outputTokens,
+    usage.cacheReadTokens ?? 0,
+    usage.cacheWriteTokens ?? 0,
+  ];
+  let total = 0;
+  for (const v of fields) {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
+    total += v;
+  }
+  return total > 0;
+}
+
+/**
  * Find the last assistant message that carries usable usage data.
  *
  * Skips aborted and error messages — their usage is unreliable (often
  * partial / phantom) and shouldn't anchor the context-window estimate.
+ * Also skips messages whose usage is structurally zero / malformed (see
+ * `isUsableUsage`).
  */
 function getLastAssistantUsageInfo(
   messages: AgentMessage[],
@@ -134,11 +169,11 @@ function getLastAssistantUsageInfo(
     if (
       "role" in msg &&
       msg.role === "assistant" &&
-      msg.usage &&
       msg.stopReason !== "aborted" &&
-      msg.stopReason !== "error"
+      msg.stopReason !== "error" &&
+      isUsableUsage(msg.usage)
     ) {
-      return { usage: msg.usage, index: i };
+      return { usage: msg.usage as Usage, index: i };
     }
   }
   return undefined;
@@ -209,8 +244,20 @@ export function measureContextTokens(
  * Rules:
  * - Keep at least keepRecentTokens of recent context
  * - Never cut at a toolResult (would orphan it from its tool call)
+ *
+ * When `forceProgress` is true and the chars/4 estimate would otherwise
+ * keep ALL messages (because the visible content is small even though
+ * provider Usage says we're over the limit — typical of cached / thinking
+ * heavy turns), the function still returns a non-zero cut so the auto-
+ * compactor can make progress instead of silently looping. The fallback
+ * keeps the last assistant turn's tail intact (so the conversation has
+ * something to anchor on) but drops the older oldest turn at minimum.
  */
-export function findCutPoint(messages: AgentMessage[], keepRecentTokens: number): number {
+export function findCutPoint(
+  messages: AgentMessage[],
+  keepRecentTokens: number,
+  forceProgress = false,
+): number {
   if (messages.length === 0) return 0;
 
   // Walk backwards, accumulating tokens
@@ -225,10 +272,18 @@ export function findCutPoint(messages: AgentMessage[], keepRecentTokens: number)
     }
   }
 
-  // If total tokens < keepRecentTokens, don't cut anything.
-  // This handles smaller context windows where keepRecentTokens exceeds total context.
+  // If total tokens < keepRecentTokens, normally don't cut anything.
+  // But when the caller has independent evidence (provider Usage) that
+  // the context IS over the model's window, we MUST drop something —
+  // otherwise the auto-compactor will livelock: trigger says "compact",
+  // findCutPoint says "nothing to cut", context unchanged, repeat.
   if (cutIndex === messages.length) {
-    return 0;
+    if (!forceProgress) return 0;
+    // Force-cut at half the messages, then snap forward past any
+    // toolResult so we don't orphan a tool_call. This is a degraded
+    // path; the regular keepRecentTokens budget still wins whenever
+    // it can.
+    cutIndex = Math.max(1, Math.floor(messages.length / 2));
   }
 
   // Adjust: don't cut at a toolResult (would orphan it)
@@ -431,16 +486,56 @@ function formatMessagesForSummary(messages: Message[]): string {
 }
 
 /**
+ * Neutralize XML-style closing tags inside untrusted content so a
+ * malicious or accidental `</conversation>` (or sibling) inside a tool
+ * result, file path, or prior summary cannot break out of the wrapper
+ * we use in the structured summarization prompt.
+ *
+ * Why a defense at all: the wrappers are framing for the LLM, not a
+ * security boundary, but a closing-tag injection lets an attacker (or a
+ * normal user pasting source code that happens to include the markers)
+ * change the apparent boundaries of the transcript and the instructions.
+ * Replacing only the angle brackets with their HTML entity is enough —
+ * the text is still readable to the model but the wrapper boundary
+ * survives intact.
+ *
+ * We deliberately only neutralize the closing form `</…>` for the small
+ * set of tags we actually emit. Opening tags inside text are harmless
+ * because there's no tag we ever close that the prompt could match.
+ */
+const PROMPT_WRAPPER_TAGS = [
+  "conversation",
+  "previous-summary",
+  "read-files",
+  "modified-files",
+] as const;
+
+const CLOSING_TAG_RE = new RegExp(
+  `</\\s*(${PROMPT_WRAPPER_TAGS.join("|")})\\s*>`,
+  "gi",
+);
+
+function escapeWrapperTags(text: string): string {
+  return text.replace(CLOSING_TAG_RE, (_, name: string) => `&lt;/${name}&gt;`);
+}
+
+/**
  * Format file operations as XML sections appended after the summary.
  * Empty when both lists are empty.
+ *
+ * File paths are passed through `escapeWrapperTags` so a path containing
+ * literally `</read-files>` cannot break the section out of the section.
+ * Path semantics survive because `&lt;` etc. are not valid in real paths.
  */
 function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
   const sections: string[] = [];
   if (readFiles.length > 0) {
-    sections.push(`<read-files>\n${readFiles.slice().sort().join("\n")}\n</read-files>`);
+    const safe = readFiles.slice().sort().map(escapeWrapperTags).join("\n");
+    sections.push(`<read-files>\n${safe}\n</read-files>`);
   }
   if (modifiedFiles.length > 0) {
-    sections.push(`<modified-files>\n${modifiedFiles.slice().sort().join("\n")}\n</modified-files>`);
+    const safe = modifiedFiles.slice().sort().map(escapeWrapperTags).join("\n");
+    sections.push(`<modified-files>\n${safe}\n</modified-files>`);
   }
   if (sections.length === 0) return "";
   return `\n\n${sections.join("\n\n")}`;
@@ -467,9 +562,18 @@ export async function generateCompactionSummary(
   // an XML section makes the boundary between "what to summarize" and
   // "the instruction" unambiguous so the model doesn't mistake the
   // last user turn in the transcript for a fresh request.
-  const sections: string[] = [`<conversation>\n${formatted}\n</conversation>`];
+  //
+  // Both inputs come from untrusted sources (user prompts, tool output,
+  // model-generated prior summaries that may have echoed user content),
+  // so they MUST be escaped against `</conversation>` / sibling
+  // injections before being interpolated into the wrappers.
+  const sections: string[] = [
+    `<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>`,
+  ];
   if (options?.previousSummary) {
-    sections.push(`<previous-summary>\n${options.previousSummary}\n</previous-summary>`);
+    sections.push(
+      `<previous-summary>\n${escapeWrapperTags(options.previousSummary)}\n</previous-summary>`,
+    );
   }
   sections.push(
     options?.previousSummary
@@ -536,6 +640,13 @@ export interface CompactOptions {
   apiKey?: string;
   /** Abort signal */
   signal?: AbortSignal;
+  /**
+   * Force a non-zero cut even when chars/4 says all messages fit inside
+   * keepRecentTokens. Set this when the caller has provider-Usage
+   * evidence that the context is over the model's window — otherwise
+   * findCutPoint will return 0 and the auto-compactor will livelock.
+   */
+  forceProgress?: boolean;
 }
 
 /**
@@ -548,7 +659,11 @@ export async function compact(
   messages: AgentMessage[],
   options: CompactOptions
 ): Promise<CompactionResult> {
-  const cutIndex = findCutPoint(messages, options.keepRecentTokens);
+  const cutIndex = findCutPoint(
+    messages,
+    options.keepRecentTokens,
+    options.forceProgress ?? false,
+  );
 
   // Nothing to compact
   if (cutIndex <= 0) {

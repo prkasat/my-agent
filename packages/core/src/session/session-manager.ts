@@ -1077,13 +1077,39 @@ export class SessionManager {
     const { entries: abandonedEntries, commonAncestorId } =
       collectEntriesForBranchSummary(this, oldLeafId, targetId);
 
+    // Snapshot mutable state BEFORE either the leaf swap or the summary
+    // append so we can restore atomically on any failure. appendEntry
+    // mutates fileEntries / byId / leafId BEFORE calling persistEntry,
+    // which means a fs error during persistence leaves the in-memory
+    // state half-done unless we undo it explicitly.
+    const fileEntriesLen = this.fileEntries.length;
+    const flushedSnapshot = this.flushed;
+
     // Move to the target FIRST so the summary's parentId chains onto the
     // new branch (not the abandoned one).
     this.leafId = targetId;
 
     let summaryEntryId: string | undefined;
     if (summary && oldLeafId) {
-      summaryEntryId = this.appendBranchSummary(oldLeafId, summary, summaryDetails);
+      try {
+        summaryEntryId = this.appendBranchSummary(oldLeafId, summary, summaryDetails);
+      } catch (err) {
+        // Roll back ALL state appendEntry could have mutated, not just
+        // the leaf pointer. Otherwise a transient fs / id-collision
+        // failure leaves a phantom branch_summary entry visible to
+        // readers and to a retry — duplicating summaries, or worse,
+        // surfacing a summary the file on disk never received.
+        this.leafId = oldLeafId;
+        if (this.fileEntries.length > fileEntriesLen) {
+          for (let i = this.fileEntries.length - 1; i >= fileEntriesLen; i--) {
+            const stale = this.fileEntries[i];
+            if (stale.type !== "session") this.byId.delete(stale.id);
+          }
+          this.fileEntries.length = fileEntriesLen;
+        }
+        this.flushed = flushedSnapshot;
+        throw err;
+      }
     }
 
     return { abandonedEntries, commonAncestorId, summaryEntryId };
