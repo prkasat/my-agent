@@ -115,6 +115,34 @@ export interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
+/**
+ * Extension entry — namespaced plugin payload that core does not interpret.
+ *
+ * Lets plugins persist arbitrary state inside the session file without
+ * widening the core entry union or risking key collisions. Core only
+ * promises to:
+ *   * preserve unknown extension namespaces verbatim through reads,
+ *     writes, and migrations,
+ *   * skip extensions when reconstructing LLM context, building branch
+ *     summaries, or computing compaction inputs,
+ *   * surface them through `getEntries()` and the namespace-filtered
+ *     accessor on SessionManager so plugins can recover their own
+ *     payloads on session reload.
+ *
+ * Plugins MUST namespace their entries (reverse-DNS, short slug, or
+ * package name) so two unrelated plugins cannot collide. `subtype` is
+ * an optional secondary discriminator inside one namespace.
+ */
+export interface ExtensionEntry extends SessionEntryBase {
+  type: "extension";
+  /** Plugin-specific namespace; must be unique across all installed plugins. */
+  namespace: string;
+  /** Optional sub-discriminator inside the namespace. */
+  subtype?: string;
+  /** Plugin-defined opaque payload. Core never reads its shape. */
+  payload: unknown;
+}
+
 // ============================================================================
 // Entry Union
 // ============================================================================
@@ -127,7 +155,8 @@ export type SessionEntry =
   | SettingsChangeEntry
   | CompactionEntry
   | BranchSummaryEntry
-  | SessionInfoEntry;
+  | SessionInfoEntry
+  | ExtensionEntry;
 
 /**
  * Raw file entry (header or entry).

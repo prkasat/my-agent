@@ -161,6 +161,7 @@ export type {
 	CompactionEntry,
 	BranchSummaryEntry,
 	SessionInfoEntry,
+	ExtensionEntry,
 	SessionEntry,
 	FileEntry,
 	CompactionDetails,

@@ -34,6 +34,7 @@ import type {
   BranchSummaryEntry,
   CompactionDetails,
   CompactionEntry,
+  ExtensionEntry,
   FileEntry,
   MessageEntry,
   SessionContext,
@@ -930,6 +931,52 @@ export class SessionManager {
     };
     this.appendEntry(entry);
     return entry.id;
+  }
+
+  /**
+   * Append a plugin-defined extension entry.
+   *
+   * Plugins use this to persist arbitrary state into the session file
+   * without colliding with core entry types. The `namespace` MUST be
+   * unique to the plugin (reverse-DNS, package name, or short slug).
+   * Core never reads the payload — it only round-trips it through
+   * reads, writes, and migrations.
+   */
+  appendExtension(
+    namespace: string,
+    payload: unknown,
+    subtype?: string,
+  ): string {
+    if (!namespace || typeof namespace !== "string") {
+      throw new Error("appendExtension: namespace is required");
+    }
+    const entry: ExtensionEntry = {
+      type: "extension",
+      id: generateId(this.byId),
+      parentId: this.leafId,
+      timestamp: new Date().toISOString(),
+      namespace,
+      payload,
+      ...(subtype !== undefined ? { subtype } : {}),
+    };
+    this.appendEntry(entry);
+    return entry.id;
+  }
+
+  /**
+   * Read all extension entries, optionally filtered by namespace.
+   *
+   * Returns entries in append order so plugins can replay their own
+   * payload history (settings, snapshots, etc.) on session reload.
+   */
+  getExtensionEntries(namespace?: string): ExtensionEntry[] {
+    const out: ExtensionEntry[] = [];
+    for (const entry of this.fileEntries) {
+      if (entry.type !== "extension") continue;
+      if (namespace !== undefined && entry.namespace !== namespace) continue;
+      out.push(entry);
+    }
+    return out;
   }
 
   // ==========================================================================

@@ -782,6 +782,97 @@ describe("SessionManager", () => {
       expect(manager.getEntries()).toHaveLength(2);
     });
   });
+
+  describe("Tier-2: extension entries", () => {
+    it("appendExtension persists a namespaced payload that round-trips through reload", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const sessionFile = manager.getSessionFile()!;
+
+      // Need an assistant turn first so the file actually flushes.
+      manager.appendMessage({ role: "user", content: "u", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      const id1 = manager.appendExtension("com.example.todo", { items: ["x", "y"] });
+      const id2 = manager.appendExtension("com.example.todo", { items: ["x"] }, "snapshot");
+      const id3 = manager.appendExtension("net.other-plugin.cache", { hits: 7 });
+
+      const reopened = SessionManager.open(sessionFile);
+      const all = reopened.getExtensionEntries();
+      expect(all.map((e) => e.id)).toEqual([id1, id2, id3]);
+      expect(all[0].payload).toEqual({ items: ["x", "y"] });
+      expect(all[1].subtype).toBe("snapshot");
+      expect(all[2].namespace).toBe("net.other-plugin.cache");
+
+      const filtered = reopened.getExtensionEntries("com.example.todo");
+      expect(filtered.map((e) => e.id)).toEqual([id1, id2]);
+    });
+
+    it("preserves unknown extension namespaces verbatim through buildIndex / migrate / reload", () => {
+      // Forward-compat: a plugin we don't know about wrote entries we
+      // don't understand. We must round-trip them losslessly so a
+      // future install of that plugin can recover its state.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const sessionFile = manager.getSessionFile()!;
+      manager.appendMessage({ role: "user", content: "u", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendExtension("future.unknown.namespace", {
+        nested: { weird: ["data", 42, null] },
+      });
+
+      const reopened = SessionManager.open(sessionFile);
+      const ext = reopened.getExtensionEntries("future.unknown.namespace");
+      expect(ext.length).toBe(1);
+      expect(ext[0].payload).toEqual({ nested: { weird: ["data", 42, null] } });
+
+      // Append more after reload — extension entries must survive the
+      // mid-session append + persist + future reload cycle too.
+      reopened.appendMessage({ role: "user", content: "more", timestamp: Date.now() });
+      reopened.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const reopened2 = SessionManager.open(sessionFile);
+      expect(reopened2.getExtensionEntries("future.unknown.namespace").length).toBe(1);
+    });
+
+    it("extension entries are skipped when reconstructing LLM context", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      manager.appendMessage({ role: "user", content: "hello", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "hi" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendExtension("plugin.x", { state: "should-not-leak-into-llm" });
+      manager.appendMessage({ role: "user", content: "next", timestamp: Date.now() });
+
+      const ctx = buildSessionContext(manager.getEntries(), manager.getLeafId());
+      expect(ctx.messages.length).toBe(3);
+      // Verify no extension payload bled into a message
+      for (const m of ctx.messages) {
+        const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+        expect(text).not.toContain("should-not-leak-into-llm");
+      }
+    });
+
+    it("appendExtension rejects an empty namespace", () => {
+      const manager = SessionManager.inMemory("/test/cwd");
+      expect(() => manager.appendExtension("", { x: 1 })).toThrow(/namespace/);
+    });
+  });
 });
 
 describe("buildSessionContext", () => {
