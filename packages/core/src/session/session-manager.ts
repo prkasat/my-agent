@@ -394,6 +394,12 @@ export class SessionManager {
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
   private leafId: string | null = null;
+  // True when the caller explicitly chose the current leaf via branch(),
+  // navigateBranch(), or resetLeaf(). withLock's reload uses this to know
+  // whether to preserve the user's selection across the reload (true) or
+  // accept the new on-disk leaf as the current cursor (false). Reset to
+  // false whenever buildIndex/appendEntry naturally advances the leaf.
+  private leafSelectedByUser: boolean = false;
 
   private constructor(
     cwd: string,
@@ -623,6 +629,7 @@ export class SessionManager {
   private buildIndex(): void {
     this.byId.clear();
     this.leafId = null;
+    this.leafSelectedByUser = false;
 
     for (const entry of this.fileEntries) {
       if (entry.type === "session") continue;
@@ -698,6 +705,10 @@ export class SessionManager {
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
+    // Natural progression — the new leaf is the just-appended entry, not a
+    // user-selected branch tip. Future locked reloads should accept whatever
+    // the new on-disk state is rather than try to restore this id.
+    this.leafSelectedByUser = false;
     this.persistEntry(entry);
   }
 
@@ -1071,6 +1082,7 @@ export class SessionManager {
       throw new Error(`Entry ${toEntryId} not found`);
     }
     this.leafId = toEntryId;
+    this.leafSelectedByUser = true;
   }
 
   /**
@@ -1122,10 +1134,12 @@ export class SessionManager {
     const fileEntriesLen = this.fileEntries.length;
     const flushedSnapshot = this.flushed;
     const sessionFileSnapshot = this.sessionFileBytes();
+    const leafSelectedSnapshot = this.leafSelectedByUser;
 
     // Move to the target FIRST so the summary's parentId chains onto the
     // new branch (not the abandoned one).
     this.leafId = targetId;
+    this.leafSelectedByUser = true;
 
     // Suppress summary writes when the abandoned tail is empty or the
     // two leaves share no common ancestor (disconnected trees, orphaned
@@ -1150,6 +1164,7 @@ export class SessionManager {
         // visible in this process — duplicating on retry, or surfacing
         // a summary the file on disk never received.
         this.leafId = oldLeafId;
+        this.leafSelectedByUser = leafSelectedSnapshot;
         if (this.fileEntries.length > fileEntriesLen) {
           for (let i = this.fileEntries.length - 1; i >= fileEntriesLen; i--) {
             const stale = this.fileEntries[i];
@@ -1186,6 +1201,7 @@ export class SessionManager {
    */
   resetLeaf(): void {
     this.leafId = null;
+    this.leafSelectedByUser = true;
   }
 
   /**
@@ -1370,6 +1386,20 @@ export class SessionManager {
       }
     }
     const sessionFile = this.sessionFile;
+    // Preserve a caller-selected leaf across the locked reload below.
+    // branch(), navigateBranch(), and resetLeaf() change `leafId` in
+    // memory only when there is nothing to persist (no summary, or empty
+    // abandoned tail). Without this snapshot+restore, buildIndex() resets
+    // `leafId` to the last persisted entry and the caller's branch
+    // selection is silently reverted — the next appendMessage attaches to
+    // the wrong parent and permanently corrupts the session tree.
+    //
+    // The flag distinguishes user intent from natural progression: if the
+    // current leaf is just whatever appendEntry/buildIndex last set, we
+    // accept the new on-disk leaf (so peers' appends are picked up). If
+    // the caller explicitly chose this leaf, we restore it.
+    const intendedLeafId = this.leafId;
+    const intendedLeafSelected = this.leafSelectedByUser;
     return withCrossProcessLock(sessionFile, async () => {
       // Reload state from disk so the callback sees writes from any other
       // process that completed between our last read and acquiring this
@@ -1389,6 +1419,21 @@ export class SessionManager {
         }
         this.buildIndex();
         this.flushed = true;
+        // Restore the caller's selected leaf if it was an explicit choice.
+        // A peer's writes since our snapshot become a sibling branch off
+        // the same parent, which is the correct multi-branch model.
+        if (
+          intendedLeafSelected &&
+          intendedLeafId !== null &&
+          this.byId.has(intendedLeafId)
+        ) {
+          this.leafId = intendedLeafId;
+          this.leafSelectedByUser = true;
+        } else if (intendedLeafSelected && intendedLeafId === null) {
+          // resetLeaf() was called — preserve the explicit reset.
+          this.leafId = null;
+          this.leafSelectedByUser = true;
+        }
       }
       this.lockDepth++;
       try {

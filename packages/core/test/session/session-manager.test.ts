@@ -858,4 +858,107 @@ describe("SessionManager.withLock cross-process behavior", () => {
     expect(bLeafBefore).not.toBe(aLeafAfter);
     expect(leafSeenInsideLock).toBe(aLeafAfter);
   });
+
+  it("regression (pass-11): branch() before withLock survives the locked reload", async () => {
+    // branch() only mutates leafId in memory. withLock's reload + buildIndex
+    // would reset leafId to the last persisted entry, silently reverting the
+    // user's branch selection. The next appendMessage would then attach to
+    // the on-disk leaf instead of the user's chosen target, permanently
+    // corrupting the session tree.
+    const session = SessionManager.create("/test/cwd", tempDir);
+    const sessionFile = session.getSessionFile()!;
+
+    const u1 = session.appendMessage({
+      role: "user",
+      content: "u1",
+      timestamp: Date.now(),
+    });
+    const a1 = session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "a1" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    session.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+    session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "a2" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    // User selects an earlier branch tip (a1) — purely in memory.
+    session.branch(a1);
+    expect(session.getLeafId()).toBe(a1);
+
+    // Now take the lock and append. The reload inside withLock must NOT
+    // revert the leaf to the on-disk last entry (a2).
+    let appendedId: string | null = null;
+    await session.withLock(async () => {
+      expect(session.getLeafId()).toBe(a1); // intent preserved across reload
+      appendedId = session.appendMessage({
+        role: "user",
+        content: "branched",
+        timestamp: Date.now(),
+      });
+    });
+
+    // The new entry's parent must be a1 (the user's target), not a2.
+    const onDisk = readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as SessionEntry);
+    const branched = onDisk.find((e) => e.id === appendedId)!;
+    expect(branched.parentId).toBe(a1);
+    expect(branched.parentId).not.toBe(u1); // sanity: not random
+  });
+
+  it("regression (pass-11): navigateBranch without summary survives the locked reload", async () => {
+    // navigateBranch persists nothing when summary is undefined or the
+    // abandoned tail is empty. Same corruption surface as branch().
+    const session = SessionManager.create("/test/cwd", tempDir);
+    const sessionFile = session.getSessionFile()!;
+
+    const u1 = session.appendMessage({
+      role: "user",
+      content: "u1",
+      timestamp: Date.now(),
+    });
+    const a1 = session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "a1" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+    session.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+    const a2 = session.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "a2" }],
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+
+    // Navigate without summary — purely in memory, nothing written.
+    session.navigateBranch(a1);
+    expect(session.getLeafId()).toBe(a1);
+
+    let appendedId: string | null = null;
+    await session.withLock(async () => {
+      expect(session.getLeafId()).toBe(a1);
+      appendedId = session.appendMessage({
+        role: "user",
+        content: "branched",
+        timestamp: Date.now(),
+      });
+    });
+
+    const onDisk = readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as SessionEntry);
+    const branched = onDisk.find((e) => e.id === appendedId)!;
+    expect(branched.parentId).toBe(a1);
+    expect(branched.parentId).not.toBe(a2);
+    void u1;
+  });
 });
