@@ -348,8 +348,8 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 
 	it("(deny) tolerates pathological deeply-nested args without infinite recursion", async () => {
-		// Build something deeper than the depth bound to verify the walker
-		// terminates and just stops descending past the cap.
+		// Walker must terminate cleanly on deep structures (no stack
+		// overflow, no hang) regardless of depth.
 		let nested: unknown = "/tmp/safe.txt";
 		for (let i = 0; i < 50; i++) {
 			nested = { wrapped: nested };
@@ -360,6 +360,112 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 		const result = await checker.check(makeCtx("custom_read", { deep: nested }));
 		// Path is benign so this should be allowed (the floor just shouldn't crash).
 		expect(result.action).toBe("allow");
+	});
+
+	it("(deny) Tier-2 pass-8 regression: protected path nested past depth 5 is still blocked", async () => {
+		// Pre-pass-8 bug: iterStringValues stopped descending at depth > 5.
+		// A knownReadOnly-whitelisted tool could smuggle /etc/shadow under
+		// {a:{b:{c:{d:{e:{f:"/etc/shadow"}}}}}} and have it allowed in
+		// deny mode. The walker is now depth-unbounded with cycle detection.
+		let nested: unknown = "/etc/shadow";
+		for (let i = 0; i < 12; i++) {
+			nested = { wrapped: nested };
+		}
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const result = await checker.check(makeCtx("custom_read", { deep: nested }));
+		expect(result.action).toBe("block");
+	});
+
+	it("(deny) tolerates a cyclic args object without infinite recursion", async () => {
+		// Defensive: the permission boundary should never deadlock or
+		// stack-overflow even on a malformed (non-JSON) argument blob.
+		// Cycle detection in iterPathLikeValues uses a WeakSet — we have
+		// to bypass makeCtx (which JSON-stringifies) since cyclic args
+		// can't be serialized to begin with.
+		const cyclic: Record<string, unknown> = { path: "/tmp/safe.txt" };
+		cyclic.self = cyclic;
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(["custom_read"]),
+		});
+		const ctx: BeforeToolCallContext = {
+			toolCall: { id: "call_1", name: "custom_read", arguments: "{}" },
+			args: cyclic,
+			context: fakeContext,
+		};
+		const result = await checker.check(ctx);
+		expect(result.action).toBe("allow");
+	});
+});
+
+describe("createPermissionChecker — Tier-2 pass-8 regression: floor does not block freeform text content", () => {
+	// Pre-pass-8 bug: walking every string leaf with `/\.env\b/` etc. meant
+	// any tool argument that mentioned `.env` or `/etc/...` in prose was
+	// blocked, even in `auto` mode. That broke legitimate write/edit calls
+	// with notes mentioning sensitive filenames, test fixtures referencing
+	// `/etc/passwd`, and oldString/newString diffs. The floor is now
+	// constrained to PATH_LIKE values (path-shape or path-named field)
+	// so freeform text passes through.
+	it("(auto) write tool with content mentioning .env in prose is allowed", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("write", {
+				path: "/tmp/note.md",
+				content: "Do not commit .env or copy ~/.ssh/id_rsa",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) edit tool with oldString/newString text mentioning /etc/ is allowed", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("edit", {
+				path: "/tmp/code.ts",
+				oldString: "// Reads from /etc/passwd in tests",
+				newString: "// Reads from /etc/passwd via fixture",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) tool with description string referencing protected paths is allowed", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("custom_tool", {
+				description: "Documents how to handle .env files and id_rsa keys",
+				count: 3,
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) tool with multi-line text containing protected path tokens is allowed", async () => {
+		// Whitespace/newlines disqualify a string from path-shape, so a
+		// content blob that happens to contain `/etc/shadow` in prose
+		// should not be blocked.
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(
+			makeCtx("write", {
+				path: "/tmp/walkthrough.md",
+				content: "Step 1: do not look at /etc/shadow.\nStep 2: never read ~/.ssh/id_rsa.\n",
+			}),
+		);
+		expect(result.action).toBe("allow");
+	});
+
+	it("(deny) write tool with protected path under `path` is still blocked (real path field)", async () => {
+		// Sanity: relaxing the floor for prose must NOT relax it for the
+		// canonical `path` field, even on built-in writes.
+		const checker = createPermissionChecker("deny");
+		const result = await checker.check(
+			makeCtx("write", { path: "/etc/shadow", content: "x" }),
+		);
+		expect(result.action).toBe("block");
+		if (result.action === "block") {
+			expect(result.reason).toMatch(/Protected path/);
+		}
 	});
 });
 

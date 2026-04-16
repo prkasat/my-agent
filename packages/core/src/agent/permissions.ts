@@ -140,29 +140,83 @@ interface PermissionChecker {
 }
 
 /**
- * Walk every string-valued leaf of the tool args (top-level, nested objects,
- * arrays). Used by the protected-path floor: a custom read tool registered
- * via knownReadOnly may store its target path under ANY field name
- * (`path`, `filePath`, `file_path`, `file`, `pathname`, `target`, …) and we
- * cannot trust naming conventions. Walking every string is the only field-
- * name-agnostic way to enforce the floor.
- *
- * Depth-bounded to defeat pathological cyclic / deeply-nested structures.
- * Cycle detection is unnecessary at depth 5.
+ * Field names commonly used to carry filesystem paths across tool APIs.
+ * Used by the protected-path floor so we don't have to guess at every
+ * MCP/plugin tool's argument schema. NOT exhaustive — the path-shape
+ * heuristic below is the backstop for fields we don't recognize.
  */
-function* iterStringValues(value: unknown, depth = 0): Generator<string> {
-	if (depth > 5) return;
+const PATH_FIELD_NAMES = new Set([
+	"path", "paths",
+	"filepath", "file_path", "filePath",
+	"pathname", "pathName",
+	"file", "files",
+	"filename", "file_name", "fileName",
+	"target", "targets",
+	"source", "sources", "src",
+	"dst", "dest", "destination",
+	"keyfile", "key_file", "keyFile",
+	"input", "inputs", "output", "outputs",
+	"directory", "dir", "folder",
+	"cwd", "root",
+]);
+
+/**
+ * Heuristic: a string is "path-shaped" if it looks like a filesystem path
+ * argument. Used to scan unknown fields without tripping on freeform text
+ * that merely mentions a protected name (e.g. `content: "Don't commit .env"`,
+ * a markdown note, an `oldString` for a code edit, etc.).
+ *
+ * Anchors only at the start of the string so prose containing the
+ * substring is left alone. Recognized leading shapes:
+ *   /abs/unix      ~/home-rel    ./rel    ../rel
+ *   C:\windows     C:/forwardslash
+ */
+const PATH_SHAPE_RE = /^(\/|~\/?|\.\.?\/|[A-Za-z]:[\\/])/;
+
+function looksLikePath(value: string): boolean {
+	if (value.length === 0 || value.length > 4096) return false;
+	if (/[\s\n\r\t]/.test(value)) return false; // Real paths don't have whitespace.
+	return PATH_SHAPE_RE.test(value);
+}
+
+/**
+ * Walk every leaf of the tool args (top-level, nested objects, arrays)
+ * and yield only strings that PLAUSIBLY represent a filesystem path —
+ * either because they live under a known path-named field, or because
+ * they are path-shaped on their own.
+ *
+ * Why both filters: we cannot trust field names (custom MCP/plugin tools
+ * use anything they like, Codex pass-7) and we cannot trust naked
+ * substring matches against `.env` / `/etc/` / `id_rsa` (they break
+ * legitimate write/edit content + test fixtures, Codex pass-8). Together
+ * they cover the actual attack surface — secret-file reads through
+ * whitelisted custom tools — without false-positives on prose.
+ *
+ * Depth is unbounded; JSON-shaped args (which is what we get from a
+ * tool-call argument blob) cannot legally contain cycles, but a
+ * defensive WeakSet shields us from a malformed Record that does.
+ */
+function* iterPathLikeValues(
+	value: unknown,
+	parentKey: string | null = null,
+	seen = new WeakSet<object>(),
+): Generator<string> {
 	if (typeof value === "string") {
-		yield value;
-		return;
-	}
-	if (Array.isArray(value)) {
-		for (const v of value) yield* iterStringValues(v, depth + 1);
+		const fromPathField = parentKey !== null && PATH_FIELD_NAMES.has(parentKey);
+		if (fromPathField || looksLikePath(value)) yield value;
 		return;
 	}
 	if (value && typeof value === "object") {
-		for (const v of Object.values(value as Record<string, unknown>)) {
-			yield* iterStringValues(v, depth + 1);
+		if (seen.has(value)) return;
+		seen.add(value);
+		if (Array.isArray(value)) {
+			// Inherit the parent key — array elements under `paths: [...]`
+			// should still be treated as path-bearing.
+			for (const v of value) yield* iterPathLikeValues(v, parentKey, seen);
+			return;
+		}
+		for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+			yield* iterPathLikeValues(v, k, seen);
 		}
 	}
 }
@@ -223,14 +277,18 @@ export function createPermissionChecker(
 			}
 
 			// === Always blocked: protected paths via tool args ===
-			// Walk every string value in the args (top-level, nested) rather
-			// than only `args.path`. A custom read tool whitelisted via
-			// knownReadOnly may carry the target under `filePath`,
-			// `file_path`, `pathname`, etc. — naming conventions are not
-			// enforceable across MCP/plugin tools, so the protected-path
-			// floor must run on every string leaf to remain unbypassable.
-			// (Codex Tier-2 pass-7 finding.)
-			for (const candidate of iterStringValues(typedArgs)) {
+			// Walk every PATH-LIKE string in the args (top-level, nested)
+			// rather than only `args.path`. A custom read tool whitelisted
+			// via knownReadOnly may carry the target under `filePath`,
+			// `file_path`, `pathname`, etc., so the floor must run on
+			// every plausible path field (Codex Tier-2 pass-7) — but it
+			// must NOT trip on prose/content that merely mentions a
+			// protected name like `.env` or `/etc/...` in a markdown
+			// note, an oldString diff, or a test fixture (Codex Tier-2
+			// pass-8). `iterPathLikeValues` filters on path-shape OR
+			// path-named field to cover the actual attack surface
+			// without false-positives on freeform text.
+			for (const candidate of iterPathLikeValues(typedArgs)) {
 				for (const pattern of PROTECTED_PATH_PATTERNS) {
 					if (pattern.test(candidate)) {
 						return { action: "block", reason: `Protected path: ${candidate}` };
