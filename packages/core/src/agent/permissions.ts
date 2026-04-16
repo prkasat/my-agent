@@ -110,12 +110,21 @@ const DESTRUCTIVE_PATTERNS = [
  * is the most robust formulation that doesn't require shell parsing.
  */
 const PROTECTED_PATH_PATTERNS = [
-	// System directories: match exact dir or descendant.
-	/(?<![A-Za-z0-9_-])etc(?![A-Za-z0-9_-])/,
-	/(?<![A-Za-z0-9_-])usr(?![A-Za-z0-9_-])/,
-	/(?<![A-Za-z0-9_-])sys(?![A-Za-z0-9_-])/,
-	/(?<![A-Za-z0-9_-])boot(?![A-Za-z0-9_-])/,
-	// Dot-directories: match exact dir or descendant.
+	// System directories: REQUIRE leading slash (or backslash on Windows)
+	// so we only match the actual root /etc, /usr, /sys, /boot — not
+	// workspace dirs that happen to share the name (`/repo/etc/config.yml`
+	// or `/workspace/usr/local.txt`) and not bare bash tokens (`echo etc`).
+	// The lookbehind on the slash makes sure no path-segment char precedes
+	// it, so `/repo/etc` (preceded by `o`) doesn't slip through. Pass-13.
+	/(?<![A-Za-z0-9_-])[/\\]etc(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])[/\\]usr(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])[/\\]sys(?![A-Za-z0-9_-])/,
+	/(?<![A-Za-z0-9_-])[/\\]boot(?![A-Za-z0-9_-])/,
+	// Dot-directories: match exact dir or descendant. Kept loose by name
+	// because `.ssh`/`.aws`/`.gnupg` directories are sensitive regardless
+	// of where they live — a workspace `.ssh/` dir is unusual enough that
+	// the false-positive is acceptable in exchange for catching real
+	// home-dir matches without tracking $HOME.
 	/(?<![A-Za-z0-9_-])\.ssh(?![A-Za-z0-9_-])/,
 	/(?<![A-Za-z0-9_-])\.aws(?![A-Za-z0-9_-])/,
 	/(?<![A-Za-z0-9_-])\.gnupg(?![A-Za-z0-9_-])/,
@@ -194,7 +203,7 @@ const PATH_FIELD_NAMES = new Set([
  * false-positive risk because path-bearing-key gating only matters when
  * the value isn't already path-shaped on its own.
  */
-const PATH_KEY_TOKEN_RE = /(?:^|[a-z_])(path|file|filename|dir|directory|folder|key|cred|credential|secret)s?$/i;
+const PATH_KEY_TOKEN_RE = /(?:^|[a-z_-])(path|file|filename|dir|directory|folder|key|cred|credential|secret)s?$/i;
 
 function isPathBearingKey(key: string | null): boolean {
 	if (key === null) return false;

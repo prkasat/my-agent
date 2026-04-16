@@ -399,6 +399,101 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 	});
 });
 
+describe("createPermissionChecker — Tier-2 pass-13 regression: kebab-case keys + system-dir over-block", () => {
+	// Pre-pass-13 issue 1: PATH_KEY_TOKEN_RE only recognized camelCase
+	// (`configPath`) and snake_case (`config_path`) but not kebab-case
+	// (`config-path`, `secret-file`, `private-key`). Kebab-case is the
+	// MCP/JSON convention, so this was a real Tier-2-scope bypass for
+	// MCP-style tool args.
+	const kebabCases: Array<[string, string]> = [
+		["secret-file", "My Secrets/credentials.json"],
+		["private-key", "Secrets Folder/id_rsa"],
+		["config-path", "Cloud Config/.env.local"],
+		["aws-credentials", "/Users/x/.aws/credentials.json"],
+		["ssh-key", "config/id_ed25519"],
+	];
+
+	for (const [field, value] of kebabCases) {
+		it(`(deny) blocks knownReadOnly tool with kebab-case "${field}"`, async () => {
+			const checker = createPermissionChecker("deny", {
+				knownReadOnly: new Set(["custom_read"]),
+			});
+			const result = await checker.check(makeCtx("custom_read", { [field]: value }));
+			expect(result.action).toBe("block");
+		});
+	}
+
+	// Pre-pass-13 issue 2: bare `etc`/`usr`/`sys`/`boot` patterns matched
+	// anywhere a token-boundary surrounded the substring, so workspace
+	// paths and harmless bash text got blocked even though they aren't
+	// the actual system root dirs.
+	it("(auto) does NOT block workspace path /repo/etc/config.yml", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("write", {
+			path: "/repo/etc/config.yml",
+			content: "x",
+		}));
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) does NOT block workspace path /workspace/usr/local.txt", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("write", {
+			path: "/workspace/usr/local.txt",
+			content: "x",
+		}));
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) does NOT block bash command 'echo etc'", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("bash", { command: "echo etc" }));
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) does NOT block bash command 'printf usr'", async () => {
+		const checker = createPermissionChecker("auto");
+		const result = await checker.check(makeCtx("bash", { command: "printf usr" }));
+		expect(result.action).toBe("allow");
+	});
+
+	it("(auto) does NOT block path containing 'sys' or 'boot' as a non-root segment", async () => {
+		const checker = createPermissionChecker("auto");
+		for (const path of [
+			"/repo/sys/test.txt",
+			"/workspace/boot/init.sh",
+			"/home/user/code/sys/file.txt",
+		]) {
+			const result = await checker.check(makeCtx("write", { path, content: "x" }));
+			expect(result.action).toBe("allow");
+		}
+	});
+
+	it("(deny) STILL blocks the actual system /etc, /usr, /sys, /boot", async () => {
+		// Sanity: the over-block fix must not relax the actual root dirs.
+		const checker = createPermissionChecker("deny", {
+			knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+		});
+		for (const path of ["/etc/shadow", "/usr/local/bin", "/sys/kernel", "/boot/grub"]) {
+			const result = await checker.check(makeCtx("read", { path }));
+			expect(result.action).toBe("block");
+		}
+	});
+
+	it("(auto) STILL blocks bash commands targeting actual system dirs", async () => {
+		const checker = createPermissionChecker("auto");
+		for (const command of [
+			"cat /etc/shadow",
+			"ls /usr/bin",
+			"find /sys/kernel",
+			`cat "/boot/grub.cfg"`,
+		]) {
+			const result = await checker.check(makeCtx("bash", { command }));
+			expect(result.action).toBe("block");
+		}
+	});
+});
+
 describe("createPermissionChecker — Tier-2 pass-12 regression: suffix-based path-bearing key detection", () => {
 	// Pre-pass-12 bug: PATH_FIELD_NAMES was a fixed allowlist (path,
 	// filePath, file_path, etc.) and didn't recognize camelCase suffix
