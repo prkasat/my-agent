@@ -15,8 +15,11 @@
 
 import {
   appendFileSync,
+  closeSync,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
@@ -24,6 +27,7 @@ import {
   truncateSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -743,30 +747,62 @@ export class SessionManager {
   }
 
   /**
-   * Rewrite the entire session file atomically (temp file + rename).
+   * Rewrite the entire session file atomically AND durably.
    *
-   * A direct writeFileSync truncates the live file before writing, so
-   * an ENOSPC/EIO mid-write would leave a half-written or zero-length
-   * session. The temp-file + rename strategy keeps the original file
-   * intact until the new bytes are fully written and fsynced; the
-   * rename is the atomic commit point. On most POSIX filesystems
-   * rename is atomic for files in the same directory.
+   * The pattern: write content to a sibling temp file, fsync the
+   * temp file's bytes to disk, rename atomically into place, then
+   * fsync the parent directory so the new directory entry survives
+   * a crash. Without fsync, the OS may buffer writes for several
+   * seconds; a power loss in that window can lose the new bytes
+   * even though writeFileSync has returned. The rename gives
+   * atomicity (the live file is never partially overwritten); the
+   * fsyncs give durability (the change is flushed to stable
+   * storage before we report success).
    *
    * Used by first-flush, navigation rollback, label-promotion
-   * rewrite, and any other call that snapshots full state.
-   * Codex labels pass-7 finding.
+   * rewrite, and any other path that snapshots full state.
+   * Codex labels pass-7 + pass-8 findings.
    */
   private rewriteFile(): void {
     if (!this.persist || !this.sessionFile) return;
     const content = this.fileEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
     const tmpPath = `${this.sessionFile}.tmp.${process.pid}.${Date.now()}`;
+    let fd = -1;
     try {
-      writeFileSync(tmpPath, content);
+      fd = openSync(tmpPath, "w");
+      writeSync(fd, content);
+      // Flush this file's contents+metadata to stable storage
+      // before the rename, so the new bytes are durable even if
+      // the system crashes immediately after the rename returns.
+      fsyncSync(fd);
+      closeSync(fd);
+      fd = -1;
       renameSync(tmpPath, this.sessionFile);
+      // Fsync the parent directory so the new directory entry
+      // (the rename) survives a crash. Without this, the rename
+      // can be undone by a crash even though the file's bytes are
+      // safely on disk. Some filesystems (e.g. tmpfs) don't
+      // support directory fsync; treat EINVAL/ENOTSUP as a no-op.
+      try {
+        const dirFd = openSync(this.sessionFile.substring(0, this.sessionFile.lastIndexOf("/")) || ".", "r");
+        try {
+          fsyncSync(dirFd);
+        } finally {
+          closeSync(dirFd);
+        }
+      } catch (dirErr) {
+        const code = (dirErr as NodeJS.ErrnoException).code;
+        if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR") {
+          throw dirErr;
+        }
+      }
     } catch (err) {
-      // Best-effort cleanup of the temp file on failure; swallow
-      // unlink errors (the temp may not exist if writeFileSync threw
-      // before creating it).
+      // Best-effort cleanup of the temp file on failure.
+      if (fd !== -1) {
+        try {
+          closeSync(fd);
+        } catch {}
+      }
       try {
         unlinkSync(tmpPath);
       } catch {}
@@ -1132,27 +1168,33 @@ export class SessionManager {
    */
   appendLabelChange(targetId: string, label: string | undefined): string {
     // Refuse to write when the file changed externally since our
-    // last sync. The `displaces` field encoded in the new entry is
-    // computed from in-memory ownership; if a peer process already
-    // moved the same label, our `displaces` would name the wrong
-    // (possibly-already-cleared) target and the durable history
-    // would lose the right displacement edge that forkSession
-    // relies on. Forces the caller to either reload or wrap the
-    // call in withLock (which reloads on entry).
-    // Codex labels pass-7 finding.
+    // last sync, OR when the file disappeared. The `displaces` field
+    // we encode below derives from in-memory ownership; a stale
+    // snapshot would name the wrong (possibly-already-cleared)
+    // target and lose the displacement edge forkSession relies on.
+    // For full safety against TOCTOU between this preflight and the
+    // commit, the caller should wrap label writes in withLock(),
+    // which both serializes against peer processes and reloads
+    // from disk on entry. The preflight here catches the common
+    // single-process and "user forgot the lock" cases.
+    // Codex labels pass-7 + pass-8 findings.
     if (this.persist && this.sessionFile && this.lastLoadedMtimeMs !== null) {
+      let onDiskMtime: number | undefined;
       try {
-        const onDisk = statSync(this.sessionFile).mtimeMs;
-        if (onDisk > this.lastLoadedMtimeMs) {
+        onDiskMtime = statSync(this.sessionFile).mtimeMs;
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
           throw new Error(
-            "Session file changed externally since last load; reload or wrap appendLabelChange in withLock before writing labels",
+            "Session file disappeared since last load; cannot safely write labels (reload or recreate the session)",
           );
         }
-      } catch (err) {
-        // Re-throw the freshness error, but swallow ENOENT etc.
-        if (err instanceof Error && err.message.startsWith("Session file changed externally")) {
-          throw err;
-        }
+        throw err;
+      }
+      if (onDiskMtime > this.lastLoadedMtimeMs) {
+        throw new Error(
+          "Session file changed externally since last load; reload or wrap appendLabelChange in withLock before writing labels",
+        );
       }
     }
 

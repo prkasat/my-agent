@@ -1371,6 +1371,18 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass8-fix: refuses label write when session file disappeared", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(u, "marker");
+      const sessionFile = manager.getSessionFile()!;
+
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.unlinkSync(sessionFile);
+
+      expect(() => manager.appendLabelChange(u, "marker2")).toThrow(/disappeared/);
+    });
+
     it("Codex-pass7-fix: rewriteFile uses temp+rename atomicity", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
