@@ -566,6 +566,13 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
 
 /**
  * Generate a compaction summary using the LLM.
+ *
+ * `options.onUsage` is invoked once with the summary call's `usage` (if
+ * the provider reports any) so a caller wiring a budget cap can charge
+ * the side LLM call against the same session total. Without this hook
+ * the summarization call would spend outside the cap and a session
+ * sitting near the limit could silently overdraw via auto-compaction.
+ * Codex budget-fix pass-6 finding.
  */
 export async function generateCompactionSummary(
   messages: AgentMessage[],
@@ -575,6 +582,7 @@ export async function generateCompactionSummary(
     previousSummary?: string;
     apiKey?: string;
     signal?: AbortSignal;
+    onUsage?: (usage: Usage) => void;
   }
 ): Promise<string> {
   const llmMessages = defaultConvertToLlm(messages);
@@ -621,6 +629,9 @@ export async function generateCompactionSummary(
   const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
   const result: AssistantMessage = await stream.result();
+  if (result.usage && options?.onUsage) {
+    options.onUsage(result.usage);
+  }
   // Defensive layer (Codex pass-8): even with input escape and the
   // "summarize-do-not-continue" system prompt, the LLM CAN echo back
   // attacker wrapper tags from the transcript verbatim. Persisting
@@ -763,6 +774,19 @@ export function evaluateCompaction(
 // Main Compaction Function
 // ============================================================================
 
+/**
+ * Minimal cost-tracker shape consumed by compaction. Defined here as
+ * a structural type so `compact()` does not have to import the full
+ * CostTracker class (which would create a layering loop with
+ * cost-tracker.ts importing helpers from this file). Any object with
+ * these methods qualifies — production code passes the live tracker;
+ * tests can pass a stub.
+ */
+export interface CompactionCostHook {
+  recordTurn: (model: Model, usage: Usage, turnIndex: number) => void;
+  isBudgetExceeded: () => boolean;
+}
+
 export interface CompactOptions {
   /** Minimum tokens of recent context to keep */
   keepRecentTokens: number;
@@ -785,6 +809,17 @@ export interface CompactOptions {
    * findCutPoint will return 0 and the auto-compactor will livelock.
    */
   forceProgress?: boolean;
+  /**
+   * Cost tracker that the summarization LLM call should be charged
+   * against. When omitted, the call is unmetered (legacy behavior).
+   * When provided:
+   *   - the summary call's `usage` is passed through `recordTurn` so
+   *     it counts toward `maxCostPerSession`,
+   *   - `isBudgetExceeded()` is checked before the agent loop is
+   *     allowed to keep running on the result.
+   * Codex budget-fix pass-6 finding.
+   */
+  costTracker?: CompactionCostHook;
 }
 
 /**
@@ -869,7 +904,11 @@ export async function compact(
   // one we discovered in the message list (covers session reloads).
   const effectivePreviousSummary = options.previousSummary ?? inferredPreviousSummary;
 
-  // Generate summary (using filtered messages to avoid duplication)
+  // Generate summary (using filtered messages to avoid duplication).
+  // Charge the summarization LLM call against the session budget when
+  // a tracker is wired in — otherwise this call would spend outside
+  // `maxCostPerSession` and a near-budget session could silently
+  // overdraw via auto-compaction. Codex budget-fix pass-6 finding.
   const summary = await generateCompactionSummary(
     filteredToSummarize,
     options.model,
@@ -878,6 +917,15 @@ export async function compact(
       previousSummary: effectivePreviousSummary,
       apiKey: options.apiKey,
       signal: options.signal,
+      onUsage: options.costTracker
+        ? (usage) => {
+            // Use turnIndex -1 as a sentinel for "ancillary spend"
+            // (compaction/branch-summary), distinct from numbered
+            // user-facing turns. The tracker doesn't dedupe by
+            // turnIndex, so this is purely for the turnCosts log.
+            options.costTracker!.recordTurn(options.model, usage, -1);
+          }
+        : undefined,
     }
   );
 

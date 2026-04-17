@@ -1309,6 +1309,76 @@ describe("compact: priorCumulativeCost snapshot", () => {
     expect(result.details.priorCumulativeCost!).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("charges the summarization LLM call against the cost tracker (no unmetered side spend)", async () => {
+    // Codex budget-fix pass-6 CRITICAL: the summarization LLM call
+    // must contribute to maxCostPerSession. Without this, a session
+    // sitting just under the cap can silently overdraw via
+    // auto-compaction's hidden LLM call.
+    const recorded: { model: any; usage: any; turnIndex: number }[] = [];
+    const tracker = {
+      recordTurn: (m: any, u: any, t: number) => {
+        recorded.push({ model: m, usage: u, turnIndex: t });
+      },
+      isBudgetExceeded: () => false,
+    };
+
+    // Stream that returns a summary AND emits provider usage.
+    function summaryStreamFn() {
+      const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+        (e) => e.type === "done",
+        (e) => {
+          if (e.type === "done") return e.message;
+          throw new Error("unexpected");
+        },
+      );
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "summary text" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", message });
+        stream.push({ type: "done", message });
+      });
+      return stream;
+    }
+
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a1 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.001 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a3 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.001 },
+      },
+    ];
+
+    await compact(messages, {
+      keepRecentTokens: 50,
+      model: fakeModel,
+      streamFn: summaryStreamFn as any,
+      costTracker: tracker,
+    });
+
+    // Tracker MUST have been charged for the summary call.
+    expect(recorded.length).toBe(1);
+    expect(recorded[0].usage.cost).toBe(0.0123);
+    // Sentinel turnIndex marks ancillary spend.
+    expect(recorded[0].turnIndex).toBe(-1);
+  });
+
   it("excludes aborted and error assistant turns from the snapshot", async () => {
     // Aborted/error assistant turns may carry phantom usage.cost
     // values (the provider was mid-stream when the call ended). The

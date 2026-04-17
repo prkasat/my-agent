@@ -13,6 +13,7 @@ import {
   compact,
   effectiveReserveTokens,
   measureContextTokens,
+  type CompactionCostHook,
   type CompactionResult,
 } from "./compaction.js";
 
@@ -62,6 +63,13 @@ export interface AutoCompactorOptions {
    * - "throw": Re-throw the error to the caller
    */
   onError?: "skip" | "throw";
+  /**
+   * Cost tracker that the compaction summarization LLM call should be
+   * charged against. When omitted, the auto-compactor's summary call
+   * is unmetered and a near-budget session can silently overdraw via
+   * auto-compaction. Codex budget-fix pass-6 finding.
+   */
+  costTracker?: CompactionCostHook;
 }
 
 /**
@@ -181,6 +189,7 @@ export function createAutoCompactor(
         apiKey,
         signal: effectiveSignal,
         forceProgress,
+        costTracker: options.costTracker,
       });
     } catch (err) {
       if (errorPolicy === "throw") {

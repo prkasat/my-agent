@@ -7,7 +7,7 @@
  */
 
 import type { AgentMessage } from "../agent/types.js";
-import type { AssistantMessage, Message, Model, StreamFunction } from "@my-agent/ai";
+import type { AssistantMessage, Message, Model, StreamFunction, Usage } from "@my-agent/ai";
 import type { BranchSummaryDetails, SessionEntry, MessageEntry } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
 
@@ -188,6 +188,14 @@ export interface GenerateBranchSummaryOptions {
   apiKey?: string;
   /** Abort signal */
   signal?: AbortSignal;
+  /**
+   * Invoked once with the summary call's `usage` so a caller wiring
+   * a budget cap can charge the side LLM call against the same
+   * session total. Without this, branch-summary spend escapes the
+   * `maxCostPerSession` enforcement entirely. Codex budget-fix pass-6
+   * finding.
+   */
+  onUsage?: (usage: Usage) => void;
 }
 
 /**
@@ -269,6 +277,9 @@ export async function generateBranchSummary(
   const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
   const result: AssistantMessage = await stream.result();
+  if (result.usage && options.onUsage) {
+    options.onUsage(result.usage);
+  }
   // Defensive layer (Codex pass-8): even with the input escape and the
   // wrapper-only system prompt, the LLM CAN echo back attacker
   // wrapper tags from the transcript verbatim. Persisting that text and

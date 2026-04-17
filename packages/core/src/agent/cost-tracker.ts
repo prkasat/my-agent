@@ -100,6 +100,18 @@ export class CostTracker {
 		this.costs.totalCacheWriteTokens += cacheWrite;
 		this.costs.totalCost += cost;
 
+		// Stamp the computed cost back onto the assistant message's
+		// usage so cross-process resume reads an authoritative value.
+		// Without this, `loadFromMessages` re-prices historical
+		// token-only turns against the current session's model, and a
+		// model switch between runs would let prior spend get re-billed
+		// at the new (possibly cheaper or zero-cost) model — bypassing
+		// the cap. Pi-Mono persists per-turn cost the same way.
+		// Codex budget-fix pass-6 finding.
+		if (!isValidCost(usage.cost)) {
+			(usage as { cost?: number }).cost = cost;
+		}
+
 		this.costs.turnCosts.push({
 			turnIndex,
 			model: model.id,

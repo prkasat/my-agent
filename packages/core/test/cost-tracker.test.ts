@@ -272,6 +272,54 @@ describe("CostTracker", () => {
 		expect(tracker.getSummary().totalCost).toBeGreaterThan(0);
 	});
 
+	it("recordTurn stamps computed cost back onto usage so resume survives a model switch", () => {
+		// Codex budget-fix pass-6 HIGH: a token-only assistant turn
+		// produced under model A must replay at model A's price even if
+		// the session later switched to a cheaper or free model B. The
+		// only way to guarantee that across a process restart is to
+		// persist the computed cost on the assistant message itself.
+		// recordTurn should mutate `usage.cost` in place when it isn't
+		// already populated.
+		const tracker = new CostTracker();
+		const usage: { inputTokens: number; outputTokens: number; cost?: number } = {
+			inputTokens: 1_000_000,
+			outputTokens: 100_000,
+			// no cost field — token-only provider
+		};
+		tracker.recordTurn(PRICED_MODEL, usage as Usage, 0);
+		// 1M * $3 + 0.1M * $15 = $3 + $1.5 = $4.50
+		expect(usage.cost).toBeCloseTo(4.5, 6);
+	});
+
+	it("recordTurn does not overwrite an existing valid usage.cost", () => {
+		// If the upstream already supplied an authoritative cost (e.g.
+		// OpenRouter's per-call dollar amount), the mutation must not
+		// clobber it with the per-million estimate.
+		const tracker = new CostTracker();
+		const usage: { inputTokens: number; outputTokens: number; cost: number } = {
+			inputTokens: 1_000_000,
+			outputTokens: 100_000,
+			cost: 0.0042, // upstream-authoritative
+		};
+		tracker.recordTurn(PRICED_MODEL, usage as Usage, 0);
+		expect(usage.cost).toBe(0.0042);
+	});
+
+	it("recordTurn replaces a malformed usage.cost (NaN) with the valid per-million estimate", () => {
+		// Defense-in-depth: a corrupted/forged `cost: NaN` must not
+		// survive through to disk where it would poison future replays.
+		// The mutation overwrites it with the validated computed value.
+		const tracker = new CostTracker();
+		const usage: { inputTokens: number; outputTokens: number; cost: number } = {
+			inputTokens: 1_000_000,
+			outputTokens: 100_000,
+			cost: Number.NaN,
+		};
+		tracker.recordTurn(PRICED_MODEL, usage as Usage, 0);
+		expect(Number.isFinite(usage.cost)).toBe(true);
+		expect(usage.cost).toBeCloseTo(4.5, 6);
+	});
+
 	it("loadFromMessages skips aborted and error assistant messages", () => {
 		const tracker = new CostTracker();
 		const messages = [

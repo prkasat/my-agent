@@ -472,6 +472,62 @@ describe("regression A4 — repeated-compaction double-count", () => {
 	});
 });
 
+describe("Codex pass-6: costTracker plumbing", () => {
+	it("auto-compactor charges the summarization call against the supplied costTracker", async () => {
+		// Codex budget-fix pass-6 CRITICAL: auto-compaction's hidden
+		// LLM call must contribute to maxCostPerSession. Verify the
+		// option propagates from createAutoCompactor through compact()
+		// through generateCompactionSummary and back into the tracker.
+		const recorded: { usage: any; turnIndex: number }[] = [];
+		const tracker = {
+			recordTurn: (_m: any, u: any, t: number) => recorded.push({ usage: u, turnIndex: t }),
+			isBudgetExceeded: () => false,
+		};
+
+		// Stream that returns a summary AND emits provider usage.
+		function summaryStream() {
+			const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+				(e) => e.type === "done",
+				(e) => {
+					if (e.type === "done") return e.message;
+					throw new Error("unexpected");
+				},
+			);
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "summary" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+			};
+			queueMicrotask(() => {
+				stream.push({ type: "start", message });
+				stream.push({ type: "done", message });
+			});
+			return stream;
+		}
+
+		const compactor = createAutoCompactor({
+			streamFn: summaryStream as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			costTracker: tracker,
+		});
+
+		const ctx: AgentContext = {
+			messages: buildOversizedMessages(20),
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(ctx);
+
+		// Tracker recorded the summary call's usage.
+		expect(recorded.length).toBe(1);
+		expect(recorded[0].usage.cost).toBe(0.0123);
+	});
+});
+
 describe("createAutoCompactorWithPersistence", () => {
 	function fakeSessionManager(mappingLength: number) {
 		return {

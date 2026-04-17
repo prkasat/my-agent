@@ -890,6 +890,72 @@ describe("Agent Loop", () => {
 		expect(end?.error).toMatch(/budget/i);
 	});
 
+	it("re-checks budget after transformContext returns (so a side LLM spend stops the next turn)", async () => {
+		// Codex budget-fix pass-6: the auto-compactor's summarization
+		// call can be wired to charge against the same tracker. If
+		// that summary spend pushes the session past cap, the next
+		// LLM turn MUST NOT happen. Simulate by having transformContext
+		// itself charge enough cost to exceed the cap.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001);
+
+		let llmCalls = 0;
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "should not run" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const wrappedLlm = ((...args: any[]) => {
+			llmCalls++;
+			return (llm as any)(...args);
+		}) as any;
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: wrappedLlm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+				transformContext: (ctx) => {
+					// Simulate auto-compaction's side LLM call charging.
+					tracker.recordTurn(
+						{ id: "test", provider: "test", cost: { inputPerMillion: 0, outputPerMillion: 0 } } as any,
+						{ inputTokens: 100, outputTokens: 50, cost: 0.999 },
+						-1,
+					);
+					return ctx;
+				},
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		// The main LLM must NOT have been called — budget killed the loop.
+		expect(llmCalls).toBe(0);
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+	});
+
 	it("ends the loop with reason=error when the cost budget is exceeded", async () => {
 		const { CostTracker } = await import("../src/agent/cost-tracker.js");
 		const tracker = new CostTracker(0.001); // tiny budget

@@ -341,6 +341,19 @@ async function streamAssistantResponse(
 			if (signal.aborted) return null;
 			throw err;
 		}
+		// transformContext can spend (e.g. an auto-compactor wired to the
+		// same cost tracker). Re-check the cap before issuing the next
+		// LLM call so the summary's spend can't push us past the cap and
+		// then proceed with a follow-up turn that puts us further over.
+		// Codex budget-fix pass-6 finding.
+		if (config.costTracker?.isBudgetExceeded?.()) {
+			agentStream.push({
+				type: "agent_end",
+				reason: "error",
+				error: "Cost budget exceeded for this session",
+			});
+			return null;
+		}
 	}
 
 	// Convert to LLM-compatible messages (filters out custom messages)
