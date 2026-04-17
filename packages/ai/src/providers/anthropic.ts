@@ -141,22 +141,37 @@ function convertMessages(context: Context, enableCaching: boolean): AnthropicMes
 					blocks.push({ type: "text", text: block.text });
 				} else if (block.type === "thinking") {
 					// Anthropic requires thinking blocks to be replayed
-					// verbatim with their signature. We don't currently
-					// persist signatures, so include the text only —
-					// Anthropic's API will accept this for non-extended-
-					// thinking sessions and tolerate it for follow-ups
-					// where tool_use comes after.
-					blocks.push({ type: "thinking", thinking: block.text, signature: "" });
+					// verbatim WITH their original signature. If we don't
+					// have a signature (e.g. the message was produced by
+					// another provider, or by us before signature
+					// persistence existed), DROP the block — sending
+					// `signature: ""` makes the API reject the entire
+					// request with a 400, breaking the conversation.
+					// (Codex Tier-3 pass-2 finding.)
+					if (block.signature) {
+						blocks.push({
+							type: "thinking",
+							thinking: block.text,
+							signature: block.signature,
+						});
+					}
 				} else if (block.type === "tool_call") {
-					let parsedInput: unknown = {};
-					try {
-						parsedInput = block.arguments ? JSON.parse(block.arguments) : {};
-					} catch {
-						// Anthropic requires `input` to be a JSON object —
-						// fall back to {} on malformed args rather than
-						// crashing the stream. The model will see the
-						// followup tool_result and can correct course.
-						parsedInput = {};
+					let parsedInput: Record<string, unknown> = {};
+					if (block.arguments) {
+						try {
+							const parsed = JSON.parse(block.arguments);
+							// Anthropic requires `input` to be a JSON OBJECT.
+							// Reject arrays, null, scalars — replaying any of
+							// those would 400 the next request and durably
+							// break the conversation. Fall back to {} so the
+							// follow-up tool_result still wires up correctly.
+							// (Codex Tier-3 pass-2 finding.)
+							if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+								parsedInput = parsed as Record<string, unknown>;
+							}
+						} catch {
+							// Malformed JSON — leave parsedInput as {}.
+						}
 					}
 					blocks.push({
 						type: "tool_use",
@@ -419,7 +434,14 @@ async function parseSSEStream(
 			if (block.type === "text") {
 				finalContent.push({ type: "text", text: block.text });
 			} else if (block.type === "thinking") {
-				finalContent.push({ type: "thinking", text: block.text });
+				const thinkingBlock: { type: "thinking"; text: string; signature?: string } = {
+					type: "thinking",
+					text: block.text,
+				};
+				if (block.thinkingSignature) {
+					thinkingBlock.signature = block.thinkingSignature;
+				}
+				finalContent.push(thinkingBlock);
 			} else if (block.type === "tool_use") {
 				// Prefer streamed partial_json, fall back to the seeded
 				// input from content_block_start when no deltas arrived

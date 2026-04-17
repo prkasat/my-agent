@@ -145,7 +145,11 @@ describe("anthropic provider", () => {
 		const msg = await stream.result();
 
 		expect(msg.content).toHaveLength(2);
-		expect(msg.content[0]).toEqual({ type: "thinking", text: "let me think about it" });
+		expect(msg.content[0]).toEqual({
+			type: "thinking",
+			text: "let me think about it",
+			signature: "sig123",
+		});
 		expect(msg.content[1]).toEqual({ type: "text", text: "Done." });
 	});
 
@@ -442,6 +446,123 @@ describe("anthropic provider", () => {
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
 		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
 		expect(assistantMsg.content[0].input).toEqual({});
+	});
+
+	it("Tier-3 pass-2 regression: thinking signature round-trips on replay", async () => {
+		// Pre-pass-2 bug: convertMessages hardcoded `signature: ""` for
+		// any prior thinking block. Anthropic requires the original
+		// signature to be replayed verbatim — sending an empty one
+		// breaks the conversation on the next request.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "think" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", text: "the model thought", signature: "real-sig-bytes" },
+						{ type: "text", text: "answered" },
+					],
+				},
+				{ role: "user", content: "again" },
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		expect(assistantMsg.content[0]).toEqual({
+			type: "thinking",
+			thinking: "the model thought",
+			signature: "real-sig-bytes",
+		});
+	});
+
+	it("Tier-3 pass-2 regression: thinking blocks WITHOUT signatures are dropped from replay (not sent with empty signature)", async () => {
+		// Defensive: a message produced by another provider, or by us
+		// before signature persistence existed, won't have a signature.
+		// Sending `signature: ""` makes the API 400 — drop the block
+		// instead so the conversation continues.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					content: [
+						{ type: "thinking", text: "no signature here" },
+						{ type: "text", text: "answered" },
+					],
+				},
+				{ role: "user", content: "again" },
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		// Only the text block should remain; thinking is dropped.
+		expect(assistantMsg.content).toEqual([{ type: "text", text: "answered" }]);
+	});
+
+	it("Tier-3 pass-2 regression: non-object tool_call arguments fall back to {} on replay", async () => {
+		// Anthropic requires `tool_use.input` to be a JSON OBJECT.
+		// Pre-pass-2 we passed through any parseable JSON, so a model
+		// emitting `[]`, `null`, or a scalar would 400 the next request
+		// when the assistant message + tool_result was replayed.
+		const events = [
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		];
+		// Fresh Response per call — ReadableStream can only be consumed once.
+		const fetchSpy = vi.fn().mockImplementation(async () => mockResponse(sse(events)));
+		globalThis.fetch = fetchSpy;
+
+		const cases = ["[]", "null", "123", '"a string"', "true"];
+		for (const args of cases) {
+			fetchSpy.mockClear();
+			await createAnthropicStream()(MODEL, {
+				messages: [
+					{ role: "user", content: "x" },
+					{
+						role: "assistant",
+						content: [{ type: "tool_call", id: "t1", name: "x", arguments: args }],
+					},
+					{
+						role: "toolResult",
+						toolCallId: "t1",
+						toolName: "x",
+						content: [{ type: "text", text: "" }],
+					},
+				],
+			}).result();
+
+			const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+			const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+			expect(assistantMsg.content[0].input).toEqual({});
+		}
 	});
 
 	it("Tier-3 pass-1 regression: tool_use input from content_block_start when no input_json_delta arrives", async () => {

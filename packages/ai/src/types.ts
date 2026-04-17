@@ -19,6 +19,14 @@ export interface ImageContent {
 export interface ThinkingContent {
 	type: "thinking";
 	text: string;
+	/**
+	 * Provider-specific signature/proof bytes for the thinking block.
+	 * Anthropic requires this to be replayed verbatim with prior thinking
+	 * blocks in multi-turn extended-thinking sessions; without it, the
+	 * follow-up request returns a 400. Optional because non-Anthropic
+	 * providers don't produce one.
+	 */
+	signature?: string;
 }
 
 export interface ToolCallContent {
