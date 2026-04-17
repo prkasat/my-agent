@@ -313,14 +313,16 @@ function mapStopReason(reason: string | null | undefined): "stop" | "length" | "
 			return "length";
 		case "end_turn":
 		case "stop_sequence":
-		case "pause_turn":
 			return "stop";
 		default:
-			// Fail closed: refusal / sensitive / any future failure
-			// stop_reason gets surfaced as `error` rather than silently
-			// downgraded to `stop`. The agent loop halts on `error`,
-			// so the user sees the failure instead of a blank turn.
-			// Codex Tier-3 pass-7 finding.
+			// Fail closed for everything else:
+			// - refusal / sensitive (safety failures)
+			// - pause_turn (continuation signal — model wants to be
+			//   resubmitted; the agent loop does not yet auto-continue,
+			//   so surfacing as error is better than silently truncating
+			//   the user's response)
+			// - any future stop_reason
+			// Codex Tier-3 pass-7 + pass-8 findings.
 			return "error";
 	}
 }
@@ -380,6 +382,12 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 				const budget = thinkingBudget(options.thinkingLevel);
 				if (budget !== null && model.supportsThinking) {
 					body.thinking = { type: "enabled", budget_tokens: budget };
+					// Anthropic rejects `temperature` when extended
+					// thinking is enabled; suppress it so a caller that
+					// passed both options doesn't get a deterministic
+					// 400. Matches the Pi-Mono baseline.
+					// Codex Tier-3 pass-8 finding.
+					delete body.temperature;
 					// Anthropic requires max_tokens > budget_tokens.
 					// Honor an explicit caller cap rather than silently
 					// inflating it: a caller asking for maxTokens=1000
@@ -617,10 +625,10 @@ async function parseSSEStream(
 				stopReason = mapStopReason(delta.stop_reason);
 				sawTerminal = true;
 				if (stopReason === "error") {
-					stream.push({
-						type: "error",
-						error: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`,
-					});
+					const errMsg = delta.stop_reason === "pause_turn"
+						? "anthropic paused the turn for continuation; auto-continue is not yet implemented"
+						: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`;
+					stream.push({ type: "error", error: errMsg });
 					errored = true;
 					return;
 				}

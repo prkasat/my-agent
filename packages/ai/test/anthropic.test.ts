@@ -1178,7 +1178,12 @@ describe("anthropic provider", () => {
 		await expect(stream.result()).rejects.toThrow(/some_future_failure_mode|unrecoverable/i);
 	});
 
-	it("treats pause_turn as a normal stop", async () => {
+	// Pass-8 regressions. pause_turn previously mapped to plain
+	// "stop", which made the agent loop terminate with a partial
+	// answer instead of recognizing the model wanted to continue.
+	// Until auto-continue is wired in, surface it as an error so the
+	// caller sees the truncation rather than a fake successful end.
+	it("surfaces pause_turn as an error with continuation hint", async () => {
 		const body = sse([
 			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
 			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
@@ -1189,8 +1194,53 @@ describe("anthropic provider", () => {
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
 
-		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
-		expect(msg.stopReason).toBe("stop");
-		expect(msg.content).toEqual([{ type: "text", text: "partial" }]);
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/paused|continuation/i);
+	});
+
+	// Anthropic rejects `temperature` when extended thinking is
+	// enabled. Drop it transparently rather than letting the request
+	// 400 deterministically.
+	it("drops temperature when thinking is enabled", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
+			temperature: 0.7,
+			thinkingLevel: "low",
+		}).result();
+
+		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		expect(sent.thinking).toEqual({ type: "enabled", budget_tokens: 4096 });
+		expect(sent).not.toHaveProperty("temperature");
+	});
+
+	it("forwards temperature when thinking is disabled", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
+			temperature: 0.42,
+		}).result();
+
+		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		expect(sent.temperature).toBe(0.42);
+		expect(sent).not.toHaveProperty("thinking");
 	});
 });
