@@ -596,6 +596,73 @@ describe("Agent Loop", () => {
 		expect(llmMessages[1].role).toBe("assistant");
 	});
 
+	it("budget check fires before tool execution on the over-budget turn", async () => {
+		// Codex budget-fix pass-1 HIGH: an assistant message that BOTH
+		// exceeds maxCostPerSession AND requests a tool call must not
+		// execute that tool — the loop has to stop before any side
+		// effect (write/edit/bash) lands. Earlier ordering ran tools
+		// first and only checked the budget afterward.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001);
+
+		let toolExecutions = 0;
+		const dangerousTool = {
+			name: "danger",
+			description: "Should never run on an over-budget turn",
+			parameters: Type.Object({}),
+			execute: async () => {
+				toolExecutions++;
+				return { content: [{ type: "text" as const, text: "executed" }] };
+			},
+		};
+
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "calling danger" },
+					{ type: "tool_call", id: "t1", name: "danger", arguments: "{}" },
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.999 },
+			},
+		]);
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "You are helpful.",
+				messages: [],
+				tools: [dangerousTool],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		expect(toolExecutions).toBe(0);
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+		// No tool_execution_start was emitted either.
+		expect(events.find((e) => e.type === "tool_execution_start")).toBeUndefined();
+	});
+
 	it("ends the loop with reason=error when the cost budget is exceeded", async () => {
 		const { CostTracker } = await import("../src/agent/cost-tracker.js");
 		const tracker = new CostTracker(0.001); // tiny budget

@@ -187,6 +187,26 @@ async function runLoop(
 				return;
 			}
 
+			// Auto-wire cost tracking. Record THIS turn's cost before any
+			// tool calls execute — an over-budget turn must not be allowed
+			// to mutate state (write/edit/bash) just because it crossed
+			// the cap on the same response that requested the tool calls.
+			// For free-tier sessions (no maxCostPerSession configured)
+			// `isBudgetExceeded()` returns false, so this is a no-op.
+			// Codex budget-fix pass-1 finding.
+			if (config.costTracker && assistantMessage.usage) {
+				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
+				if (config.costTracker.isBudgetExceeded()) {
+					stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
+					stream.push({
+						type: "agent_end",
+						reason: "error",
+						error: "Cost budget exceeded for this session",
+					});
+					return;
+				}
+			}
+
 			// --- Execute Tool Calls ---
 			const toolCalls = assistantMessage.content.filter(
 				(c): c is ToolCallContent => c.type === "tool_call",
@@ -216,22 +236,6 @@ async function runLoop(
 			}
 
 			stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
-
-			// Auto-wire cost tracking. Budget enforcement only fires when
-			// the tracker was constructed with a maxCostPerSession — for
-			// free-tier sessions (no budget configured) this is a no-op
-			// and behaves exactly like the previous "record only" path.
-			if (config.costTracker && assistantMessage.usage) {
-				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
-				if (config.costTracker.isBudgetExceeded()) {
-					stream.push({
-						type: "agent_end",
-						reason: "error",
-						error: "Cost budget exceeded for this session",
-					});
-					return;
-				}
-			}
 
 			turnIndex++;
 
