@@ -1333,6 +1333,71 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(manager.getLabel(id)).toBe("x");
     });
 
+    it("setting an existing label on a new target moves it (single owner)", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "a", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "b" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      manager.appendLabelChange(a, "important");
+      manager.appendLabelChange(b, "important");
+
+      // Last write wins: B owns the label, A loses it.
+      expect(manager.findEntryByLabel("important")).toBe(b);
+      expect(manager.getLabel(b)).toBe("important");
+      expect(manager.getLabel(a)).toBeUndefined();
+    });
+
+    it("single-owner semantics survive reload", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "a", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "b" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      manager.appendLabelChange(a, "tag");
+      manager.appendLabelChange(b, "tag");
+
+      const sessionFile = manager.getSessionFile()!;
+      const reopened = SessionManager.open(sessionFile);
+      expect(reopened.findEntryByLabel("tag")).toBe(b);
+      expect(reopened.getLabel(a)).toBeUndefined();
+    });
+
+    it("Codex-pass1-fix: forkSession remaps LabelEntry.targetId", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a, "milestone");
+
+      const forkPath = manager.forkSession();
+      expect(forkPath).toBeTruthy();
+      expect(existsSync(forkPath!)).toBe(true);
+
+      // Reopen the forked file and verify the label resolves to a
+      // remapped target ID, not the original session's ID.
+      const reopened = SessionManager.open(forkPath!);
+
+      const labelTarget = reopened.findEntryByLabel("milestone");
+      expect(labelTarget).toBeTruthy();
+      // The remapped target must exist in the forked session.
+      expect(reopened.getEntry(labelTarget!)).toBeTruthy();
+      // And it must NOT be the original ID from the parent session.
+      expect(labelTarget).not.toBe(a);
+    });
+
     it("persists across reload (last-write-wins replay)", async () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       // Force a flush to disk by appending something that triggers

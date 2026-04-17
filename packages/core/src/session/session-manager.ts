@@ -402,6 +402,14 @@ export class SessionManager {
    * append-only history is the single source of truth.
    */
   private labelsByTargetId: Map<string, string> = new Map();
+  /**
+   * Reverse index: label string → target entry ID. Labels are
+   * single-owner; assigning a label that already exists on another
+   * target moves it (the old target loses its label). This makes
+   * findEntryByLabel an O(1) lookup with last-write-wins semantics
+   * that match the user expectation of `/goto important`.
+   */
+  private labelsByName: Map<string, string> = new Map();
   private leafId: string | null = null;
   // True when the caller explicitly chose the current leaf via branch(),
   // navigateBranch(), or resetLeaf(). withLock's reload uses this to know
@@ -638,6 +646,7 @@ export class SessionManager {
   private buildIndex(): void {
     this.byId.clear();
     this.labelsByTargetId.clear();
+    this.labelsByName.clear();
     this.leafId = null;
     this.leafSelectedByUser = false;
 
@@ -646,19 +655,40 @@ export class SessionManager {
       this.byId.set(entry.id, entry);
       this.leafId = entry.id;
       if (entry.type === "label") {
-        // Last write wins. An empty/undefined label clears the entry.
-        // We don't validate that targetId exists in byId here — the
-        // load order may put labels after their targets only sometimes
-        // (e.g. branch navigation rewrites), and an orphan label is
-        // harmless: getLabel just returns undefined for unknown IDs.
-        const trimmed = entry.label?.trim();
-        if (trimmed) {
-          this.labelsByTargetId.set(entry.targetId, trimmed);
-        } else {
-          this.labelsByTargetId.delete(entry.targetId);
-        }
+        this.applyLabelChange(entry.targetId, entry.label);
       }
     }
+  }
+
+  /**
+   * Apply a label change to both indexes with single-owner semantics:
+   * if the new label is already attached to a different target, that
+   * target loses its label (the new write wins). Used by both
+   * buildIndex replay and appendLabelChange.
+   */
+  private applyLabelChange(targetId: string, rawLabel: string | undefined): void {
+    const trimmed = rawLabel?.trim();
+    // Always clear whatever this target previously had — both for the
+    // clear case (no new label) and to keep labelsByName consistent
+    // when the label string changes.
+    const prev = this.labelsByTargetId.get(targetId);
+    if (prev !== undefined && this.labelsByName.get(prev) === targetId) {
+      this.labelsByName.delete(prev);
+    }
+    this.labelsByTargetId.delete(targetId);
+
+    if (!trimmed) return;
+
+    // Single-owner: if some other target already owns this label,
+    // displace it. The displaced entry simply loses its label; we
+    // don't write a separate clearing LabelEntry to disk because
+    // replay arrives at the same state by following the same rule.
+    const existingOwner = this.labelsByName.get(trimmed);
+    if (existingOwner !== undefined && existingOwner !== targetId) {
+      this.labelsByTargetId.delete(existingOwner);
+    }
+    this.labelsByTargetId.set(targetId, trimmed);
+    this.labelsByName.set(trimmed, targetId);
   }
 
   /**
@@ -994,11 +1024,7 @@ export class SessionManager {
       ...(trimmed ? { label: trimmed } : {}),
     };
     this.appendEntry(entry, /* force */ true);
-    if (trimmed) {
-      this.labelsByTargetId.set(targetId, trimmed);
-    } else {
-      this.labelsByTargetId.delete(targetId);
-    }
+    this.applyLabelChange(targetId, trimmed);
     return entry.id;
   }
 
@@ -1018,17 +1044,14 @@ export class SessionManager {
   }
 
   /**
-   * Resolve a label string to the entry it currently points at, or
-   * undefined when no entry carries that label. Useful for slash
-   * commands like `/goto <label>`.
+   * Resolve a label string to the entry it currently owns it, or
+   * undefined when no entry carries that label. Labels are single-
+   * owner (the latest assignment wins), so this is deterministic.
    */
   findEntryByLabel(label: string): string | undefined {
     const target = label.trim();
     if (!target) return undefined;
-    for (const [entryId, value] of this.labelsByTargetId) {
-      if (value === target) return entryId;
-    }
-    return undefined;
+    return this.labelsByName.get(target);
   }
 
   /**
@@ -1476,7 +1499,7 @@ export class SessionManager {
     }
 
     // Helper to remap embedded ID references
-    const remapEntry = (entry: SessionEntry, newId: string, newParentId: string | null): SessionEntry => {
+    const remapEntry = (entry: SessionEntry, newId: string, newParentId: string | null): SessionEntry | null => {
       const base = { ...entry, id: newId, parentId: newParentId };
 
       // Remap embedded ID references for specific entry types
@@ -1503,15 +1526,35 @@ export class SessionManager {
         };
       }
 
+      if (entry.type === "label") {
+        // Drop labels whose target isn't part of the forked path —
+        // an orphan reference would resolve to a nonexistent ID in
+        // the child session and silently corrupt /goto navigation.
+        const mappedTargetId = idMap.get(entry.targetId);
+        if (!mappedTargetId) {
+          return null;
+        }
+        return {
+          ...base,
+          type: "label",
+          targetId: mappedTargetId,
+          ...(entry.label !== undefined ? { label: entry.label } : {}),
+        };
+      }
+
       return base as SessionEntry;
     };
 
-    // Second pass: create new entries with remapped IDs
+    // Second pass: create new entries with remapped IDs. Skip
+    // entries that remapEntry refused (e.g. orphan label entries
+    // whose target isn't on the forked path); preserve the parent
+    // chain so following entries still point at a real previous ID.
     const newEntries: SessionEntry[] = [];
     let prevId: string | null = null;
     for (const entry of path) {
       const newId = idMap.get(entry.id)!;
       const newEntry = remapEntry(entry, newId, prevId);
+      if (!newEntry) continue;
       newEntries.push(newEntry);
       prevId = newId;
     }
