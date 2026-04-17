@@ -1015,6 +1015,32 @@ export class SessionManager {
       throw new Error(`Cannot label entry ${targetId}: entry not found`);
     }
     const trimmed = label?.trim();
+
+    // If the new label is already attached to a different target,
+    // persist a clearing LabelEntry for that displaced target FIRST,
+    // then write the new assignment. Without the durable clear,
+    // forkSession of a branch that contains the original assignment
+    // would resurrect the old owner — fork only replays the path
+    // entries it copies, not later sibling-branch reassignments.
+    // Codex labels pass-2 finding.
+    if (trimmed) {
+      const displacedOwner = this.labelsByName.get(trimmed);
+      if (displacedOwner !== undefined && displacedOwner !== targetId) {
+        const clearEntry: LabelEntry = {
+          type: "label",
+          id: generateId(this.byId),
+          parentId: this.leafId,
+          timestamp: new Date().toISOString(),
+          targetId: displacedOwner,
+        };
+        this.appendEntry(clearEntry, /* force */ true);
+        // applyLabelChange in the next step will displace the
+        // in-memory ownership, but write the in-memory clear now so
+        // the leaf-id chain stays correct for the assignment entry.
+        this.applyLabelChange(displacedOwner, undefined);
+      }
+    }
+
     const entry: LabelEntry = {
       type: "label",
       id: generateId(this.byId),

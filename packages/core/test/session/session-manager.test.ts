@@ -1371,6 +1371,48 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass2-fix: cross-branch label moves are durable across fork", () => {
+      // Set up a branched session:
+      //   root - u1 - a1   <- branch 1 (label "important" assigned here)
+      //          \\
+      //           u2 - a2  <- branch 2 (label "important" reassigned)
+      // Then fork the older branch (branch 1) and verify the label
+      // does NOT resurrect on A. The displacement must be persisted
+      // as a real LabelEntry on disk so fork's path-replay sees it.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u1 = manager.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+      const a1 = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a1" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a1, "important");
+      // Branch from u1 to a sibling line.
+      manager.branch(u1);
+      manager.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+      const a2 = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a2" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a2, "important");
+
+      // Fork from the older branch tip (a1). The displacing clear
+      // for a1 must travel with the fork, otherwise the fork would
+      // resurrect a1 as the label owner.
+      const forkPath = manager.forkSession(a1);
+      expect(forkPath).toBeTruthy();
+      const reopened = SessionManager.open(forkPath!);
+
+      // a1 (remapped) should not own the label in the fork. The
+      // label was cleared in the parent session before being moved
+      // to a2; the fork only contains a1's branch, so the label
+      // simply doesn't exist in the fork at all.
+      expect(reopened.findEntryByLabel("important")).toBeUndefined();
+    });
+
     it("Codex-pass1-fix: forkSession remaps LabelEntry.targetId", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const a = manager.appendMessage({ role: "user", content: "first", timestamp: Date.now() });
