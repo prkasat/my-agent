@@ -1223,6 +1223,76 @@ describe("anthropic provider", () => {
 		expect(sent).not.toHaveProperty("temperature");
 	});
 
+	// Pass-9 regression. Bare error events without an attached
+	// terminal message look like transient errors to the agent loop,
+	// which retries the entire paid request. Pause/refusal/unknown
+	// stop reasons must carry a terminal AssistantMessage so the
+	// loop returns it as the final non-retryable outcome.
+	it("error event for unrecoverable stop carries a terminal message", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 3, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		// Pre-attach to swallow the eventual rejection — we only care
+		// about reading the error frame off the iterator below.
+		stream.result().catch(() => undefined);
+
+		let errorEvent: { type: string; error?: string; message?: { stopReason?: string; errorMessage?: string; content?: unknown } } | null = null;
+		for await (const event of stream) {
+			if (event.type === "error") {
+				errorEvent = event as typeof errorEvent;
+			}
+		}
+		expect(errorEvent).not.toBeNull();
+		expect(errorEvent?.message?.stopReason).toBe("error");
+		expect(errorEvent?.message?.errorMessage).toMatch(/refusal|unrecoverable/i);
+		// Partial output is preserved on the terminal message so the
+		// caller can show what the model did emit before refusing.
+		expect(errorEvent?.message?.content).toEqual([{ type: "text", text: "partial" }]);
+	});
+
+	// Pass-9 regression. After foreign-thinking filtering an assistant
+	// message can collapse to content: []. Anthropic 400s on empty
+	// assistant content; we must skip such turns rather than serialize
+	// them.
+	it("skips assistant turns whose content collapses to empty after replay filtering", async () => {
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		])));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "first" },
+				{
+					role: "assistant",
+					provider: "openai", // foreign — thinking will be dropped
+					content: [
+						{ type: "thinking", text: "hidden", signature: "sig-from-elsewhere" },
+					],
+				},
+				{ role: "user", content: "second" },
+			],
+		}).result();
+
+		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		// Only the two user turns make it through; the empty assistant
+		// would have been a 400.
+		expect(sent.messages).toHaveLength(2);
+		expect(sent.messages.every((m: { role: string }) => m.role === "user")).toBe(true);
+	});
+
 	it("forwards temperature when thinking is disabled", async () => {
 		const body = sse([
 			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },

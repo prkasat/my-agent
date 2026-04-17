@@ -265,7 +265,17 @@ function convertMessages(context: Context, enableCaching: boolean): AnthropicMes
 					});
 				}
 			}
-			out.push({ role: "assistant", content: blocks });
+			// Skip empty assistant turns. After the foreign-thinking
+			// filter above strips non-replayable thinking blocks, an
+			// assistant message that consisted only of those blocks
+			// becomes content: []. Anthropic rejects empty assistant
+			// content with a 400 ("messages.N.content: Input should
+			// be a non-empty array"), which would strand the entire
+			// conversation. Pi-Mono baseline does the same skip.
+			// Codex Tier-3 pass-9 finding.
+			if (blocks.length > 0) {
+				out.push({ role: "assistant", content: blocks });
+			}
 		}
 	}
 	flushUser();
@@ -628,7 +638,26 @@ async function parseSSEStream(
 					const errMsg = delta.stop_reason === "pause_turn"
 						? "anthropic paused the turn for continuation; auto-continue is not yet implemented"
 						: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`;
-					stream.push({ type: "error", error: errMsg });
+					// Attach a terminal AssistantMessage so the agent
+					// loop classifies this as a final non-retryable
+					// outcome (it returns event.message and stops on
+					// stopReason === "error"). Without the message,
+					// the loop treats it as a transient error and
+					// resends the entire paid request. Codex Tier-3
+					// pass-9 finding.
+					stream.push({
+						type: "error",
+						error: errMsg,
+						message: {
+							role: "assistant",
+							content: finalContent,
+							model: modelId,
+							provider: providerName,
+							usage,
+							stopReason: "error",
+							errorMessage: errMsg,
+						},
+					});
 					errored = true;
 					return;
 				}
