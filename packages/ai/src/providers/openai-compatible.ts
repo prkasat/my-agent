@@ -32,6 +32,23 @@ interface OpenAICompatibleConfig {
 	 * Default: true.
 	 */
 	includeUsage?: boolean;
+	/**
+	 * Whether to ask the upstream for an authoritative per-call cost
+	 * (in USD) in the terminal usage chunk. OpenRouter populates
+	 * `chunk.usage.cost` when the request body sets
+	 * `usage: { include: true }`. Sending this field is a no-op for
+	 * shims that ignore unknown request fields, but strict shims may
+	 * 400 on it — those should leave this false.
+	 *
+	 * When the upstream returns a real cost, downstream accounting
+	 * uses that USD figure instead of the per-million estimate
+	 * derived from the static model price table, which keeps cost
+	 * tracking accurate across BYO-key, surge pricing, and routing
+	 * changes inside OpenRouter.
+	 *
+	 * Default: false (only enable for providers known to support it).
+	 */
+	includeRealCost?: boolean;
 }
 
 function convertMessages(context: Context): Record<string, unknown>[] {
@@ -143,6 +160,14 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 				if (config.includeUsage !== false) {
 					body.stream_options = { include_usage: true };
 				}
+				// Ask the upstream for an authoritative per-call cost
+				// (USD). OpenRouter populates `chunk.usage.cost` when
+				// the request body sets `usage: { include: true }`. Off
+				// by default since strict shims may reject the unknown
+				// field; opt in per provider via includeRealCost.
+				if (config.includeRealCost) {
+					body.usage = { include: true };
+				}
 
 				const tools = convertTools(context);
 				if (tools) body.tools = tools;
@@ -253,7 +278,7 @@ async function parseSSEStream(
 					finishReason = choices[0].finish_reason as string;
 				}
 				const earlyChunkUsage = chunk.usage as
-					| { prompt_tokens?: number; completion_tokens?: number }
+					| { prompt_tokens?: number; completion_tokens?: number; cost?: number; prompt_tokens_details?: { cached_tokens?: number } }
 					| undefined;
 				if (earlyChunkUsage) {
 					// Trust this usage when EITHER:
@@ -270,6 +295,14 @@ async function parseSSEStream(
 						usage = {
 							inputTokens: earlyChunkUsage.prompt_tokens || 0,
 							outputTokens: earlyChunkUsage.completion_tokens || 0,
+							...(earlyChunkUsage.prompt_tokens_details?.cached_tokens
+								? { cacheReadTokens: earlyChunkUsage.prompt_tokens_details.cached_tokens }
+								: {}),
+							// Authoritative per-call cost from the
+							// upstream (OpenRouter when includeRealCost
+							// is on). Downstream prefers this over the
+							// per-million estimate.
+							...(typeof earlyChunkUsage.cost === "number" ? { cost: earlyChunkUsage.cost } : {}),
 						};
 					}
 				}

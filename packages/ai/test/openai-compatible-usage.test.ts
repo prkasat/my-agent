@@ -191,4 +191,90 @@ describe("openai-compatible usage accounting", () => {
     expect(message.usage?.inputTokens).toBe(50);
     expect(message.usage?.outputTokens).toBe(5);
   });
+
+  it("includeRealCost adds usage:{include:true} to outbound request", async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(ssePayload([
+              { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+            ]));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const stream = createOpenAICompatibleStream({
+      providerName: "test",
+      baseUrl: "http://example.test",
+      envKey: "TEST_KEY",
+      includeRealCost: true,
+    })(fakeModel, { messages: [] }, {});
+    await stream.result();
+
+    expect(capturedBody.usage).toEqual({ include: true });
+  });
+
+  it("includeRealCost defaults to off and omits usage from request", async () => {
+    let capturedBody: any = null;
+    globalThis.fetch = (async (_url: any, init: any) => {
+      capturedBody = JSON.parse(init.body);
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(ssePayload([
+              { choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } },
+            ]));
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    const stream = createOpenAICompatibleStream({
+      providerName: "test",
+      baseUrl: "http://example.test",
+      envKey: "TEST_KEY",
+    })(fakeModel, { messages: [] }, {});
+    await stream.result();
+
+    expect(capturedBody.usage).toBeUndefined();
+  });
+
+  it("captures upstream-reported cost into Usage.cost", async () => {
+    const message = await runWith([
+      { choices: [{ delta: { content: "ok" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      {
+        choices: [],
+        usage: { prompt_tokens: 100, completion_tokens: 20, cost: 0.00134 },
+      },
+    ]);
+    expect(message.usage?.inputTokens).toBe(100);
+    expect(message.usage?.outputTokens).toBe(20);
+    expect(message.usage?.cost).toBeCloseTo(0.00134, 5);
+  });
+
+  it("captures cached_tokens from prompt_tokens_details", async () => {
+    const message = await runWith([
+      { choices: [{ delta: { content: "ok" } }] },
+      { choices: [{ delta: {}, finish_reason: "stop" }] },
+      {
+        choices: [],
+        usage: {
+          prompt_tokens: 200,
+          completion_tokens: 30,
+          prompt_tokens_details: { cached_tokens: 150 },
+        },
+      },
+    ]);
+    expect(message.usage?.inputTokens).toBe(200);
+    expect(message.usage?.cacheReadTokens).toBe(150);
+  });
 });
