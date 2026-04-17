@@ -219,6 +219,9 @@ export function createAutoCompactor(
       tokensBefore: currentTokens,
       tokensAfter: result.details.tokensAfter,
       timestamp: Date.now(),
+      ...(result.details.priorCumulativeCost !== undefined
+        ? { priorCumulativeCost: result.details.priorCumulativeCost }
+        : {}),
     };
 
     const newMessages = [summaryMessage, ...result.keptMessages];

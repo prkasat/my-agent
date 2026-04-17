@@ -21,6 +21,17 @@ export interface CompactionSummaryMessage {
 	tokensBefore: number;
 	tokensAfter: number;
 	timestamp: number;
+	/**
+	 * Cumulative `usage.cost` across every non-aborted/non-error
+	 * assistant message that was folded into this compaction (plus
+	 * any prior compaction's snapshot). Used by the cost tracker's
+	 * `loadFromMessages` replay on resume so a hard
+	 * `maxCostPerSession` cap survives session compaction. Optional
+	 * for backward compat with summaries written before this field
+	 * existed; readers MUST treat `undefined` as "unknown prior
+	 * spend, don't seed". Codex budget-fix pass-4 finding.
+	 */
+	priorCumulativeCost?: number;
 }
 
 export interface BranchSummaryMessage {

@@ -82,6 +82,35 @@ export class CostTracker {
 		}
 		let loaded = 0;
 		for (const msg of messages) {
+			// Compaction summaries carry a snapshot of the cumulative
+			// cost of every assistant turn that was folded into them.
+			// Seed from that snapshot so a session that compacted its
+			// earlier spend still enforces `maxCostPerSession` after
+			// resume — without this, the current branch's kept tail
+			// would be the only input and the replay would miss the
+			// compacted turns' cost. Codex budget-fix pass-4 finding.
+			if (
+				"role" in msg &&
+				msg.role === "custom" &&
+				"type" in msg &&
+				msg.type === "compaction_summary" &&
+				typeof (msg as { priorCumulativeCost?: number }).priorCumulativeCost === "number"
+			) {
+				const priorCost = (msg as { priorCumulativeCost: number }).priorCumulativeCost;
+				if (priorCost > 0) {
+					this.costs.totalCost += priorCost;
+					this.costs.turnCosts.push({
+						turnIndex: loaded,
+						model: "compaction-snapshot",
+						inputTokens: 0,
+						outputTokens: 0,
+						cost: priorCost,
+						timestamp: (msg as { timestamp?: number }).timestamp ?? Date.now(),
+					});
+					loaded++;
+				}
+				continue;
+			}
 			if (
 				"role" in msg &&
 				msg.role === "assistant" &&

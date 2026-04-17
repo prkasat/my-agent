@@ -294,6 +294,9 @@ export function buildSessionContext(
       tokensBefore: compaction.tokensBefore,
       tokensAfter: compaction.details.tokensAfter,
       timestamp: new Date(compaction.timestamp).getTime(),
+      ...(compaction.details.priorCumulativeCost !== undefined
+        ? { priorCumulativeCost: compaction.details.priorCumulativeCost }
+        : {}),
     });
 
     // Find start index (firstKeptEntryId or after compaction)

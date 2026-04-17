@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { EventStream } from "@my-agent/ai";
-import type { AssistantMessage, AssistantMessageEvent } from "@my-agent/ai";
+import type { AssistantMessage, AssistantMessageEvent, Model } from "@my-agent/ai";
 import {
+  compact,
   estimateTokens,
   estimateContextTokens,
   measureContextTokens,
@@ -1014,5 +1015,231 @@ describe("evaluateCompaction", () => {
     expect(result.tokensBefore).toBeGreaterThan(900); // includes prior summary
     expect(result.warnings.some((w) => w.includes("larger than the input"))).toBe(false);
     expect(result.savingsRatio).toBeLessThan(1);
+  });
+});
+
+describe("compact: priorCumulativeCost snapshot", () => {
+  // Build a fake stream function that returns the given summary text
+  // synchronously via a queueMicrotask push.
+  function fakeStreamFn(text: string) {
+    return function fauxStream() {
+      const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+        (e) => e.type === "done",
+        (e) => {
+          if (e.type === "done") return e.message;
+          throw new Error("unexpected");
+        },
+      );
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", message });
+        stream.push({ type: "done", message });
+      });
+      return stream;
+    };
+  }
+
+  const fakeModel: Model = {
+    id: "test",
+    name: "Test",
+    provider: "test",
+    contextWindow: 1000,
+  } as unknown as Model;
+
+  // Each filler is ~250 chars / 4 = ~62 tokens. Eight messages put us
+  // well past keepRecentTokens=50, so findCutPoint will cut early.
+  function buildBigText() {
+    return "x".repeat(250);
+  }
+
+  it("snapshots the sum of usage.cost across compacted assistant turns", async () => {
+    // Codex budget-fix pass-4 HIGH: compact() must record the total
+    // cost of every non-aborted/non-error assistant message it folds
+    // into the summary. Without this snapshot, a session that
+    // compacted away its early spend would silently lose those
+    // dollars when a fresh process resumed and re-tallied from the
+    // surviving (post-compaction) context.
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a1 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.003 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a3 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 200, outputTokens: 100, cost: 0.005 },
+      },
+      { role: "user", content: `u4 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a5 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.001 },
+      },
+      { role: "user", content: `u6 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a7 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.002 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50, // forces a cut very early
+      model: fakeModel,
+      streamFn: fakeStreamFn("compacted") as any,
+    });
+
+    // The cut MUST land somewhere inside the message list (not 0).
+    expect(result.cutIndex).toBeGreaterThan(0);
+    expect(result.cutIndex).toBeLessThan(messages.length);
+
+    // Sum the costs of assistant messages that ended up in the
+    // summarized prefix. Whatever the cut point, the snapshot must
+    // equal that sum exactly.
+    let expected = 0;
+    for (let i = 0; i < result.cutIndex; i++) {
+      const msg = messages[i];
+      if ("role" in msg && msg.role === "assistant" && typeof msg.usage?.cost === "number") {
+        expected += msg.usage.cost;
+      }
+    }
+    expect(expected).toBeGreaterThan(0); // sanity — at least one assistant turn was compacted
+    expect(result.details.priorCumulativeCost).toBeCloseTo(expected, 6);
+  });
+
+  it("chains a prior compaction's snapshot so multi-round compaction keeps accumulating", async () => {
+    // A second compaction pass, fed `previousCompaction` from the
+    // first pass, must add the new cuts on top of the prior snapshot
+    // — otherwise each round would forget the rounds before it.
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a1 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.004 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a3 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 200, outputTokens: 100, cost: 0.006 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50,
+      model: fakeModel,
+      streamFn: fakeStreamFn("compacted") as any,
+      previousCompaction: {
+        readFiles: [],
+        modifiedFiles: [],
+        tokensAfter: 0,
+        priorCumulativeCost: 0.020, // earlier rounds spent two cents
+      },
+    });
+
+    expect(result.cutIndex).toBeGreaterThan(0);
+
+    let newlyCompacted = 0;
+    for (let i = 0; i < result.cutIndex; i++) {
+      const msg = messages[i];
+      if ("role" in msg && msg.role === "assistant" && typeof msg.usage?.cost === "number") {
+        newlyCompacted += msg.usage.cost;
+      }
+    }
+
+    // Snapshot = previous snapshot + sum of new compacted costs.
+    expect(result.details.priorCumulativeCost).toBeCloseTo(0.020 + newlyCompacted, 6);
+  });
+
+  it("excludes aborted and error assistant turns from the snapshot", async () => {
+    // Aborted/error assistant turns may carry phantom usage.cost
+    // values (the provider was mid-stream when the call ended). The
+    // snapshot must skip them — the same filter that the cost
+    // tracker's recordTurn skips them with on the live path.
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `clean ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.001 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `aborted ${filler}` }],
+        stopReason: "aborted",
+        timestamp: Date.now(),
+        usage: { inputTokens: 999_999, outputTokens: 0, cost: 9.999 },
+      },
+      { role: "user", content: `u4 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `errored ${filler}` }],
+        stopReason: "error",
+        timestamp: Date.now(),
+        usage: { inputTokens: 999_999, outputTokens: 0, cost: 9.999 },
+      },
+      { role: "user", content: `u6 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `fresh ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.002 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50,
+      model: fakeModel,
+      streamFn: fakeStreamFn("compacted") as any,
+    });
+
+    expect(result.cutIndex).toBeGreaterThan(0);
+
+    // Only the non-aborted, non-error turns inside the compacted
+    // prefix should contribute. Build the expected sum the same way.
+    let expected = 0;
+    for (let i = 0; i < result.cutIndex; i++) {
+      const msg = messages[i];
+      if (
+        "role" in msg &&
+        msg.role === "assistant" &&
+        msg.stopReason !== "aborted" &&
+        msg.stopReason !== "error" &&
+        typeof msg.usage?.cost === "number"
+      ) {
+        expected += msg.usage.cost;
+      }
+    }
+    expect(result.details.priorCumulativeCost).toBeCloseTo(expected, 6);
+    // And critically: the phantom 9.999 values MUST NOT be in there.
+    expect(result.details.priorCumulativeCost!).toBeLessThan(1);
   });
 });

@@ -868,6 +868,27 @@ export async function compact(
   const details = extractFileOperations(messagesToSummarize, options.previousCompaction);
   details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
 
+  // Snapshot cumulative cost of every non-aborted/non-error assistant
+  // message being folded into this summary, PLUS any prior compaction's
+  // snapshot (so a multi-round compaction chain keeps accumulating).
+  // The cost tracker reads this on resume to rebuild cumulative spend
+  // — without it, compaction would erase prior spend from the context
+  // and a fresh process could blow past maxCostPerSession.
+  // Codex budget-fix pass-4 finding.
+  let priorCumulativeCost = options.previousCompaction?.priorCumulativeCost ?? 0;
+  for (const msg of messagesToSummarize) {
+    if (
+      "role" in msg &&
+      msg.role === "assistant" &&
+      msg.stopReason !== "aborted" &&
+      msg.stopReason !== "error" &&
+      typeof msg.usage?.cost === "number"
+    ) {
+      priorCumulativeCost += msg.usage.cost;
+    }
+  }
+  details.priorCumulativeCost = priorCumulativeCost;
+
   // Self-eval against the post-filter input so the size ratio reflects
   // what the LLM actually saw. Pass the prior summary too — when a
   // multi-round compaction merges a large prior summary with a small

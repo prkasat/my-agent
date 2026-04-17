@@ -214,6 +214,18 @@ export interface CompactionDetails {
    * with sessions written before self-eval shipped — readers MUST treat
    * `undefined` as "not evaluated" and not as "no warnings". */
   evaluation?: CompactionEvaluation;
+  /**
+   * Sum of `usage.cost` across every non-aborted/non-error assistant
+   * message that was folded into this compaction. Used by the cost
+   * tracker's `loadFromMessages` replay on resume — without it, a
+   * session that ran up spend and then auto-compacted would appear
+   * to have zero prior spend in its surviving context, and a fresh
+   * process could blow past `maxCostPerSession`. Optional for backward
+   * compat with compactions written before this field existed; readers
+   * MUST treat `undefined` as "unknown prior spend, don't seed".
+   * Codex budget-fix pass-4 finding.
+   */
+  priorCumulativeCost?: number;
 }
 
 /**

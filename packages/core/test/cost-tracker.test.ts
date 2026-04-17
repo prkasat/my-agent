@@ -91,6 +91,66 @@ describe("CostTracker", () => {
 		expect(tracker.getSummary().totalCost).toBeCloseTo(0.005, 6);
 	});
 
+	it("loadFromMessages seeds cumulative spend from a compaction_summary snapshot", async () => {
+		// Codex budget-fix pass-4 HIGH: a session that compacted its
+		// earlier spend would otherwise lose those costs on resume
+		// because the compacted turns don't appear in context.messages
+		// anymore. The compaction_summary custom message carries a
+		// priorCumulativeCost snapshot; loadFromMessages must treat it
+		// as authoritative prior spend.
+		const tracker = new CostTracker(0.01);
+		const messages = [
+			{
+				role: "custom" as const,
+				type: "compaction_summary" as const,
+				summary: "earlier work",
+				tokensBefore: 1000,
+				tokensAfter: 200,
+				timestamp: Date.now(),
+				priorCumulativeCost: 0.008,
+			},
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "post-compaction turn" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 50, outputTokens: 25, cost: 0.001 },
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(loaded).toBe(2);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.009, 6);
+
+		// One more small turn pushes past the $0.01 cap.
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 10, outputTokens: 5, cost: 0.002 }, loaded);
+		expect(tracker.isBudgetExceeded()).toBe(true);
+	});
+
+	it("loadFromMessages ignores compaction_summary with no priorCumulativeCost (backward compat)", () => {
+		const tracker = new CostTracker();
+		const messages = [
+			{
+				role: "custom" as const,
+				type: "compaction_summary" as const,
+				summary: "older summary",
+				tokensBefore: 500,
+				tokensAfter: 100,
+				timestamp: Date.now(),
+				// priorCumulativeCost omitted
+			},
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "x" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 10, outputTokens: 5, cost: 0.001 },
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(loaded).toBe(1);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
+	});
+
 	it("loadFromMessages skips aborted and error assistant messages", () => {
 		const tracker = new CostTracker();
 		const messages = [
