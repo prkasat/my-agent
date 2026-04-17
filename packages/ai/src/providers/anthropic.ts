@@ -110,17 +110,37 @@ function isAnthropicSafeToolId(id: string): boolean {
 
 function convertMessages(context: Context, enableCaching: boolean): AnthropicMessage[] {
 	const out: AnthropicMessage[] = [];
-	// First pass: build a remap of foreign tool IDs to anthropic-safe
-	// IDs by walking assistant tool_call blocks. The remap is then
-	// applied to the matching toolResult below.
+	// Pre-scan to reserve every safe ID already present in the transcript
+	// (assistant tool_use AND user toolResult). Then generate remap names
+	// in a namespace that skips reserved IDs — otherwise a foreign ID
+	// could collapse onto an existing real `toolu_compat_0`, duplicating
+	// IDs and breaking tool/result pairing on the replayed request.
+	// (Codex Tier-3 pass-5 finding.)
+	const reservedSafeIds = new Set<string>();
+	for (const msg of context.messages) {
+		if (msg.role === "assistant") {
+			for (const block of msg.content) {
+				if (block.type === "tool_call" && isAnthropicSafeToolId(block.id)) {
+					reservedSafeIds.add(block.id);
+				}
+			}
+		} else if (msg.role === "toolResult" && isAnthropicSafeToolId(msg.toolCallId)) {
+			reservedSafeIds.add(msg.toolCallId);
+		}
+	}
+
 	const toolIdRemap = new Map<string, string>();
 	let toolIdCounter = 0;
 	const safeId = (orig: string): string => {
 		if (isAnthropicSafeToolId(orig)) return orig;
 		const cached = toolIdRemap.get(orig);
 		if (cached) return cached;
-		const fresh = `toolu_compat_${toolIdCounter++}`;
+		let fresh = `toolu_compat_${toolIdCounter++}`;
+		while (reservedSafeIds.has(fresh)) {
+			fresh = `toolu_compat_${toolIdCounter++}`;
+		}
 		toolIdRemap.set(orig, fresh);
+		reservedSafeIds.add(fresh);
 		return fresh;
 	};
 
@@ -416,6 +436,17 @@ async function parseSSEStream(
 	let usage: Usage = { inputTokens: 0, outputTokens: 0 };
 	let stopReason: "stop" | "length" | "toolUse" | "error" = "stop";
 	let errored = false;
+	// Fail-closed tracking. A 200 OK with no parseable Anthropic events
+	// (empty body, HTML error page from a misconfigured proxy, all-
+	// malformed JSON, etc.) would otherwise fall through to a clean
+	// `done` with empty content — silently turning a transport failure
+	// into a "blank assistant turn" that gets persisted to history and
+	// confuses retry logic. Require both message_start AND a terminal
+	// event (message_stop OR message_delta carrying a stop_reason)
+	// before treating the stream as a successful completion.
+	// Codex Tier-3 pass-5 finding.
+	let sawMessageStart = false;
+	let sawTerminal = false;
 	const blocks = new Map<number, BlockState>();
 	const finalContent: AssistantMessage["content"] = [];
 
@@ -437,6 +468,7 @@ async function parseSSEStream(
 	const processData = (data: Record<string, unknown>): void => {
 		const eventType = data.type as string | undefined;
 		if (eventType === "message_start") {
+			sawMessageStart = true;
 			const msg = data.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
 			if (msg?.usage) {
 				usage = {
@@ -526,6 +558,7 @@ async function parseSSEStream(
 			const delta = data.delta as { stop_reason?: string };
 			if (delta?.stop_reason) {
 				stopReason = mapStopReason(delta.stop_reason);
+				sawTerminal = true;
 			}
 			const usageDelta = data.usage as
 				| { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
@@ -538,6 +571,8 @@ async function parseSSEStream(
 					cacheWriteTokens: usageDelta.cache_creation_input_tokens ?? usage.cacheWriteTokens,
 				};
 			}
+		} else if (eventType === "message_stop") {
+			sawTerminal = true;
 		} else if (eventType === "error") {
 			const err = data.error as { message?: string } | undefined;
 			stream.push({ type: "error", error: err?.message || "anthropic stream error" });
@@ -599,6 +634,20 @@ async function parseSSEStream(
 				error: err instanceof Error ? err.message : String(err),
 			});
 		}
+		return;
+	}
+
+	// Fail closed when the upstream returned 200 OK but never produced
+	// a real Anthropic event sequence — without this we'd persist a
+	// fake empty assistant turn and the agent loop would happily
+	// continue. See sawMessageStart / sawTerminal declaration.
+	if (!sawMessageStart || !sawTerminal) {
+		stream.push({
+			type: "error",
+			error: !sawMessageStart
+				? "anthropic API returned no events (no message_start)"
+				: "anthropic API stream ended without a terminal event (message_stop or stop_reason)",
+		});
 		return;
 	}
 

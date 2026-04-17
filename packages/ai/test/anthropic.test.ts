@@ -941,4 +941,59 @@ describe("anthropic provider", () => {
 		expect(msg.usage?.cacheReadTokens).toBe(50);
 		expect(msg.usage?.cacheWriteTokens).toBe(25);
 	});
+
+	// Pass-5 fail-closed regressions. A 200 OK with no parseable
+	// Anthropic events used to fall through to a "blank assistant
+	// turn" — silently corrupting history and confusing retry logic.
+	// All three flavors (empty body, HTML, malformed JSON) must
+	// surface as errors instead.
+	it("rejects 200 OK with empty body (fail closed, not blank turn)", async () => {
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(""));
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/no events|no message_start/i);
+	});
+
+	it("rejects 200 OK with non-SSE HTML body", async () => {
+		const html = "<!DOCTYPE html><html><body><h1>502 Bad Gateway</h1></body></html>";
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(html));
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/no events|no message_start/i);
+	});
+
+	it("rejects 200 OK with all-malformed JSON data lines", async () => {
+		// Real SSE framing (event:/data: lines, blank-line separated)
+		// but every data payload is broken JSON, so every JSON.parse
+		// throws and is silently skipped — leaving zero processed
+		// events.
+		const body =
+			"event: message_start\ndata: {not valid json\n\n" +
+			"event: content_block_delta\ndata: {also broken,\n\n" +
+			"event: message_stop\ndata: {still not json\n\n";
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/no events|no message_start/i);
+	});
+
+	it("rejects stream that opens with message_start but never terminates", async () => {
+		// message_start arrives, content streams, but the upstream
+		// connection drops before any message_stop or message_delta
+		// with stop_reason. We must not silently treat this as a
+		// successful turn.
+		const body = sse([
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			// No message_delta with stop_reason. No message_stop.
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/terminal event|stop_reason/i);
+	});
 });
