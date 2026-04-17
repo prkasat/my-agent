@@ -449,14 +449,23 @@ export class SessionManager {
   }
   private fileEntries: FileEntry[] = [];
   /**
-   * Mtime (in ms) the session file had the last time we successfully
-   * read its full state. Used by appendLabelChange to detect external
-   * mutation between this manager's last load and a label write that
-   * would derive `displaces` from possibly-stale ownership state.
+   * File-identity tuple the session file had the last time we
+   * successfully read its full state: (mtimeMs, size). Used by
+   * appendLabelChange to detect external mutation between this
+   * manager's last load and a label write that would derive
+   * `displaces` from possibly-stale ownership state.
+   *
+   * mtime alone is not a safe CAS token: a peer can append and keep
+   * the same mtime via coarse FS timestamp granularity, or restore
+   * the prior mtime via utimes. Pairing mtime with size and rejecting
+   * on ANY change (not just `>`) catches both cases. For maximum
+   * safety against deliberate tampering, callers should still wrap
+   * label writes in withLock(). Codex labels pass-14 finding.
+   *
    * `null` means we have not loaded a real on-disk snapshot yet
    * (in-memory session, or before first flush).
    */
-  private lastLoadedMtimeMs: number | null = null;
+  private lastLoadedFileSig: { mtimeMs: number; size: number } | null = null;
   private byId: Map<string, SessionEntry> = new Map();
   /**
    * Latest label per target entry, derived from LabelEntry history.
@@ -668,7 +677,7 @@ export class SessionManager {
     // brand new. Codex labels pass-12 finding.
     this.labelsByTargetId.clear();
     this.labelsByName.clear();
-    this.lastLoadedMtimeMs = null;
+    this.lastLoadedFileSig = null;
     this.leafSelectedByUser = false;
 
     if (this.persist) {
@@ -710,7 +719,7 @@ export class SessionManager {
 
         this.buildIndex();
         this.flushed = true;
-        this.recordFreshMtime();
+        this.recordFreshFileSig();
         break;
     }
   }
@@ -914,9 +923,8 @@ export class SessionManager {
       // Codex labels pass-13 finding (label-write TOCTOU on legacy
       // v1 sessions). For the genuine first-flush case (no file
       // exists yet) the check is a no-op.
-      if (this.lastLoadedMtimeMs !== null && existsSync(this.sessionFile)) {
-        const onDiskMtime = statSync(this.sessionFile).mtimeMs;
-        if (onDiskMtime > this.lastLoadedMtimeMs) {
+      if (this.lastLoadedFileSig !== null && existsSync(this.sessionFile)) {
+        if (this.fileChangedSinceLastLoad()) {
           throw new Error(
             "Session file changed externally during write; reload or wrap in withLock before retrying",
           );
@@ -952,22 +960,41 @@ export class SessionManager {
         appendFileSync(this.sessionFile, line);
       }
     }
-    this.recordFreshMtime();
+    this.recordFreshFileSig();
   }
 
   /**
-   * Snapshot the live file's mtime as of "we are in sync with disk".
-   * Called after every load and every successful persist so the
-   * external-mutation check in appendLabelChange has a reliable
-   * baseline. Safe to call when the file doesn't exist (no-op).
+   * Snapshot the live file's identity tuple (mtimeMs, size) as of
+   * "we are in sync with disk". Called after every load and every
+   * successful persist so the external-mutation checks in
+   * appendLabelChange and persistEntry have a reliable baseline.
+   * Safe to call when the file doesn't exist (no-op).
    */
-  private recordFreshMtime(): void {
+  private recordFreshFileSig(): void {
     if (!this.persist || !this.sessionFile) return;
     try {
-      this.lastLoadedMtimeMs = statSync(this.sessionFile).mtimeMs;
+      const st = statSync(this.sessionFile);
+      this.lastLoadedFileSig = { mtimeMs: st.mtimeMs, size: st.size };
     } catch {
-      this.lastLoadedMtimeMs = null;
+      this.lastLoadedFileSig = null;
     }
+  }
+
+  /**
+   * Returns true if the session file's identity tuple differs from
+   * the recorded baseline. Mtime and size both checked so a peer
+   * append with restored mtime (utimes) or coincidentally-equal
+   * mtime (FS granularity) is still detected via size change.
+   */
+  private fileChangedSinceLastLoad(): boolean {
+    if (!this.persist || !this.sessionFile || !this.lastLoadedFileSig) {
+      return false;
+    }
+    const st = statSync(this.sessionFile);
+    return (
+      st.mtimeMs !== this.lastLoadedFileSig.mtimeMs ||
+      st.size !== this.lastLoadedFileSig.size
+    );
   }
 
   /**
@@ -994,7 +1021,7 @@ export class SessionManager {
     // class as the pass-14 fix for persistEntry's forced first-flush).
     this.rewriteFile();
     this.flushed = true;
-    this.recordFreshMtime();
+    this.recordFreshFileSig();
   }
 
   /**
@@ -1267,10 +1294,9 @@ export class SessionManager {
     // from disk on entry. The preflight here catches the common
     // single-process and "user forgot the lock" cases.
     // Codex labels pass-7 + pass-8 findings.
-    if (this.persist && this.sessionFile && this.lastLoadedMtimeMs !== null) {
-      let onDiskMtime: number | undefined;
+    if (this.persist && this.sessionFile && this.lastLoadedFileSig !== null) {
       try {
-        onDiskMtime = statSync(this.sessionFile).mtimeMs;
+        statSync(this.sessionFile);
       } catch (err) {
         const code = (err as NodeJS.ErrnoException).code;
         if (code === "ENOENT") {
@@ -1280,7 +1306,7 @@ export class SessionManager {
         }
         throw err;
       }
-      if (onDiskMtime > this.lastLoadedMtimeMs) {
+      if (this.fileChangedSinceLastLoad()) {
         throw new Error(
           "Session file changed externally since last load; reload or wrap appendLabelChange in withLock before writing labels",
         );
@@ -1956,7 +1982,7 @@ export class SessionManager {
     // this, the next appendLabelChange would compare the fork's
     // mtime against the parent file's older snapshot and falsely
     // throw "changed externally". Codex labels pass-9 finding.
-    this.recordFreshMtime();
+    this.recordFreshFileSig();
 
     return newSessionFile;
   }
@@ -2036,7 +2062,7 @@ export class SessionManager {
         }
         this.buildIndex();
         this.flushed = true;
-        this.recordFreshMtime();
+        this.recordFreshFileSig();
         // Restore the caller's selected leaf if it was an explicit choice.
         // A peer's writes since our snapshot become a sibling branch off
         // the same parent, which is the correct multi-branch model.

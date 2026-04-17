@@ -1385,7 +1385,7 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(manager.getLabel(u1)).toBeUndefined();
 
       // Labeling on the new session must work, not throw "disappeared"
-      // because lastLoadedMtimeMs leaked from the old session.
+      // because lastLoadedFileSig leaked from the old session.
       expect(() => manager.appendLabelChange(u2, "new-label")).not.toThrow();
       expect(manager.findEntryByLabel("new-label")).toBe(u2);
 
@@ -1510,7 +1510,7 @@ describe("SessionManager.withLock cross-process behavior", () => {
 
       // Without flush() recording the freshness baseline, the
       // disappeared-file check would have been skipped because
-      // lastLoadedMtimeMs was null after the deferred-write path.
+      // lastLoadedFileSig was null after the deferred-write path.
       expect(() => manager.appendLabelChange(u, "marker")).toThrow(/disappeared/);
     });
 
@@ -1615,6 +1615,60 @@ describe("SessionManager.withLock cross-process behavior", () => {
       );
 
       // Peer's entry is still on disk.
+      const onDisk = fs.readFileSync(file, "utf-8");
+      expect(onDisk).toContain("u2-peer");
+      expect(onDisk).toContain("peer-write");
+    });
+
+    it("Codex-pass14-fix: peer append with restored mtime is still detected", () => {
+      // Mtime alone is not a safe CAS token: a peer can append and
+      // restore the prior mtime via utimes (or an unlucky FS-tick
+      // collision), and the v1->v2 promotion rewrite would clobber
+      // the peer's bytes. Pairing mtime with size catches it.
+      const file = join(tempDir, "legacy-tampered.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "legacy-tampered",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "legacy", timestamp: Date.now() },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(
+        file,
+        `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n`,
+      );
+
+      const manager = SessionManager.open(file);
+
+      // Snapshot the original timestamps so we can restore them after
+      // the peer append, simulating a tampering peer that hides its
+      // write from anyone watching mtime alone.
+      const before = fs.statSync(file);
+      const peerEntry = {
+        type: "message",
+        id: "u2-peer",
+        parentId: "u1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "peer-write", timestamp: Date.now() },
+      };
+      fs.appendFileSync(file, JSON.stringify(peerEntry) + "\n");
+      // Restore mtime/atime so an mtime-only check would miss the change.
+      fs.utimesSync(file, before.atime, before.mtime);
+
+      // The size-aware check must still refuse the label write.
+      expect(() => manager.appendLabelChange("u1", "marker")).toThrow(
+        /changed externally/,
+      );
+
+      // Peer's entry remains on disk.
       const onDisk = fs.readFileSync(file, "utf-8");
       expect(onDisk).toContain("u2-peer");
       expect(onDisk).toContain("peer-write");
