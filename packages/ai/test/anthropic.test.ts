@@ -448,6 +448,99 @@ describe("anthropic provider", () => {
 		expect(assistantMsg.content[0].input).toEqual({});
 	});
 
+	it("Tier-3 pass-4 regression: custom baseUrl auto-tags messages as anthropic-compatible (not anthropic)", async () => {
+		// Pre-pass-4 bug: createAnthropicStream stamped every emitted
+		// AssistantMessage with provider: "anthropic" regardless of
+		// baseUrl. A user pointing at a proxy got messages mislabeled
+		// as the real provider, and pass-3's signed-thinking trust gate
+		// would forward the proxy's foreign signature back to Anthropic
+		// on replay — reopening the exact bug pass-3 closed.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream({
+			baseUrl: "https://custom-proxy.example.com/v1/messages",
+		})(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+
+		expect(msg.provider).toBe("anthropic-compatible");
+	});
+
+	it("Tier-3 pass-4 regression: default baseUrl tags as anthropic", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.provider).toBe("anthropic");
+	});
+
+	it("Tier-3 pass-4 regression: explicit providerName overrides the auto-default", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream({
+			baseUrl: "https://my-proxy.example.com/v1/messages",
+			providerName: "anthropic-bedrock",
+		})(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+
+		expect(msg.provider).toBe("anthropic-bedrock");
+	});
+
+	it("Tier-3 pass-4 regression: anthropic-compatible signed thinking is dropped when replayed through real Anthropic endpoint", async () => {
+		// End-to-end coverage of the bug class: a proxy stream emits
+		// message tagged "anthropic-compatible". Replaying through the
+		// real default endpoint must NOT forward the signature.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					provider: "anthropic-compatible", // came from a proxy
+					content: [
+						{ type: "thinking", text: "proxy thought", signature: "proxy-sig" },
+						{ type: "text", text: "answered" },
+					],
+				},
+				{ role: "user", content: "again" },
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		expect(assistantMsg.content).toEqual([{ type: "text", text: "answered" }]);
+	});
+
 	it("Tier-3 pass-3 regression: thinking with foreign provider provenance is dropped on replay", async () => {
 		// Pre-pass-3 bug: convertMessages replayed any signed thinking
 		// block as long as `signature` was present, even if the source

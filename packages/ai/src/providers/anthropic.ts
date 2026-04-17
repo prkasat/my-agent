@@ -32,6 +32,23 @@ interface AnthropicConfig {
 	 * providers that don't accept the field.
 	 */
 	enableCaching?: boolean;
+	/**
+	 * Identifier stamped on every emitted AssistantMessage as
+	 * `message.provider`. The replay gate in convertMessages only trusts
+	 * signed thinking when the source message has provider === "anthropic".
+	 *
+	 * Default: "anthropic" when baseUrl is the real Anthropic endpoint,
+	 * "anthropic-compatible" otherwise. The auto-default keeps third-party
+	 * proxies / Bedrock-style passthroughs from being mistakenly tagged
+	 * as the real API — their signatures are not interchangeable, and
+	 * replaying one to the real Anthropic endpoint would 400.
+	 *
+	 * Hosts that KNOW their proxy passes through real Anthropic
+	 * signatures (e.g. an authenticated reverse proxy that forwards to
+	 * api.anthropic.com unchanged) can opt back into "anthropic" by
+	 * setting this explicitly. Codex Tier-3 pass-4 finding.
+	 */
+	providerName?: string;
 }
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com/v1/messages";
@@ -275,6 +292,13 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 	const envKey = config.envKey ?? DEFAULT_ENV_KEY;
 	const apiVersion = config.apiVersion ?? DEFAULT_API_VERSION;
 	const enableCaching = config.enableCaching ?? true;
+	// Safe default: mark non-default endpoints as "anthropic-compatible"
+	// so the replay-trust gate in convertMessages doesn't forward their
+	// signed thinking back to the real Anthropic API. Hosts that KNOW
+	// their proxy passes signatures through unchanged can opt back into
+	// "anthropic" explicitly via providerName.
+	const providerName =
+		config.providerName ?? (baseUrl === DEFAULT_BASE_URL ? "anthropic" : "anthropic-compatible");
 
 	return function anthropicStream(
 		model: Model,
@@ -341,7 +365,7 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 					return;
 				}
 
-				await parseSSEStream(response, stream, model.id, options.signal);
+				await parseSSEStream(response, stream, model.id, providerName, options.signal);
 			} catch (err) {
 				if (options.signal?.aborted) {
 					stream.end();
@@ -379,6 +403,7 @@ async function parseSSEStream(
 	response: Response,
 	stream: EventStream<AssistantMessageEvent, AssistantMessage>,
 	modelId: string,
+	providerName: string,
 	signal?: AbortSignal,
 ): Promise<void> {
 	if (!response.body) {
@@ -584,7 +609,7 @@ async function parseSSEStream(
 			role: "assistant",
 			content: finalContent,
 			model: modelId,
-			provider: "anthropic",
+			provider: providerName,
 			usage,
 			stopReason,
 		},
