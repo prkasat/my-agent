@@ -349,6 +349,48 @@ export function createAutoCompactorWithPersistence(
     // loop has flushed those messages.
     preCompactionMapping = options.sessionManager.buildMessageToEntryMapping();
 
+    // Defensive alignment: a PRIOR deferred compaction may have left a
+    // synthetic `compaction_summary` at context.messages[0] that has
+    // NO corresponding CompactionEntry on disk. Real
+    // SessionManager.buildMessageToEntryMapping() only prepends the
+    // null slot when a persisted compaction entry exists, so in that
+    // case the returned mapping is shorter than context.messages AND
+    // shifted by the count of in-memory-only synthetic prefix
+    // messages. Without realignment, a later compaction round would
+    // use `mapping[cutIndex]` that points at the wrong persisted
+    // entry — and firstKeptEntryId would anchor to the wrong place,
+    // corrupting session replay. Pad the mapping with leading nulls
+    // to match context.messages' index base. Codex budget-fix
+    // pass-10 finding.
+    let syntheticPrefixCount = 0;
+    while (syntheticPrefixCount < context.messages.length) {
+      const m = context.messages[syntheticPrefixCount];
+      if (
+        "role" in m &&
+        m.role === "custom" &&
+        "type" in m &&
+        m.type === "compaction_summary"
+      ) {
+        syntheticPrefixCount++;
+      } else {
+        break;
+      }
+    }
+    let existingNullPrefix = 0;
+    while (
+      existingNullPrefix < preCompactionMapping.length &&
+      preCompactionMapping[existingNullPrefix] === null
+    ) {
+      existingNullPrefix++;
+    }
+    if (syntheticPrefixCount > existingNullPrefix) {
+      const needed = syntheticPrefixCount - existingNullPrefix;
+      preCompactionMapping = [
+        ...Array.from({ length: needed }, () => null as string | null),
+        ...preCompactionMapping,
+      ];
+    }
+
     // Snapshot the pre-compaction transcript so we can roll back if
     // appendCompaction throws. Without rollback, a persist failure
     // leaves the in-memory context shrunk and the summary call

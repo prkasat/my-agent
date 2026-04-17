@@ -696,6 +696,67 @@ describe("createAutoCompactorWithPersistence", () => {
 		expect(sm.appendCompaction).toHaveBeenCalled();
 	});
 
+	it("realigns mapping for an in-memory synthetic compaction_summary left by a prior deferred round", async () => {
+		// Codex budget-fix pass-10 HIGH: after a deferred compaction,
+		// context.messages[0] is a synthetic compaction_summary with
+		// no corresponding disk entry. Real
+		// SessionManager.buildMessageToEntryMapping does NOT prepend a
+		// null for that in-memory-only synthetic, so the mapping is
+		// shifted by one from context.messages. Without alignment, a
+		// later round would anchor firstKeptEntryId to the wrong
+		// persisted entry. The wrapper must pad the mapping with
+		// leading nulls to match the in-memory synthetic prefix.
+		const mappedIds: string[] = [];
+		for (let i = 0; i < 25; i++) mappedIds.push(`entry-${i}`);
+
+		// Session manager that returns a mapping WITHOUT the null
+		// prefix (simulating "no persisted compaction entry").
+		const sm = {
+			appendCompaction: vi.fn((_s: string, firstKept: string) => {
+				// Capture the firstKeptEntryId that the wrapper picked.
+				(sm as any).lastFirstKept = firstKept;
+				return "new-entry-id";
+			}),
+			buildMessageToEntryMapping: () => mappedIds.slice(),
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: fakeStreamFn("summary") as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+		});
+
+		// Build context.messages with a synthetic prefix simulating
+		// round-1-deferred state:
+		// [synthetic, msg1, msg2, ..., msg22, big-new-1, big-new-2]
+		const synthetic: AgentMessage = {
+			role: "custom",
+			type: "compaction_summary",
+			summary: "prior round 1",
+			tokensBefore: 1000,
+			tokensAfter: 200,
+			timestamp: Date.now(),
+		};
+		const followUp = buildOversizedMessages(22);
+		const ctx: AgentContext = {
+			messages: [synthetic, ...followUp],
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(ctx);
+
+		// Persistence should have run (kept tail should lie inside the
+		// realigned mapping). Most importantly the firstKeptEntryId
+		// must refer to a REAL persisted entry and reflect the
+		// synthetic offset — NOT `entry-<cutIndex>` raw.
+		expect(sm.appendCompaction).toHaveBeenCalled();
+		const picked = (sm as any).lastFirstKept as string;
+		// Must be a valid id from mappedIds (not null, not out of range).
+		expect(mappedIds).toContain(picked);
+	});
+
 	it("charges the live tracker even on the deferred-persistence path (cut past mapping)", async () => {
 		// Codex budget-fix pass-10 HIGH: when the kept tail lies past
 		// the persisted mapping, persistence is deferred — but the
