@@ -116,6 +116,24 @@ export interface SessionInfoEntry extends SessionEntryBase {
 }
 
 /**
+ * Label entry - attaches a user-defined label to any other entry.
+ *
+ * Labels act as named bookmarks for navigation: rather than scanning
+ * a session for "the turn where I asked about X", the user labels
+ * that turn and references it by name. Labels are append-only history
+ * (a new LabelEntry with `label: undefined` clears the label) so the
+ * full provenance is recoverable on replay; only the latest label per
+ * targetId is exposed via the getLabel/getLabels API.
+ */
+export interface LabelEntry extends SessionEntryBase {
+  type: "label";
+  /** Entry being labeled. */
+  targetId: string;
+  /** New label value. `undefined` (or empty after trim) clears the label. */
+  label?: string;
+}
+
+/**
  * Extension entry — namespaced plugin payload that core does not interpret.
  *
  * Lets plugins persist arbitrary state inside the session file without
@@ -156,6 +174,7 @@ export type SessionEntry =
   | CompactionEntry
   | BranchSummaryEntry
   | SessionInfoEntry
+  | LabelEntry
   | ExtensionEntry;
 
 /**

@@ -36,6 +36,7 @@ import type {
   CompactionEntry,
   ExtensionEntry,
   FileEntry,
+  LabelEntry,
   MessageEntry,
   SessionContext,
   SessionEntry,
@@ -394,6 +395,13 @@ export class SessionManager {
   }
   private fileEntries: FileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
+  /**
+   * Latest label per target entry, derived from LabelEntry history.
+   * A LabelEntry with `label: undefined` (or empty after trim) deletes
+   * the entry. Rebuilt from scratch on every buildIndex() so the
+   * append-only history is the single source of truth.
+   */
+  private labelsByTargetId: Map<string, string> = new Map();
   private leafId: string | null = null;
   // True when the caller explicitly chose the current leaf via branch(),
   // navigateBranch(), or resetLeaf(). withLock's reload uses this to know
@@ -629,6 +637,7 @@ export class SessionManager {
    */
   private buildIndex(): void {
     this.byId.clear();
+    this.labelsByTargetId.clear();
     this.leafId = null;
     this.leafSelectedByUser = false;
 
@@ -636,6 +645,19 @@ export class SessionManager {
       if (entry.type === "session") continue;
       this.byId.set(entry.id, entry);
       this.leafId = entry.id;
+      if (entry.type === "label") {
+        // Last write wins. An empty/undefined label clears the entry.
+        // We don't validate that targetId exists in byId here — the
+        // load order may put labels after their targets only sometimes
+        // (e.g. branch navigation rewrites), and an orphan label is
+        // harmless: getLabel just returns undefined for unknown IDs.
+        const trimmed = entry.label?.trim();
+        if (trimmed) {
+          this.labelsByTargetId.set(entry.targetId, trimmed);
+        } else {
+          this.labelsByTargetId.delete(entry.targetId);
+        }
+      }
     }
   }
 
@@ -939,6 +961,74 @@ export class SessionManager {
     };
     this.appendEntry(entry);
     return entry.id;
+  }
+
+  /**
+   * Set or clear a label on an existing entry.
+   *
+   * Labels are user-defined bookmarks that name a specific point in
+   * the session graph (a turn, a compaction, a branch summary). They
+   * support navigation by name rather than scrolling history. Labels
+   * are stored as their own append-only entry type, so the full
+   * change history is recoverable on replay; the in-memory index
+   * exposes only the latest value per target.
+   *
+   * Pass `undefined` or an empty string to clear an existing label.
+   *
+   * Persistence: written through immediately (force=true), matching
+   * appendExtension. The user expectation is that "I named that
+   * turn" survives a crash or process exit before the next
+   * assistant message.
+   */
+  appendLabelChange(targetId: string, label: string | undefined): string {
+    if (!this.byId.has(targetId)) {
+      throw new Error(`Cannot label entry ${targetId}: entry not found`);
+    }
+    const trimmed = label?.trim();
+    const entry: LabelEntry = {
+      type: "label",
+      id: generateId(this.byId),
+      parentId: this.leafId,
+      timestamp: new Date().toISOString(),
+      targetId,
+      ...(trimmed ? { label: trimmed } : {}),
+    };
+    this.appendEntry(entry, /* force */ true);
+    if (trimmed) {
+      this.labelsByTargetId.set(targetId, trimmed);
+    } else {
+      this.labelsByTargetId.delete(targetId);
+    }
+    return entry.id;
+  }
+
+  /**
+   * Get the current label for an entry, or undefined if unlabeled.
+   */
+  getLabel(entryId: string): string | undefined {
+    return this.labelsByTargetId.get(entryId);
+  }
+
+  /**
+   * Snapshot of all currently-labeled entries (latest label per
+   * target). The returned Map is a copy and safe to mutate.
+   */
+  getLabels(): Map<string, string> {
+    return new Map(this.labelsByTargetId);
+  }
+
+  /**
+   * Resolve a label string to the entry it currently points at, or
+   * undefined when no entry carries that label. Useful for slash
+   * commands like `/goto <label>`.
+   */
+  findEntryByLabel(label: string): string | undefined {
+    const target = label.trim();
+    if (!target) return undefined;
+    for (const [entryId, value] of this.labelsByTargetId) {
+      if (value === target) return entryId;
+    }
+    return undefined;
   }
 
   /**

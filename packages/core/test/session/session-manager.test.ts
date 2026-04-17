@@ -1254,4 +1254,107 @@ describe("SessionManager.withLock cross-process behavior", () => {
     expect(branched.parentId).not.toBe(a2);
     void u1;
   });
+
+  describe("Tier-4: labels", () => {
+    it("attaches a label to an entry and exposes it via getLabel", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+
+      manager.appendLabelChange(id, "first-question");
+
+      expect(manager.getLabel(id)).toBe("first-question");
+    });
+
+    it("trims whitespace and treats empty as a clear", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+
+      manager.appendLabelChange(id, "  spaced  ");
+      expect(manager.getLabel(id)).toBe("spaced");
+
+      manager.appendLabelChange(id, "   ");
+      expect(manager.getLabel(id)).toBeUndefined();
+    });
+
+    it("undefined label clears an existing label", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+
+      manager.appendLabelChange(id, "marker");
+      expect(manager.getLabel(id)).toBe("marker");
+
+      manager.appendLabelChange(id, undefined);
+      expect(manager.getLabel(id)).toBeUndefined();
+    });
+
+    it("relabeling overwrites the previous value", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+
+      manager.appendLabelChange(id, "first");
+      manager.appendLabelChange(id, "second");
+
+      expect(manager.getLabel(id)).toBe("second");
+    });
+
+    it("rejects labeling a missing entry", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      expect(() => manager.appendLabelChange("does-not-exist", "x")).toThrow(/not found/);
+    });
+
+    it("findEntryByLabel returns the latest target for a name", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "a", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "b" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+
+      manager.appendLabelChange(a, "important");
+      expect(manager.findEntryByLabel("important")).toBe(a);
+
+      // Reassigning the label moves it to a new target by clearing + setting.
+      manager.appendLabelChange(a, undefined);
+      manager.appendLabelChange(b, "important");
+      expect(manager.findEntryByLabel("important")).toBe(b);
+      expect(manager.getLabel(a)).toBeUndefined();
+    });
+
+    it("getLabels returns a snapshot copy", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(id, "x");
+
+      const snap = manager.getLabels();
+      snap.delete(id);
+
+      expect(manager.getLabel(id)).toBe("x");
+    });
+
+    it("persists across reload (last-write-wins replay)", async () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      // Force a flush to disk by appending something that triggers
+      // persistence; appendLabelChange uses force=true so it writes
+      // through immediately.
+      const id = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(id, "first");
+      manager.appendLabelChange(id, "second");
+      manager.appendLabelChange(id, undefined);
+      manager.appendLabelChange(id, "final");
+
+      const sessionFile = manager.getSessionFile()!;
+      const reopened = SessionManager.open(sessionFile);
+
+      expect(reopened.getLabel(id)).toBe("final");
+      // History is preserved on disk: 4 LabelEntry rows.
+      const onDisk = readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as SessionEntry);
+      const labelEntries = onDisk.filter((e) => e.type === "label");
+      expect(labelEntries).toHaveLength(4);
+    });
+  });
 });
