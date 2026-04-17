@@ -448,6 +448,156 @@ describe("anthropic provider", () => {
 		expect(assistantMsg.content[0].input).toEqual({});
 	});
 
+	it("Tier-3 pass-3 regression: thinking with foreign provider provenance is dropped on replay", async () => {
+		// Pre-pass-3 bug: convertMessages replayed any signed thinking
+		// block as long as `signature` was present, even if the source
+		// assistant message came from a different provider. Anthropic
+		// would reject the foreign signature with a 400.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					provider: "openrouter", // foreign provider
+					content: [
+						{ type: "thinking", text: "openrouter thought", signature: "openrouter-sig-bytes" },
+						{ type: "text", text: "answered" },
+					],
+				},
+				{ role: "user", content: "again" },
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		// Foreign signed thinking must be dropped — only text remains.
+		expect(assistantMsg.content).toEqual([{ type: "text", text: "answered" }]);
+	});
+
+	it("Tier-3 pass-3 regression: thinking with no provider tag is dropped on replay", async () => {
+		// Defensive: undefined provider means we don't know — don't trust.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					// no provider tag
+					content: [
+						{ type: "thinking", text: "untagged", signature: "sig-bytes" },
+						{ type: "text", text: "answered" },
+					],
+				},
+				{ role: "user", content: "again" },
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		expect(assistantMsg.content).toEqual([{ type: "text", text: "answered" }]);
+	});
+
+	it("Tier-3 pass-3 regression: foreign tool_use IDs are normalized and tool_result IDs remapped", async () => {
+		// Pre-pass-3 bug: tool_use.id and tool_result.tool_use_id were
+		// replayed verbatim. OpenAI Responses can emit IDs longer than
+		// 64 chars and containing `|`, which Anthropic rejects. The pair
+		// must be normalized AND remapped so they still match.
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		const foreignId = "fc_resp_01abcdef|stream_chunk_xyz_12345_long_id_pretending_to_exceed_64_chars";
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "do it" },
+				{
+					role: "assistant",
+					provider: "openai",
+					content: [{ type: "tool_call", id: foreignId, name: "read", arguments: '{"path":"/tmp/x"}' }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: foreignId,
+					toolName: "read",
+					content: [{ type: "text", text: "data" }],
+				},
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		const userMsg = sentBody.messages.find((m: { role: string; content: Array<{ type: string }> }) => m.role === "user" && m.content.some((c) => c.type === "tool_result"));
+
+		const usedId = assistantMsg.content[0].id;
+		expect(usedId).not.toBe(foreignId);
+		expect(usedId).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
+		// The matching tool_result MUST use the same normalized id.
+		expect(userMsg.content[0].tool_use_id).toBe(usedId);
+	});
+
+	it("Tier-3 pass-3 regression: anthropic-safe tool IDs are passed through unchanged", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					provider: "anthropic",
+					content: [{ type: "tool_call", id: "toolu_01ABC", name: "read", arguments: '{}' }],
+				},
+				{
+					role: "toolResult",
+					toolCallId: "toolu_01ABC",
+					toolName: "read",
+					content: [{ type: "text", text: "" }],
+				},
+			],
+		}).result();
+
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
+		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
+		expect(assistantMsg.content[0].id).toBe("toolu_01ABC");
+	});
+
 	it("Tier-3 pass-2 regression: thinking signature round-trips on replay", async () => {
 		// Pre-pass-2 bug: convertMessages hardcoded `signature: ""` for
 		// any prior thinking block. Anthropic requires the original
@@ -469,6 +619,7 @@ describe("anthropic provider", () => {
 				{ role: "user", content: "think" },
 				{
 					role: "assistant",
+					provider: "anthropic",
 					content: [
 						{ type: "thinking", text: "the model thought", signature: "real-sig-bytes" },
 						{ type: "text", text: "answered" },

@@ -75,8 +75,37 @@ interface AnthropicMessage {
 	content: AnthropicContentBlock[];
 }
 
+/**
+ * Anthropic tool_use IDs are typically `toolu_<24-char-base64ish>` and
+ * the API rejects IDs that are too long or contain shell-style chars.
+ * Other providers can emit IDs that violate those constraints (OpenAI
+ * Responses uses long IDs with `|`). When we replay history through
+ * Anthropic, normalize any ID outside the safe shape AND remap the
+ * matching toolResult.toolCallId so the pair still wires up.
+ *
+ * Codex Tier-3 pass-3 finding.
+ */
+const ANTHROPIC_TOOL_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+function isAnthropicSafeToolId(id: string): boolean {
+	return ANTHROPIC_TOOL_ID_RE.test(id);
+}
+
 function convertMessages(context: Context, enableCaching: boolean): AnthropicMessage[] {
 	const out: AnthropicMessage[] = [];
+	// First pass: build a remap of foreign tool IDs to anthropic-safe
+	// IDs by walking assistant tool_call blocks. The remap is then
+	// applied to the matching toolResult below.
+	const toolIdRemap = new Map<string, string>();
+	let toolIdCounter = 0;
+	const safeId = (orig: string): string => {
+		if (isAnthropicSafeToolId(orig)) return orig;
+		const cached = toolIdRemap.get(orig);
+		if (cached) return cached;
+		const fresh = `toolu_compat_${toolIdCounter++}`;
+		toolIdRemap.set(orig, fresh);
+		return fresh;
+	};
 
 	// Anthropic groups consecutive tool_results into the *next* user
 	// message. We rebuild the flat my-agent message list as Anthropic's
@@ -129,32 +158,38 @@ function convertMessages(context: Context, enableCaching: boolean): AnthropicMes
 			}
 			pendingUser.push({
 				type: "tool_result",
-				tool_use_id: msg.toolCallId,
+				tool_use_id: safeId(msg.toolCallId),
 				content,
 				...(msg.isError ? { is_error: true } : {}),
 			});
 		} else if (msg.role === "assistant") {
 			flushUser();
+			// Signed thinking is provider/model-specific continuation
+			// state, not portable transcript content. A thinking block
+			// produced by a non-Anthropic assistant (or by us before
+			// the provider tag was set) carries a signature that
+			// Anthropic will reject — even if it's well-formed,
+			// because it isn't ITS signature. Only replay signed
+			// thinking when the assistant message came from this
+			// provider. Otherwise drop the block (we already drop
+			// thinking with no signature for the same reason).
+			// Codex Tier-3 pass-3 finding.
+			// Only "anthropic" provenance qualifies — undefined means
+			// we don't know, so don't trust the signature.
+			const sameProvider = msg.provider === "anthropic";
 			const blocks: AnthropicContentBlock[] = [];
 			for (const block of msg.content) {
 				if (block.type === "text") {
 					blocks.push({ type: "text", text: block.text });
 				} else if (block.type === "thinking") {
-					// Anthropic requires thinking blocks to be replayed
-					// verbatim WITH their original signature. If we don't
-					// have a signature (e.g. the message was produced by
-					// another provider, or by us before signature
-					// persistence existed), DROP the block — sending
-					// `signature: ""` makes the API reject the entire
-					// request with a 400, breaking the conversation.
-					// (Codex Tier-3 pass-2 finding.)
-					if (block.signature) {
+					if (block.signature && sameProvider) {
 						blocks.push({
 							type: "thinking",
 							thinking: block.text,
 							signature: block.signature,
 						});
 					}
+					// Otherwise drop — see comment above.
 				} else if (block.type === "tool_call") {
 					let parsedInput: Record<string, unknown> = {};
 					if (block.arguments) {
@@ -175,7 +210,7 @@ function convertMessages(context: Context, enableCaching: boolean): AnthropicMes
 					}
 					blocks.push({
 						type: "tool_use",
-						id: block.id,
+						id: safeId(block.id),
 						name: block.name,
 						input: parsedInput,
 					});
