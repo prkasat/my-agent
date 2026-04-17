@@ -9,6 +9,7 @@ import {
   findCutPoint,
   extractFileOperations,
   generateCompactionSummary,
+  evaluateCompaction,
   shouldCompact,
 } from "../../src/session/compaction.js";
 import type { AgentMessage } from "../../src/agent/types.js";
@@ -907,5 +908,90 @@ describe("regression scenarios", () => {
       { role: "user", content: "A".repeat(10_000), timestamp: Date.now() }, // ~2500 tokens
     ];
     expect(shouldCompact(big, 4000, 16000)).toBe(true);
+  });
+});
+
+describe("evaluateCompaction", () => {
+  const longInput: AgentMessage[] = [
+    { role: "user", content: "A".repeat(2000), timestamp: Date.now() },
+  ];
+
+  it("flags an empty summary", () => {
+    const result = evaluateCompaction(longInput, "   \n\t  ", {
+      readFiles: [],
+      modifiedFiles: [],
+    });
+    expect(result.warnings).toContain("compaction produced an empty summary");
+    expect(result.tokensAfterSummary).toBe(0);
+  });
+
+  it("passes a healthy summary that mentions tracked files", () => {
+    const summary = "Read /src/foo.ts, modified /src/bar.ts. Done.";
+    const result = evaluateCompaction(longInput, summary, {
+      readFiles: ["/src/foo.ts"],
+      modifiedFiles: ["/src/bar.ts"],
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.missingFiles).toEqual([]);
+    expect(result.savingsRatio).toBeLessThan(1);
+  });
+
+  it("flags tracked files missing from the summary", () => {
+    const summary = "Did some work but cannot remember which files.";
+    const result = evaluateCompaction(longInput, summary, {
+      readFiles: ["/src/foo.ts"],
+      modifiedFiles: ["/src/bar.ts"],
+    });
+    expect(result.missingFiles).toEqual(["/src/foo.ts", "/src/bar.ts"]);
+    expect(result.warnings.some((w) => w.includes("missing from summary"))).toBe(true);
+  });
+
+  it("accepts basename mention as proof a file was kept", () => {
+    const summary = "Touched foo.ts and bar.ts during the refactor.";
+    const result = evaluateCompaction(longInput, summary, {
+      readFiles: ["/very/long/path/to/foo.ts"],
+      modifiedFiles: ["/another/dir/bar.ts"],
+    });
+    expect(result.missingFiles).toEqual([]);
+  });
+
+  it("flags a summary that is larger than the input it summarized", () => {
+    // 100+ token input, 500 token summary
+    const result = evaluateCompaction(longInput, "X".repeat(2500), {
+      readFiles: [],
+      modifiedFiles: [],
+    });
+    expect(result.warnings.some((w) => w.includes("larger than the input"))).toBe(true);
+  });
+
+  it("does not flag size regression on tiny inputs", () => {
+    const tiny: AgentMessage[] = [
+      { role: "user", content: "hi", timestamp: Date.now() },
+    ];
+    const summary = "User said hello, no work performed.";
+    const result = evaluateCompaction(tiny, summary, {
+      readFiles: [],
+      modifiedFiles: [],
+    });
+    // tokensBefore < 100 → size-regression check is suppressed.
+    expect(result.warnings.some((w) => w.includes("larger than the input"))).toBe(false);
+  });
+
+  it("dedupes file paths that appear in both read and modified lists", () => {
+    const result = evaluateCompaction(longInput, "no file mentioned here", {
+      readFiles: ["/src/foo.ts"],
+      modifiedFiles: ["/src/foo.ts"],
+    });
+    // Should appear once, not twice.
+    expect(result.missingFiles).toEqual(["/src/foo.ts"]);
+  });
+
+  it("returns savingsRatio = 0 when there is nothing to summarize", () => {
+    const result = evaluateCompaction([], "nothing", {
+      readFiles: [],
+      modifiedFiles: [],
+    });
+    expect(result.tokensBefore).toBe(0);
+    expect(result.savingsRatio).toBe(0);
   });
 });

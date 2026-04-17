@@ -147,6 +147,7 @@ export {
 	findCutPoint,
 	extractFileOperations,
 	generateCompactionSummary,
+	evaluateCompaction,
 	compact,
 	shouldCompact,
 	// Auto-compaction
@@ -170,6 +171,7 @@ export type {
 	SessionEntry,
 	FileEntry,
 	CompactionDetails,
+	CompactionEvaluation,
 	BranchSummaryDetails,
 	SessionTreeNode,
 	SessionContext,

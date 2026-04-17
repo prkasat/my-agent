@@ -21,6 +21,7 @@ export type {
   SessionEntry,
   FileEntry,
   CompactionDetails,
+  CompactionEvaluation,
   BranchSummaryDetails,
   SessionTreeNode,
   SessionContext,
@@ -42,6 +43,7 @@ export {
   findCutPoint,
   extractFileOperations,
   generateCompactionSummary,
+  evaluateCompaction,
   compact,
   shouldCompact,
 } from "./compaction.js";

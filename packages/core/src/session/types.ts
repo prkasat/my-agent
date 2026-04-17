@@ -210,6 +210,32 @@ export interface CompactionDetails {
   modifiedFiles: string[];
   /** Token count after compaction */
   tokensAfter: number;
+  /** Self-evaluation of compaction quality. Optional for backward compat
+   * with sessions written before self-eval shipped — readers MUST treat
+   * `undefined` as "not evaluated" and not as "no warnings". */
+  evaluation?: CompactionEvaluation;
+}
+
+/**
+ * Post-compaction sanity checks. Recorded with the entry; not thrown.
+ * Surfaces concrete failure modes so callers can decide whether to
+ * trust the summary, retry, or escalate. Estimates use the same
+ * chars/4 heuristic as the rest of the codebase so the numbers are
+ * comparable to other token measurements.
+ */
+export interface CompactionEvaluation {
+  /** Estimated tokens in the input transcript that was summarized */
+  tokensBefore: number;
+  /** Estimated tokens in the produced summary */
+  tokensAfterSummary: number;
+  /** tokensAfterSummary / tokensBefore. 1.0 = no shrink; <1.0 = shrunk. */
+  savingsRatio: number;
+  /** Tracked file paths that did not appear anywhere in the summary text */
+  missingFiles: string[];
+  /** Human-readable warnings: empty summary, summary larger than input,
+   * tracked files dropped, etc. Empty array means the summary passed all
+   * checks. */
+  warnings: string[];
 }
 
 /**

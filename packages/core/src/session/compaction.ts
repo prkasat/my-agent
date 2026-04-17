@@ -13,7 +13,7 @@
 
 import type { AgentMessage, AgentContext } from "../agent/types.js";
 import type { AssistantMessage, Message, Model, StreamFunction, Usage } from "@my-agent/ai";
-import type { CompactionDetails } from "./types.js";
+import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
 
 // ============================================================================
@@ -657,6 +657,94 @@ export interface CompactionResult {
 }
 
 // ============================================================================
+// Self-Evaluation
+// ============================================================================
+
+/**
+ * Post-compaction sanity check. Returns a CompactionEvaluation describing
+ * the size delta and any tracked files that were dropped from the summary
+ * text. Never throws — the goal is to surface degraded outputs so the
+ * caller can act, not to abort compaction.
+ *
+ * Failure modes detected:
+ * - Empty / whitespace-only summary (LLM returned nothing usable).
+ * - Summary token estimate larger than the input it summarized
+ *   (compaction made the context worse, not better).
+ * - Tracked file paths missing from the summary text (the tool-call
+ *   trace shows we read/wrote the file, but the summary doesn't
+ *   mention it — useful for catching summaries that drop critical
+ *   state).
+ *
+ * `summarizedMessages` is the list that was actually fed to the LLM
+ * (post-filtering of prior compaction summaries), not the raw input,
+ * because that's what the size ratio is meaningful against.
+ */
+export function evaluateCompaction(
+  summarizedMessages: AgentMessage[],
+  summary: string,
+  trackedFiles: { readFiles: string[]; modifiedFiles: string[] },
+): CompactionEvaluation {
+  const tokensBefore = estimateContextTokens(summarizedMessages);
+  const trimmed = summary.trim();
+  const tokensAfterSummary = trimmed.length / 4;
+  // Guard against divide-by-zero when there was nothing to summarize.
+  // Treat as savingsRatio = 0 (perfect compression of nothing).
+  const savingsRatio = tokensBefore > 0 ? tokensAfterSummary / tokensBefore : 0;
+
+  const warnings: string[] = [];
+
+  if (trimmed.length === 0) {
+    warnings.push("compaction produced an empty summary");
+  }
+
+  // Only flag size regression when the input was non-trivial. A 50-char
+  // input that summarizes to 60 chars isn't a real regression — the
+  // wrapper / framing dominates. Threshold matches the "didn't bother
+  // compacting" case in findCutPoint's clamp behavior.
+  if (tokensBefore >= 100 && tokensAfterSummary > tokensBefore) {
+    warnings.push(
+      `summary (${Math.round(tokensAfterSummary)} tok) is larger than the input it summarized (${Math.round(tokensBefore)} tok)`,
+    );
+  }
+
+  // Tracked-files check: a tracked path that doesn't appear anywhere in
+  // the summary text is suspicious. This is a substring match, so a
+  // basename-only summary mention still passes.
+  //
+  // We check the FULL path AND its basename — the LLM commonly shortens
+  // paths in summaries, and we don't want to false-flag those.
+  const missingFiles: string[] = [];
+  const lower = trimmed.toLowerCase();
+  const allTracked = [...trackedFiles.readFiles, ...trackedFiles.modifiedFiles];
+  // Dedupe so the same file mentioned in both lists doesn't double-count.
+  const seen = new Set<string>();
+  for (const path of allTracked) {
+    if (seen.has(path)) continue;
+    seen.add(path);
+    const basename = path.split("/").pop() ?? path;
+    if (
+      !lower.includes(path.toLowerCase()) &&
+      !lower.includes(basename.toLowerCase())
+    ) {
+      missingFiles.push(path);
+    }
+  }
+  if (missingFiles.length > 0) {
+    warnings.push(
+      `${missingFiles.length} tracked file(s) missing from summary text`,
+    );
+  }
+
+  return {
+    tokensBefore,
+    tokensAfterSummary,
+    savingsRatio,
+    missingFiles,
+    warnings,
+  };
+}
+
+// ============================================================================
 // Main Compaction Function
 // ============================================================================
 
@@ -765,6 +853,15 @@ export async function compact(
   // Track file operations
   const details = extractFileOperations(messagesToSummarize, options.previousCompaction);
   details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
+
+  // Self-eval against the post-filter input so the size ratio reflects
+  // what the LLM actually saw. The XML file-operations footer that we
+  // append below is deterministic and not a measure of summary quality,
+  // so it's evaluated against the raw LLM output.
+  details.evaluation = evaluateCompaction(filteredToSummarize, summary, {
+    readFiles: details.readFiles,
+    modifiedFiles: details.modifiedFiles,
+  });
 
   // Enrich summary with file-operation XML sections so future calls
   // (and human readers) can quickly recover what files this branch
