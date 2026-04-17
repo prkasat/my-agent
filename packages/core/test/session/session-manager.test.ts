@@ -1371,6 +1371,71 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass3-fix: label move is one atomic LabelEntry with displaces", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const a = manager.appendMessage({ role: "user", content: "a", timestamp: Date.now() });
+      const b = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "b" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a, "important");
+      const moveId = manager.appendLabelChange(b, "important");
+
+      const moveEntry = manager.getEntry(moveId)!;
+      expect(moveEntry.type).toBe("label");
+      const labelEntry = moveEntry as Extract<SessionEntry, { type: "label" }>;
+      expect(labelEntry.targetId).toBe(b);
+      expect(labelEntry.label).toBe("important");
+      expect(labelEntry.displaces).toEqual([a]);
+
+      // The on-disk file contains exactly one LabelEntry for the
+      // move (not a clear+assign pair). A crash between two writes
+      // could lose the label entirely; a single entry is atomic.
+      const sessionFile = manager.getSessionFile()!;
+      const onDisk = readFileSync(sessionFile, "utf-8")
+        .trim()
+        .split("\n")
+        .map((l) => JSON.parse(l) as SessionEntry);
+      const labelEntries = onDisk.filter((e): e is Extract<SessionEntry, { type: "label" }> => e.type === "label");
+      // First label entry: assign to a. Second: move to b (with displaces).
+      // No third clearing entry.
+      expect(labelEntries).toHaveLength(2);
+      expect(labelEntries[1].displaces).toEqual([a]);
+    });
+
+    it("Codex-pass3-fix: forking the actual leaf of the old branch does not resurrect", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u1 = manager.appendMessage({ role: "user", content: "u1", timestamp: Date.now() });
+      const a1 = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a1" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const labelL1Id = manager.appendLabelChange(a1, "important");
+      // After labeling, the leaf is the LabelEntry. Branch off from
+      // u1 to start a sibling line.
+      manager.branch(u1);
+      manager.appendMessage({ role: "user", content: "u2", timestamp: Date.now() });
+      const a2 = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "a2" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a2, "important");
+
+      // Fork from the OLD branch's actual leaf (the LabelEntry L1).
+      // Path-only replay would resurrect a1 as the label owner;
+      // synthesis from current state must not.
+      const forkPath = manager.forkSession(labelL1Id);
+      expect(forkPath).toBeTruthy();
+      const reopened = SessionManager.open(forkPath!);
+      expect(reopened.findEntryByLabel("important")).toBeUndefined();
+    });
+
     it("Codex-pass2-fix: cross-branch label moves are durable across fork", () => {
       // Set up a branched session:
       //   root - u1 - a1   <- branch 1 (label "important" assigned here)

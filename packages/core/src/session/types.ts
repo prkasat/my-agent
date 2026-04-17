@@ -124,6 +124,12 @@ export interface SessionInfoEntry extends SessionEntryBase {
  * (a new LabelEntry with `label: undefined` clears the label) so the
  * full provenance is recoverable on replay; only the latest label per
  * targetId is exposed via the getLabel/getLabels API.
+ *
+ * Single-owner semantics: a label string is owned by at most one
+ * entry at a time. Reassigning a label that another target already
+ * holds atomically displaces it; the displacement is recorded in
+ * the same LabelEntry via the `displaces` field so the change is one
+ * append (no two-write race that could lose the label on crash).
  */
 export interface LabelEntry extends SessionEntryBase {
   type: "label";
@@ -131,6 +137,14 @@ export interface LabelEntry extends SessionEntryBase {
   targetId: string;
   /** New label value. `undefined` (or empty after trim) clears the label. */
   label?: string;
+  /**
+   * Other target IDs whose labels this entry atomically clears.
+   * Used to displace a previous owner when this entry takes a label
+   * that was attached elsewhere. Replaying this entry processes the
+   * assign for `targetId` and the clear for each entry in `displaces`
+   * as a single unit.
+   */
+  displaces?: string[];
 }
 
 /**

@@ -655,6 +655,14 @@ export class SessionManager {
       this.byId.set(entry.id, entry);
       this.leafId = entry.id;
       if (entry.type === "label") {
+        // Process implicit displacements first so the new assignment
+        // wins when the same target is in both lists (defensive
+        // against bad data; producers don't generate that combination).
+        if (entry.displaces) {
+          for (const displacedId of entry.displaces) {
+            this.applyLabelChange(displacedId, undefined);
+          }
+        }
         this.applyLabelChange(entry.targetId, entry.label);
       }
     }
@@ -1016,28 +1024,17 @@ export class SessionManager {
     }
     const trimmed = label?.trim();
 
-    // If the new label is already attached to a different target,
-    // persist a clearing LabelEntry for that displaced target FIRST,
-    // then write the new assignment. Without the durable clear,
-    // forkSession of a branch that contains the original assignment
-    // would resurrect the old owner — fork only replays the path
-    // entries it copies, not later sibling-branch reassignments.
-    // Codex labels pass-2 finding.
+    // If the new label already belongs to a different target, encode
+    // the displacement in the SAME LabelEntry via `displaces`. The
+    // alternative — emit a separate clearing entry first — would
+    // make the move two appends, and a crash between them would
+    // permanently lose the label (clear lands, assign doesn't).
+    // Codex labels pass-3 finding.
+    let displaces: string[] | undefined;
     if (trimmed) {
       const displacedOwner = this.labelsByName.get(trimmed);
       if (displacedOwner !== undefined && displacedOwner !== targetId) {
-        const clearEntry: LabelEntry = {
-          type: "label",
-          id: generateId(this.byId),
-          parentId: this.leafId,
-          timestamp: new Date().toISOString(),
-          targetId: displacedOwner,
-        };
-        this.appendEntry(clearEntry, /* force */ true);
-        // applyLabelChange in the next step will displace the
-        // in-memory ownership, but write the in-memory clear now so
-        // the leaf-id chain stays correct for the assignment entry.
-        this.applyLabelChange(displacedOwner, undefined);
+        displaces = [displacedOwner];
       }
     }
 
@@ -1048,8 +1045,14 @@ export class SessionManager {
       timestamp: new Date().toISOString(),
       targetId,
       ...(trimmed ? { label: trimmed } : {}),
+      ...(displaces ? { displaces } : {}),
     };
     this.appendEntry(entry, /* force */ true);
+    if (displaces) {
+      for (const displacedId of displaces) {
+        this.applyLabelChange(displacedId, undefined);
+      }
+    }
     this.applyLabelChange(targetId, trimmed);
     return entry.id;
   }
@@ -1553,28 +1556,26 @@ export class SessionManager {
       }
 
       if (entry.type === "label") {
-        // Drop labels whose target isn't part of the forked path —
-        // an orphan reference would resolve to a nonexistent ID in
-        // the child session and silently corrupt /goto navigation.
-        const mappedTargetId = idMap.get(entry.targetId);
-        if (!mappedTargetId) {
-          return null;
-        }
-        return {
-          ...base,
-          type: "label",
-          targetId: mappedTargetId,
-          ...(entry.label !== undefined ? { label: entry.label } : {}),
-        };
+        // Drop ALL existing label entries from the forked path. The
+        // path-replay model can't reproduce label state correctly
+        // when a displacing reassignment happened on a sibling
+        // branch we didn't copy — replaying just the path entries
+        // would resurrect a label the user already moved away.
+        // Instead, the fork synthesizes fresh LabelEntries below
+        // that capture the parent session's CURRENT label state
+        // filtered to entries present in the fork. Codex labels
+        // pass-3 finding.
+        return null;
       }
 
       return base as SessionEntry;
     };
 
     // Second pass: create new entries with remapped IDs. Skip
-    // entries that remapEntry refused (e.g. orphan label entries
-    // whose target isn't on the forked path); preserve the parent
-    // chain so following entries still point at a real previous ID.
+    // entries that remapEntry refused (e.g. label entries — fork
+    // synthesizes fresh ones from current state below); preserve
+    // the parent chain so following entries still point at a real
+    // previous ID.
     const newEntries: SessionEntry[] = [];
     let prevId: string | null = null;
     for (const entry of path) {
@@ -1583,6 +1584,32 @@ export class SessionManager {
       if (!newEntry) continue;
       newEntries.push(newEntry);
       prevId = newId;
+    }
+
+    // Synthesize fresh LabelEntries for the parent's CURRENT label
+    // state, filtered to targets that survived the fork. This avoids
+    // resurrecting a label whose displacing reassignment lived on a
+    // sibling branch we didn't copy. Each synthesized entry gets a
+    // new ID, parented at the previous tip — building a small
+    // appendix that establishes ground-truth label state.
+    let labelTimestampOffset = 0;
+    for (const [origTargetId, label] of this.labelsByTargetId) {
+      const newTargetId = idMap.get(origTargetId);
+      if (!newTargetId) continue;
+      const labelId = generateId(usedIds);
+      usedIds.add(labelId);
+      const labelEntry: LabelEntry = {
+        type: "label",
+        id: labelId,
+        parentId: prevId,
+        // Stagger timestamps so on-disk order is stable even at
+        // sub-millisecond resolution.
+        timestamp: new Date(Date.now() + labelTimestampOffset++).toISOString(),
+        targetId: newTargetId,
+        label,
+      };
+      newEntries.push(labelEntry);
+      prevId = labelId;
     }
 
     if (!this.persist) {
