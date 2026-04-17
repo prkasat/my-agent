@@ -187,6 +187,11 @@ async function runLoop(
 				return;
 			}
 
+			// --- Execute Tool Calls ---
+			const toolCalls = assistantMessage.content.filter(
+				(c): c is ToolCallContent => c.type === "tool_call",
+			);
+
 			// Auto-wire cost tracking. Record THIS turn's cost before any
 			// tool calls execute — an over-budget turn must not be allowed
 			// to mutate state (write/edit/bash) just because it crossed
@@ -194,9 +199,19 @@ async function runLoop(
 			// For free-tier sessions (no maxCostPerSession configured)
 			// `isBudgetExceeded()` returns false, so this is a no-op.
 			// Codex budget-fix pass-1 finding.
+			//
+			// Structural completeness on early exit: if the over-budget
+			// assistant message had tool_calls, pad them with synthetic
+			// "cancelled" toolResults BEFORE returning. Otherwise the
+			// session ends with a dangling assistant tool_call turn that
+			// agentLoopContinue refuses to resume and providers reject
+			// on replay. Codex budget-fix pass-2 finding.
 			if (config.costTracker && assistantMessage.usage) {
 				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
 				if (config.costTracker.isBudgetExceeded()) {
+					if (toolCalls.length > 0) {
+						context.messages.push(...padCancelledToolResults(toolCalls, []));
+					}
 					stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
 					stream.push({
 						type: "agent_end",
@@ -206,11 +221,6 @@ async function runLoop(
 					return;
 				}
 			}
-
-			// --- Execute Tool Calls ---
-			const toolCalls = assistantMessage.content.filter(
-				(c): c is ToolCallContent => c.type === "tool_call",
-			);
 
 			if (toolCalls.length > 0) {
 				const toolResults =

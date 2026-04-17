@@ -661,6 +661,16 @@ describe("Agent Loop", () => {
 		expect(end?.error).toMatch(/budget/i);
 		// No tool_execution_start was emitted either.
 		expect(events.find((e) => e.type === "tool_execution_start")).toBeUndefined();
+
+		// Codex budget-fix pass-2 HIGH: structural completeness on the
+		// budget-exit path. The over-budget assistant message had a
+		// tool_call, so the loop must emit a synthetic toolResult before
+		// returning — otherwise the persisted session ends with a
+		// dangling assistant tool_call that resume/replay rejects.
+		const messages = await loop.result();
+		const last = messages[messages.length - 1];
+		expect(last.role).toBe("toolResult");
+		expect((last as { toolCallId: string }).toolCallId).toBe("t1");
 	});
 
 	it("ends the loop with reason=error when the cost budget is exceeded", async () => {
