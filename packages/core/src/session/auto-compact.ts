@@ -34,6 +34,12 @@ export interface CompactionCallbackResult {
   summary: string;
   cutIndex: number;
   details: CompactionDetails;
+  /**
+   * The summary LLM call's reported usage, so the persistence wrapper
+   * can charge a live cost tracker AFTER appendCompaction succeeds.
+   * Codex budget-fix pass-9 finding.
+   */
+  summaryUsage?: import("@my-agent/ai").Usage;
 }
 
 /**
@@ -216,6 +222,7 @@ export function createAutoCompactor(
       summary: result.summary,
       cutIndex: result.cutIndex,
       details: result.details,
+      summaryUsage: result.summaryUsage,
     });
 
     // Build new message list with summary as a custom message.
@@ -275,6 +282,15 @@ export interface PersistenceSessionManager {
    * are valid anchors for `firstKeptEntryId`.
    */
   buildMessageToEntryMapping: () => (string | null)[];
+  /**
+   * Optional cross-process lock. When provided, the persistence wrapper
+   * runs `appendCompaction` inside it. The lock activates the
+   * session-manager's disk-rollback path (truncateSync to the
+   * pre-write size) on persist failure — without it, a failed write
+   * leaves a partial trailing line on disk that later parses
+   * silently as a malformed entry. Codex budget-fix pass-9 finding.
+   */
+  withLock?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
 
 /**
@@ -295,8 +311,16 @@ export function createAutoCompactorWithPersistence(
   // Capture the mapping before compaction transforms the context
   let preCompactionMapping: (string | null)[] = [];
 
+  // Strip costTracker from the inner options so the summary call is
+  // NOT charged via compact()'s onUsage. The wrapper charges the
+  // tracker AFTER appendCompaction succeeds — preserving atomicity
+  // across persist failures (live tracker and disk stay aligned).
+  // Codex budget-fix pass-9 finding.
+  const innerOptions: AutoCompactorOptions = { ...options };
+  delete (innerOptions as { costTracker?: unknown }).costTracker;
+
   const compactor = createAutoCompactor({
-    ...options,
+    ...innerOptions,
     onCompaction: (result) => {
       capturedCompaction = result;
       // Also call the original callback if provided
@@ -376,26 +400,49 @@ export function createAutoCompactorWithPersistence(
       // by one or two turns.
       if (firstKeptEntryId) {
         try {
-          options.sessionManager.appendCompaction(
-            summary,
-            firstKeptEntryId,
-            tokensBefore,
-            details
-          );
+          // Wrap in withLock when the session manager exposes one so
+          // a failed write triggers the disk-level truncate rollback
+          // inside SessionManager.appendEntry. Without the lock, a
+          // partial trailing line stays on disk and later parses as
+          // malformed silently. Codex budget-fix pass-9 finding.
+          const persist = () =>
+            options.sessionManager.appendCompaction(
+              summary,
+              firstKeptEntryId,
+              tokensBefore,
+              details,
+            );
+          if (options.sessionManager.withLock) {
+            await options.sessionManager.withLock(async () => persist());
+          } else {
+            persist();
+          }
         } catch (persistErr) {
           // Persistence failed (disk full, permission, transient fs
           // error). Roll the in-memory context BACK to its
           // pre-compaction state so disk and memory stay aligned —
-          // the next compaction round will retry. The summary LLM
-          // call's spend HAS already been charged to the live
-          // tracker (it really happened) so the live cap still
-          // enforces it; on restart the original messages survive
-          // in the session file and replay rebuilds the bulk of the
-          // spend, only the summary call's cost is genuinely lost
-          // until next round overwrites the snapshot.
+          // the next compaction round will retry. Because the
+          // costTracker was NOT charged during the inner compaction
+          // (we stripped it from inner options), the live tracker
+          // is also still aligned with disk: no spend was recorded
+          // for the failed-to-persist summary call. On restart, the
+          // original messages survive in the session file and
+          // replay rebuilds the bulk of the spend.
           context.messages.length = 0;
           context.messages.push(...preCompactionMessages);
           throw persistErr;
+        }
+
+        // Persist succeeded. NOW charge the live tracker for the
+        // summary call. This is the only path that records the
+        // ancillary spend live; all other paths rely on the
+        // priorCumulativeCost snapshot for restart replay.
+        if (options.costTracker && compactionResult.summaryUsage) {
+          options.costTracker.recordTurn(
+            context.model,
+            compactionResult.summaryUsage,
+            -1,
+          );
         }
       }
     }

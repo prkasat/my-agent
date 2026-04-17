@@ -134,9 +134,28 @@ export interface AgentLoopConfig {
 		 * restarts. agentLoop calls this once before the first new turn
 		 * so resumed sessions keep their cumulative spend. The tracker
 		 * is responsible for making this a no-op when already populated.
+		 *
+		 * The optional third argument lets the caller pass a model
+		 * resolver so historical token-only turns are billed at the
+		 * model that produced them — not the session's current
+		 * (possibly switched-to-cheaper-or-free) model. Codex
+		 * budget-fix pass-9 finding.
 		 */
-		loadFromMessages?: (messages: AgentMessage[], model: Model) => number;
+		loadFromMessages?: (
+			messages: AgentMessage[],
+			model: Model,
+			options?: { resolveModel?: (id: string, provider?: string) => Model | undefined },
+		) => number;
 	};
+	/**
+	 * Optional model resolver passed to costTracker.loadFromMessages
+	 * on resume. When set, historical assistant turns that persisted
+	 * their `model`/`provider` are re-priced using the resolved
+	 * model's per-million pricing rather than the session's current
+	 * model — closing the model-switch budget bypass that pre-pass-7
+	 * sessions and bypass paths could exhibit.
+	 */
+	resolveModel?: (id: string, provider?: string) => Model | undefined;
 }
 
 // === Hook Types ===

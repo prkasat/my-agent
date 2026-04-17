@@ -359,6 +359,66 @@ describe("CostTracker", () => {
 		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001 + 0.003 + 0.005, 6);
 	});
 
+	it("loadFromMessages prices token-only history with the resolver, not the session model (model-switch defense)", () => {
+		// Codex budget-fix pass-9 HIGH: a session that switched from an
+		// expensive model to a cheaper/free one would otherwise re-bill
+		// historical token-only turns at the new model's price on
+		// restart. With the resolver, each historical message is priced
+		// at the model that actually produced it.
+		const expensive: Model = {
+			id: "expensive",
+			name: "Expensive",
+			provider: "openrouter",
+			contextWindow: 100_000,
+			maxOutputTokens: 4096,
+			supportsTools: true,
+			supportsStreaming: true,
+			supportsThinking: false,
+			cost: { inputPerMillion: 30, outputPerMillion: 150 },
+		};
+		const free: Model = {
+			id: "free",
+			name: "Free",
+			provider: "openrouter",
+			contextWindow: 100_000,
+			maxOutputTokens: 4096,
+			supportsTools: true,
+			supportsStreaming: true,
+			supportsThinking: false,
+			cost: { inputPerMillion: 0, outputPerMillion: 0 },
+		};
+
+		// Build a fresh message list per call — recordTurn stamps the
+		// computed cost back onto usage.cost as a side effect, so the
+		// SAME message array can't be passed to a second load
+		// expecting an unstamped state.
+		const buildMessages = () => [
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "ran on the expensive model" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				model: "expensive",
+				provider: "openrouter",
+				// Token-only — NO usage.cost.
+				usage: { inputTokens: 1_000_000, outputTokens: 100_000 },
+			},
+		];
+
+		// Without resolver: re-billed at the current (free) model = $0.
+		const trackerNoResolver = new CostTracker();
+		trackerNoResolver.loadFromMessages(buildMessages(), free);
+		expect(trackerNoResolver.getSummary().totalCost).toBe(0);
+
+		// With resolver: billed at the expensive model =
+		// 1M*$30/1M + 0.1M*$150/1M = $30 + $15 = $45.
+		const tracker = new CostTracker();
+		tracker.loadFromMessages(buildMessages(), free, {
+			resolveModel: (id) => (id === "expensive" ? expensive : undefined),
+		});
+		expect(tracker.getSummary().totalCost).toBeCloseTo(45, 4);
+	});
+
 	it("recordTurn live-records error turns so failure spend counts toward the cap", () => {
 		// Codex budget-fix pass-7 HIGH: live counterpart to the
 		// loadFromMessages test above. Even when the loop stops on

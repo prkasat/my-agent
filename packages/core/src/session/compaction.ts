@@ -666,6 +666,16 @@ export interface CompactionResult {
   firstKeptEntryId?: string;
   /** Compaction metadata */
   details: CompactionDetails;
+  /**
+   * The summarization LLM call's reported usage, if the provider
+   * emitted any. Exposed separately from `details.priorCumulativeCost`
+   * so the caller can charge a live cost tracker AFTER the compaction
+   * entry has been durably persisted. Charging before persist succeeds
+   * means a persist failure leaves the tracker out of sync with disk
+   * (spend recorded live, no snapshot entry on restart).
+   * Codex budget-fix pass-9 finding.
+   */
+  summaryUsage?: Usage;
 }
 
 // ============================================================================
@@ -917,6 +927,7 @@ export async function compact(
   // restart. Without folding, the side spend is lost on resume.
   // Codex budget-fix pass-7 finding.
   let summaryCallCost = 0;
+  let summaryCallUsage: Usage | undefined;
   const summary = await generateCompactionSummary(
     filteredToSummarize,
     options.model,
@@ -926,6 +937,7 @@ export async function compact(
       apiKey: options.apiKey,
       signal: options.signal,
       onUsage: (usage) => {
+        summaryCallUsage = usage;
         const turnCost = calculateUsageCost(options.model, usage);
         if (Number.isFinite(turnCost) && turnCost > 0) {
           summaryCallCost = turnCost;
@@ -935,6 +947,14 @@ export async function compact(
           // (compaction/branch-summary), distinct from numbered
           // user-facing turns. The tracker doesn't dedupe by
           // turnIndex, so this is purely for the turnCosts log.
+          //
+          // NOTE: charging here is the non-persistence path's
+          // fallback. The persistence wrapper
+          // (createAutoCompactorWithPersistence) explicitly omits
+          // `options.costTracker` and charges the tracker AFTER
+          // appendCompaction succeeds, so a persist failure cannot
+          // leave the tracker out of sync with disk. Codex
+          // budget-fix pass-9 finding.
           options.costTracker.recordTurn(options.model, usage, -1);
         }
       },
@@ -1024,6 +1044,7 @@ export async function compact(
     keptMessages,
     cutIndex,
     details,
+    summaryUsage: summaryCallUsage,
   };
 }
 

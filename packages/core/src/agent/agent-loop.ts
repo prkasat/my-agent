@@ -162,7 +162,11 @@ async function runLoop(
 	// Codex budget-fix pass-3 finding.
 	let turnIndex = 0;
 	if (config.costTracker?.loadFromMessages && context.messages.length > 0) {
-		turnIndex = config.costTracker.loadFromMessages(context.messages, context.model);
+		turnIndex = config.costTracker.loadFromMessages(
+			context.messages,
+			context.model,
+			config.resolveModel ? { resolveModel: config.resolveModel } : undefined,
+		);
 	}
 
 	// Fail fast if the restored/accumulated spend is already past the

@@ -148,7 +148,11 @@ export class CostTracker {
 	 * because OpenRouter-reported `usage.cost` (when present) is
 	 * authoritative regardless of `model.cost`.
 	 */
-	loadFromMessages(messages: AgentMessage[], model: Model): number {
+	loadFromMessages(
+		messages: AgentMessage[],
+		model: Model,
+		options?: { resolveModel?: (id: string, provider?: string) => Model | undefined },
+	): number {
 		if (this.costs.totalCost > 0 || this.costs.turnCosts.length > 0) {
 			return 0;
 		}
@@ -202,7 +206,23 @@ export class CostTracker {
 				// a process restart. The isValidCost gate inside
 				// recordTurn still filters NaN/Infinity/negative inputs.
 				// Codex budget-fix pass-8 finding.
-				this.recordTurn(model, msg.usage, loaded);
+				//
+				// When the message persisted its own `model`/`provider`
+				// (the providers do this for new turns), prefer those
+				// for cost calculation so a session that switched
+				// models mid-flight still bills historical token-only
+				// turns at the model that produced them. Falls back to
+				// the session-wide model when no resolver was provided
+				// or the persisted id is unknown. usage.cost (when
+				// stamped) is authoritative regardless and short-
+				// circuits the model lookup. Codex budget-fix pass-9
+				// finding.
+				let modelForTurn = model;
+				if (options?.resolveModel && msg.model) {
+					const resolved = options.resolveModel(msg.model, msg.provider);
+					if (resolved) modelForTurn = resolved;
+				}
+				this.recordTurn(modelForTurn, msg.usage, loaded);
 				loaded++;
 			}
 		}

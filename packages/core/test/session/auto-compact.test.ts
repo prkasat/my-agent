@@ -696,6 +696,178 @@ describe("createAutoCompactorWithPersistence", () => {
 		expect(sm.appendCompaction).toHaveBeenCalled();
 	});
 
+	it("does NOT charge the live tracker if appendCompaction throws (atomicity)", async () => {
+		// Codex budget-fix pass-9 HIGH: the persistence wrapper must
+		// charge the tracker AFTER persist succeeds. If we charged
+		// during the inner compaction and persist later threw, the
+		// live tracker would carry spend that has no durable record
+		// — on restart the cap would re-open. The wrapper now strips
+		// costTracker from the inner options and charges only after
+		// appendCompaction returns successfully.
+		const recorded: { usage: any }[] = [];
+		const tracker = {
+			recordTurn: (_m: any, u: any) => recorded.push({ usage: u }),
+			isBudgetExceeded: () => false,
+		};
+
+		function summaryStream() {
+			const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+				(e) => e.type === "done",
+				(e) => {
+					if (e.type === "done") return e.message;
+					throw new Error("unexpected");
+				},
+			);
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "summary" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+			};
+			queueMicrotask(() => {
+				stream.push({ type: "start", message });
+				stream.push({ type: "done", message });
+			});
+			return stream;
+		}
+
+		const sm = {
+			appendCompaction: vi.fn(() => {
+				throw new Error("disk full");
+			}),
+			buildMessageToEntryMapping: () => {
+				const out: (string | null)[] = [];
+				for (let i = 0; i < 22; i++) out.push(`entry-${i}`);
+				return out;
+			},
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: summaryStream as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+			costTracker: tracker,
+		});
+
+		const ctx: AgentContext = {
+			messages: buildOversizedMessages(22),
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await expect(compactor(ctx)).rejects.toThrow(/disk full/);
+
+		// Tracker MUST NOT have been charged — persist failed.
+		expect(recorded.length).toBe(0);
+	});
+
+	it("charges the live tracker exactly once after appendCompaction succeeds", async () => {
+		const recorded: { usage: any; turnIndex: number }[] = [];
+		const tracker = {
+			recordTurn: (_m: any, u: any, t: number) => recorded.push({ usage: u, turnIndex: t }),
+			isBudgetExceeded: () => false,
+		};
+
+		function summaryStream() {
+			const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+				(e) => e.type === "done",
+				(e) => {
+					if (e.type === "done") return e.message;
+					throw new Error("unexpected");
+				},
+			);
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "summary" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+			};
+			queueMicrotask(() => {
+				stream.push({ type: "start", message });
+				stream.push({ type: "done", message });
+			});
+			return stream;
+		}
+
+		const sm = {
+			appendCompaction: vi.fn(() => "entry-id"),
+			buildMessageToEntryMapping: () => {
+				const out: (string | null)[] = [];
+				for (let i = 0; i < 22; i++) out.push(`entry-${i}`);
+				return out;
+			},
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: summaryStream as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+			costTracker: tracker,
+		});
+
+		const ctx: AgentContext = {
+			messages: buildOversizedMessages(22),
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(ctx);
+
+		expect(recorded.length).toBe(1);
+		expect(recorded[0].usage.cost).toBe(0.0123);
+		expect(recorded[0].turnIndex).toBe(-1);
+	});
+
+	it("runs appendCompaction inside withLock when the session manager exposes one", async () => {
+		// Codex budget-fix pass-9 HIGH: without holding the lock,
+		// SessionManager.appendEntry's disk-rollback (truncateSync)
+		// path is gated off and a partial write leaves a malformed
+		// trailing line. The wrapper MUST use withLock when available.
+		let lockHeldDuringPersist = false;
+		let inLock = false;
+		const sm = {
+			appendCompaction: vi.fn(() => {
+				lockHeldDuringPersist = inLock;
+				return "entry-id";
+			}),
+			buildMessageToEntryMapping: () => {
+				const out: (string | null)[] = [];
+				for (let i = 0; i < 22; i++) out.push(`entry-${i}`);
+				return out;
+			},
+			withLock: async <T>(fn: () => Promise<T>): Promise<T> => {
+				inLock = true;
+				try {
+					return await fn();
+				} finally {
+					inLock = false;
+				}
+			},
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: fakeStreamFn("summary") as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+		});
+
+		const ctx: AgentContext = {
+			messages: buildOversizedMessages(22),
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(ctx);
+
+		expect(sm.appendCompaction).toHaveBeenCalled();
+		expect(lockHeldDuringPersist).toBe(true);
+	});
+
 	it("rolls back the in-memory transcript when appendCompaction throws (no half-state)", async () => {
 		// Codex budget-fix pass-8 HIGH: if persistence fails after the
 		// in-memory compaction (disk full, permission, transient fs
