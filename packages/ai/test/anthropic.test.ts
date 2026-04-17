@@ -300,7 +300,7 @@ describe("anthropic provider", () => {
 		expect(lastUser.content[0].cache_control).toBeUndefined();
 	});
 
-	it("propagates thinking budget and bumps max_tokens above it", async () => {
+	it("propagates thinking budget when caller maxTokens already exceeds it", async () => {
 		const body = sse([
 			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
 			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
@@ -312,12 +312,12 @@ describe("anthropic provider", () => {
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
 		globalThis.fetch = fetchSpy;
 
-		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "hi" }] }, { thinkingLevel: "high", maxTokens: 1000 }).result();
+		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "hi" }] }, { thinkingLevel: "high", maxTokens: 32000 }).result();
 
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
 		expect(sentBody.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
-		// 1000 ≤ 16384, must be bumped.
-		expect(sentBody.max_tokens).toBeGreaterThan(16384);
+		// Caller cap already > budget: pass through unchanged.
+		expect(sentBody.max_tokens).toBe(32000);
 	});
 
 	it("maps tool_use stop_reason to toolUse", async () => {
@@ -972,6 +972,55 @@ describe("anthropic provider", () => {
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
 		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
 		await expect(stream.result()).rejects.toThrow(/no events|no message_start/i);
+	});
+
+	// Pass-6 cap-honor regressions. Silent max_tokens inflation when
+	// thinking is enabled would let a caller's explicit cost cap get
+	// bypassed (e.g. `maxTokens: 1000` becoming 20480). We now fail
+	// fast on caller-set caps and only bump silently when the value
+	// came from the model/default fallback (no caller intent to honor).
+	it("rejects explicit maxTokens lower than thinking budget", async () => {
+		// fetch should never even be called.
+		const fetchSpy = vi.fn();
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
+			maxTokens: 1000,
+			thinkingLevel: "high", // budget 16384
+		});
+		await expect(stream.result()).rejects.toThrow(/maxTokens.*must exceed thinking budget|exceed.*budget/i);
+		expect(fetchSpy).not.toHaveBeenCalled();
+	});
+
+	it("still inflates default maxTokens when no explicit cap was set", async () => {
+		// Caller did not pass maxTokens; model.maxOutputTokens is 8192,
+		// thinkingLevel high requires 16384. With no explicit cap to
+		// honor, the provider may safely bump to budget + 4096.
+		const body = sse([
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
+			thinkingLevel: "high",
+		}).result();
+
+		expect(fetchSpy).toHaveBeenCalledOnce();
+		const sentBody = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		expect(sentBody.max_tokens).toBe(16384 + 4096);
+		expect(sentBody.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
 	});
 
 	it("rejects stream that opens with message_start but never terminates", async () => {

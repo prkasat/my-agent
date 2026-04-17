@@ -341,10 +341,16 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 					return;
 				}
 
+				// Distinguish caller-set maxTokens from the fallback chain
+				// (model default → 4096) so we can honor explicit cost
+				// caps. Use ?? rather than || so an explicit 0 still
+				// counts as "caller intent" rather than falling through.
+				const explicitMaxTokens = options.maxTokens;
+				const resolvedMaxTokens = explicitMaxTokens ?? model.maxOutputTokens ?? 4096;
 				const body: Record<string, unknown> = {
 					model: model.id,
 					messages: convertMessages(context, enableCaching),
-					max_tokens: options.maxTokens || model.maxOutputTokens || 4096,
+					max_tokens: resolvedMaxTokens,
 					stream: true,
 				};
 				const system = convertSystem(context.systemPrompt, enableCaching);
@@ -357,8 +363,20 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 				if (budget !== null && model.supportsThinking) {
 					body.thinking = { type: "enabled", budget_tokens: budget };
 					// Anthropic requires max_tokens > budget_tokens.
-					const requestedMax = body.max_tokens as number;
-					if (requestedMax <= budget) {
+					// Honor an explicit caller cap rather than silently
+					// inflating it: a caller asking for maxTokens=1000
+					// to cap cost should not be turned into a 20k+ token
+					// request. Fall back to budget+4096 only when the
+					// cap came from defaults (no caller intent to honor).
+					// Codex Tier-3 pass-6 finding.
+					if (resolvedMaxTokens <= budget) {
+						if (explicitMaxTokens !== undefined) {
+							stream.push({
+								type: "error",
+								error: `anthropic: maxTokens (${explicitMaxTokens}) must exceed thinking budget (${budget}) for thinkingLevel=${options.thinkingLevel}`,
+							});
+							return;
+						}
 						body.max_tokens = budget + 4096;
 					}
 				}
