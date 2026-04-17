@@ -8,6 +8,7 @@ import type {
 	AgentToolResult,
 } from "./types.js";
 import type { AssistantMessage, Message, ToolCallContent, ToolResultMessage } from "@my-agent/ai";
+import { calculateUsageCost } from "./cost-tracker.js";
 
 /**
  * Per-invocation options for the agent loop.
@@ -85,6 +86,27 @@ export function agentLoopContinue(
 	});
 
 	return stream;
+}
+
+/**
+ * Stamp a computed cost onto `message.usage.cost` if missing. Done
+ * BEFORE the assistant message is emitted as `message_end` so any host
+ * that persists on that event captures an authoritative dollar value.
+ * Without this, restart-after-model-switch would re-price historical
+ * token-only turns at the new (possibly cheaper) model and bypass
+ * `maxCostPerSession`. Codex budget-fix pass-7 finding.
+ *
+ * Idempotent and safe to call multiple times — `recordTurn` runs the
+ * same gate later as belt-and-braces.
+ */
+function stampUsageCost(model: { cost?: { inputPerMillion: number; outputPerMillion: number } }, message: AssistantMessage): void {
+	if (!message.usage) return;
+	const existing = message.usage.cost;
+	if (typeof existing === "number" && Number.isFinite(existing) && existing >= 0) return;
+	const computed = calculateUsageCost(model as any, message.usage);
+	if (Number.isFinite(computed) && computed >= 0) {
+		(message.usage as { cost?: number }).cost = computed;
+	}
 }
 
 /**
@@ -203,6 +225,18 @@ async function runLoop(
 			// Add assistant message to context
 			context.messages.push(assistantMessage);
 
+			// Record THIS turn's cost FIRST — even error and aborted turns
+			// can carry real provider-billed usage (Anthropic emits a
+			// terminal `error` message with populated usage on paid
+			// non-recoverable stops like pause_turn; aborted streams may
+			// have completed billing on the provider side before we
+			// stopped reading). Putting recordTurn before the stopReason
+			// early return prevents that spend from escaping the cap.
+			// Codex budget-fix pass-7 finding.
+			if (config.costTracker && assistantMessage.usage) {
+				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
+			}
+
 			// Check stop reason
 			if (assistantMessage.stopReason === "error" || assistantMessage.stopReason === "aborted") {
 				stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
@@ -218,13 +252,14 @@ async function runLoop(
 				(c): c is ToolCallContent => c.type === "tool_call",
 			);
 
-			// Auto-wire cost tracking. Record THIS turn's cost before any
-			// tool calls execute — an over-budget turn must not be allowed
-			// to mutate state (write/edit/bash) just because it crossed
-			// the cap on the same response that requested the tool calls.
-			// For free-tier sessions (no maxCostPerSession configured)
-			// `isBudgetExceeded()` returns false, so this is a no-op.
-			// Codex budget-fix pass-1 finding.
+			// Auto-wire cost tracking. The recordTurn happened above (so
+			// even error/aborted turns count); this branch only handles
+			// the post-record budget enforcement: an over-budget turn
+			// must not be allowed to mutate state (write/edit/bash) just
+			// because it crossed the cap on the same response that
+			// requested the tool calls. For free-tier sessions (no
+			// maxCostPerSession configured) `isBudgetExceeded()` returns
+			// false, so this is a no-op. Codex budget-fix pass-1 finding.
 			//
 			// Structural completeness on early exit: if the over-budget
 			// assistant message had tool_calls, pad them with synthetic
@@ -234,16 +269,12 @@ async function runLoop(
 			// on replay. Codex budget-fix pass-2 finding.
 			//
 			// The budget check fires REGARDLESS of whether the provider
-			// emitted usage on this turn. recordTurn is the only thing
-			// that needs usage; isBudgetExceeded reads the accumulated
-			// total and would otherwise stay silent on missing-usage
-			// streams, letting the loop keep running while the caller
-			// has no way to know spend crossed the cap.
+			// emitted usage on this turn. isBudgetExceeded reads the
+			// accumulated total and would otherwise stay silent on
+			// missing-usage streams, letting the loop keep running while
+			// the caller has no way to know spend crossed the cap.
 			// Codex budget-fix pass-5 finding.
 			if (config.costTracker) {
-				if (assistantMessage.usage) {
-					config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
-				}
 				if (config.costTracker.isBudgetExceeded()) {
 					if (toolCalls.length > 0) {
 						context.messages.push(...padCancelledToolResults(toolCalls, []));
@@ -406,10 +437,12 @@ async function streamAssistantResponse(
 				agentStream.push({ type: "message_update", event });
 				break;
 			case "done":
+				stampUsageCost(context.model, event.message);
 				agentStream.push({ type: "message_end", message: event.message });
 				break;
 			case "error":
 				if (event.message) {
+					stampUsageCost(context.model, event.message);
 					agentStream.push({ type: "message_end", message: event.message });
 				}
 				return event.message || null;

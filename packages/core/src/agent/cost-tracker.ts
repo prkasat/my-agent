@@ -191,8 +191,14 @@ export class CostTracker {
 				"role" in msg &&
 				msg.role === "assistant" &&
 				msg.usage &&
-				msg.stopReason !== "aborted" &&
-				msg.stopReason !== "error"
+				// `aborted` turns can carry phantom partial usage from a
+				// half-streamed response, so they're still skipped on
+				// replay. `error` turns DO carry authoritative billed
+				// usage (Anthropic pause_turn etc.), so they MUST be
+				// replayed — otherwise restart-after-failure resets the
+				// cap and the next attempt can spend freely.
+				// Codex budget-fix pass-7 finding.
+				msg.stopReason !== "aborted"
 			) {
 				this.recordTurn(model, msg.usage, loaded);
 				loaded++;

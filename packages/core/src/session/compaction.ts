@@ -909,6 +909,14 @@ export async function compact(
   // a tracker is wired in — otherwise this call would spend outside
   // `maxCostPerSession` and a near-budget session could silently
   // overdraw via auto-compaction. Codex budget-fix pass-6 finding.
+  //
+  // We ALSO capture the summary call's cost locally (regardless of
+  // whether a tracker was passed) so it can be folded into the
+  // persisted `priorCumulativeCost` snapshot. The live tracker is
+  // for in-process accounting; the snapshot is what survives a
+  // restart. Without folding, the side spend is lost on resume.
+  // Codex budget-fix pass-7 finding.
+  let summaryCallCost = 0;
   const summary = await generateCompactionSummary(
     filteredToSummarize,
     options.model,
@@ -917,15 +925,19 @@ export async function compact(
       previousSummary: effectivePreviousSummary,
       apiKey: options.apiKey,
       signal: options.signal,
-      onUsage: options.costTracker
-        ? (usage) => {
-            // Use turnIndex -1 as a sentinel for "ancillary spend"
-            // (compaction/branch-summary), distinct from numbered
-            // user-facing turns. The tracker doesn't dedupe by
-            // turnIndex, so this is purely for the turnCosts log.
-            options.costTracker!.recordTurn(options.model, usage, -1);
-          }
-        : undefined,
+      onUsage: (usage) => {
+        const turnCost = calculateUsageCost(options.model, usage);
+        if (Number.isFinite(turnCost) && turnCost > 0) {
+          summaryCallCost = turnCost;
+        }
+        if (options.costTracker) {
+          // Use turnIndex -1 as a sentinel for "ancillary spend"
+          // (compaction/branch-summary), distinct from numbered
+          // user-facing turns. The tracker doesn't dedupe by
+          // turnIndex, so this is purely for the turnCosts log.
+          options.costTracker.recordTurn(options.model, usage, -1);
+        }
+      },
     }
   );
 
@@ -976,6 +988,11 @@ export async function compact(
       }
     }
   }
+  // Include the summarization LLM call's own cost in the snapshot so
+  // it survives a restart. Without this, restart-then-resume reads a
+  // priorCumulativeCost that excludes every prior summary call and
+  // the budget under-counts. Codex budget-fix pass-7 finding.
+  priorCumulativeCost += summaryCallCost;
   details.priorCumulativeCost = priorCumulativeCost;
 
   // Self-eval against the post-filter input so the size ratio reflects

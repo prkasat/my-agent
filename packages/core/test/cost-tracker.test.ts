@@ -320,7 +320,14 @@ describe("CostTracker", () => {
 		expect(usage.cost).toBeCloseTo(4.5, 6);
 	});
 
-	it("loadFromMessages skips aborted and error assistant messages", () => {
+	it("loadFromMessages skips aborted but replays error assistant messages (Anthropic pause_turn etc.)", () => {
+		// Codex budget-fix pass-7 HIGH: error turns can carry
+		// authoritative billed usage (Anthropic emits a terminal `error`
+		// message with usage on pause_turn etc.). Skipping them on
+		// replay would let restart-after-failure reset the cap and the
+		// next attempt could spend freely. Aborted turns are still
+		// skipped — their usage is unreliable phantom from a
+		// half-streamed response.
 		const tracker = new CostTracker();
 		const messages = [
 			{
@@ -342,11 +349,28 @@ describe("CostTracker", () => {
 				content: [{ type: "text" as const, text: "errored" }],
 				stopReason: "error" as const,
 				timestamp: Date.now(),
-				usage: { inputTokens: 300, outputTokens: 0, cost: 0.999 },
+				usage: { inputTokens: 300, outputTokens: 0, cost: 0.005 },
 			},
 		];
 		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
-		expect(loaded).toBe(1);
-		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
+		// stop + error count; aborted skipped.
+		expect(loaded).toBe(2);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001 + 0.005, 6);
+	});
+
+	it("recordTurn live-records error turns so failure spend counts toward the cap", () => {
+		// Codex budget-fix pass-7 HIGH: live counterpart to the
+		// loadFromMessages test above. Even when the loop stops on
+		// stopReason === "error", recordTurn must have already been
+		// called so the spend hits totalCost.
+		const tracker = new CostTracker(0.01);
+		// Recording an error-stop turn directly (recordTurn is
+		// stop-reason agnostic) — it just charges the usage.
+		tracker.recordTurn(
+			PRICED_MODEL,
+			{ inputTokens: 100, outputTokens: 50, cost: 0.011 },
+			0,
+		);
+		expect(tracker.isBudgetExceeded()).toBe(true);
 	});
 });

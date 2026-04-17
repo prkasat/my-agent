@@ -890,6 +890,112 @@ describe("Agent Loop", () => {
 		expect(end?.error).toMatch(/budget/i);
 	});
 
+	it("records cost on error/aborted assistant turns so failure spend counts toward the cap", async () => {
+		// Codex budget-fix pass-7 HIGH: the loop's stopReason early
+		// return at "error"/"aborted" used to fire BEFORE recordTurn,
+		// so any provider-billed usage on a failed turn (Anthropic's
+		// pause_turn etc.) escaped the cap. recordTurn must now happen
+		// before the early return.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(100); // generous cap so we don't trip the budget exit
+
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "errored mid-stream" }],
+				stopReason: "error",
+				timestamp: Date.now(),
+				usage: { inputTokens: 1000, outputTokens: 500, cost: 0.05 },
+			},
+		]);
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		// The error turn's usage MUST have been recorded.
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.05, 6);
+		expect(tracker.getSummary().turnCosts).toHaveLength(1);
+
+		// Loop ended as "error" because of the stopReason — that's correct.
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+	});
+
+	it("stamps usage.cost before message_end so persistence-on-message_end preserves the cost", async () => {
+		// Codex budget-fix pass-7 MEDIUM: a host that persists on the
+		// `message_end` event captures whatever object is pushed at
+		// that moment. recordTurn's mutation happens AFTER message_end
+		// fires, so without stamping inside streamAssistantResponse,
+		// the host writes a pre-stamp message and restart re-prices it
+		// against the wrong model.
+		let capturedAtMessageEnd: AssistantMessage | undefined;
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "ok" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				// No `cost` — token-only provider.
+				usage: { inputTokens: 1_000_000, outputTokens: 100_000 },
+			},
+		]);
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 3, outputPerMillion: 15 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+			if (event.type === "message_end") {
+				// Snapshot the message AS the host would see it.
+				capturedAtMessageEnd = (event as { message: AssistantMessage }).message;
+			}
+		}
+
+		// At message_end time, usage.cost MUST already be stamped.
+		expect(capturedAtMessageEnd?.usage?.cost).toBeDefined();
+		// 1M*$3 + 0.1M*$15 = $4.50
+		expect(capturedAtMessageEnd?.usage?.cost).toBeCloseTo(4.5, 6);
+	});
+
 	it("re-checks budget after transformContext returns (so a side LLM spend stops the next turn)", async () => {
 		// Codex budget-fix pass-6: the auto-compactor's summarization
 		// call can be wired to charge against the same tracker. If

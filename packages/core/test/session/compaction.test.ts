@@ -1309,6 +1309,78 @@ describe("compact: priorCumulativeCost snapshot", () => {
     expect(result.details.priorCumulativeCost!).toBeGreaterThanOrEqual(4.5);
   });
 
+  it("includes the summarization LLM call's cost in the persisted snapshot (survives restart)", async () => {
+    // Codex budget-fix pass-7 HIGH: the live tracker counts the
+    // summary call (pass-6), but the persisted priorCumulativeCost
+    // snapshot was computed BEFORE that cost was known. After a
+    // restart, loadFromMessages reads the snapshot and the side
+    // spend disappears. The snapshot must include the summary call.
+    function summaryStreamFn() {
+      const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+        (e) => e.type === "done",
+        (e) => {
+          if (e.type === "done") return e.message;
+          throw new Error("unexpected");
+        },
+      );
+      const message: AssistantMessage = {
+        role: "assistant",
+        content: [{ type: "text", text: "summary" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+      };
+      queueMicrotask(() => {
+        stream.push({ type: "start", message });
+        stream.push({ type: "done", message });
+      });
+      return stream;
+    }
+
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a1 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.001 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a3 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.001 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50,
+      model: fakeModel,
+      streamFn: summaryStreamFn as any,
+      // No costTracker — purely testing the snapshot, which must
+      // include the summary call regardless of whether a tracker was
+      // passed (otherwise restart-without-tracker-during-compaction
+      // would lose the side spend).
+    });
+
+    expect(result.cutIndex).toBeGreaterThan(0);
+
+    let compactedTurns = 0;
+    for (let i = 0; i < result.cutIndex; i++) {
+      const m = messages[i];
+      if ("role" in m && m.role === "assistant" && typeof m.usage?.cost === "number") {
+        compactedTurns += m.usage.cost;
+      }
+    }
+
+    // Snapshot = compacted turns + summary call cost.
+    expect(result.details.priorCumulativeCost).toBeCloseTo(compactedTurns + 0.0123, 6);
+  });
+
   it("charges the summarization LLM call against the cost tracker (no unmetered side spend)", async () => {
     // Codex budget-fix pass-6 CRITICAL: the summarization LLM call
     // must contribute to maxCostPerSession. Without this, a session
