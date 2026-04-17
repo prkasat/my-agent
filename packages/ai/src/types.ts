@@ -27,6 +27,15 @@ export interface ThinkingContent {
 	 * providers don't produce one.
 	 */
 	signature?: string;
+	/**
+	 * Opaque encrypted bytes from an Anthropic `redacted_thinking` block.
+	 * When present, `text` is empty and the block represents reasoning
+	 * that the model produced but Anthropic chose not to expose in
+	 * plaintext. The data must be replayed verbatim back to Anthropic
+	 * (as a `redacted_thinking` content block) on the next turn or the
+	 * model loses continuity. Same provider-trust gate as `signature`.
+	 */
+	redactedData?: string;
 }
 
 export interface ToolCallContent {

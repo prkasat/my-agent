@@ -1045,4 +1045,152 @@ describe("anthropic provider", () => {
 		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
 		await expect(stream.result()).rejects.toThrow(/terminal event|stop_reason/i);
 	});
+
+	// Pass-7 regressions. Two HIGHs: redacted_thinking blocks were
+	// silently dropped (returned empty assistant turns), and unknown
+	// stop reasons (refusal / sensitive) were downgraded to "stop"
+	// instead of surfacing as failures.
+
+	it("preserves redacted_thinking blocks and replays them on the next turn", async () => {
+		const body = sse([
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: {
+					type: "content_block_start",
+					index: 0,
+					content_block: { type: "redacted_thinking", data: "ENCRYPTED_PAYLOAD_xyz" },
+				},
+			},
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 1, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "answer" } },
+			},
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 1 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.content).toEqual([
+			{ type: "thinking", text: "", redactedData: "ENCRYPTED_PAYLOAD_xyz" },
+			{ type: "text", text: "answer" },
+		]);
+		expect(msg.provider).toBe("anthropic");
+
+		// Round-trip: send the same assistant message back as history
+		// and verify the provider replays redacted_thinking on the wire.
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m2", role: "assistant", model: "claude-test", usage: { input_tokens: 5, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		])));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "first" },
+				msg,
+				{ role: "user", content: "second" },
+			],
+		}).result();
+		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		const assistantTurn = sent.messages.find((m: { role: string }) => m.role === "assistant");
+		expect(assistantTurn.content).toContainEqual({
+			type: "redacted_thinking",
+			data: "ENCRYPTED_PAYLOAD_xyz",
+		});
+	});
+
+	it("drops redacted_thinking on replay when source provider is foreign", async () => {
+		// A redacted_thinking payload from a non-Anthropic provider
+		// (or one with no provenance tag) is opaque-to-us and would
+		// 400 if forwarded to api.anthropic.com — same trust gate as
+		// signed thinking.
+		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		])));
+		globalThis.fetch = fetchSpy as unknown as typeof fetch;
+
+		await createAnthropicStream()(MODEL, {
+			messages: [
+				{ role: "user", content: "x" },
+				{
+					role: "assistant",
+					provider: "openai",
+					content: [
+						{ type: "thinking", text: "", redactedData: "FOREIGN_BYTES" },
+						{ type: "text", text: "hi" },
+					],
+				},
+				{ role: "user", content: "y" },
+			],
+		}).result();
+
+		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
+		const assistantTurn = sent.messages.find((m: { role: string }) => m.role === "assistant");
+		// Only the text block survives — redacted_thinking from
+		// foreign provider must be dropped.
+		expect(assistantTurn.content).toEqual([{ type: "text", text: "hi" }]);
+	});
+
+	it("surfaces refusal stop_reason as a stream error, not a blank turn", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/refusal|unrecoverable/i);
+	});
+
+	it("surfaces unknown stop_reason as an error rather than silent stop", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "some_future_failure_mode" }, usage: { output_tokens: 0 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
+		await expect(stream.result()).rejects.toThrow(/some_future_failure_mode|unrecoverable/i);
+	});
+
+	it("treats pause_turn as a normal stop", async () => {
+		const body = sse([
+			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "pause_turn" }, usage: { output_tokens: 1 } } },
+			{ event: "message_stop", data: { type: "message_stop" } },
+		]);
+		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
+
+		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
+		expect(msg.stopReason).toBe("stop");
+		expect(msg.content).toEqual([{ type: "text", text: "partial" }]);
+	});
 });

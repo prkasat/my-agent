@@ -77,6 +77,8 @@ interface AnthropicContentBlock {
 	text?: string;
 	thinking?: string;
 	signature?: string;
+	/** Opaque encrypted bytes for `redacted_thinking` blocks. */
+	data?: string;
 	id?: string;
 	name?: string;
 	input?: unknown;
@@ -219,7 +221,17 @@ function convertMessages(context: Context, enableCaching: boolean): AnthropicMes
 				if (block.type === "text") {
 					blocks.push({ type: "text", text: block.text });
 				} else if (block.type === "thinking") {
-					if (block.signature && sameProvider) {
+					if (block.redactedData && sameProvider) {
+						// Replay opaque encrypted-thinking payloads as
+						// `redacted_thinking` blocks so Anthropic can
+						// continue the reasoning chain. Same provider-
+						// trust gate as `signature` (these bytes are
+						// only valid back at the same provider).
+						blocks.push({
+							type: "redacted_thinking",
+							data: block.redactedData,
+						});
+					} else if (block.signature && sameProvider) {
 						blocks.push({
 							type: "thinking",
 							thinking: block.text,
@@ -301,9 +313,15 @@ function mapStopReason(reason: string | null | undefined): "stop" | "length" | "
 			return "length";
 		case "end_turn":
 		case "stop_sequence":
+		case "pause_turn":
 			return "stop";
 		default:
-			return "stop";
+			// Fail closed: refusal / sensitive / any future failure
+			// stop_reason gets surfaced as `error` rather than silently
+			// downgraded to `stop`. The agent loop halts on `error`,
+			// so the user sees the failure instead of a blank turn.
+			// Codex Tier-3 pass-7 finding.
+			return "error";
 	}
 }
 
@@ -424,6 +442,14 @@ interface BlockState {
 	type: "text" | "thinking" | "tool_use";
 	text: string;
 	thinkingSignature?: string;
+	/**
+	 * Opaque encrypted bytes from a `redacted_thinking` block. When set,
+	 * the block represents thinking the model produced but Anthropic
+	 * chose not to surface in plaintext. Must be replayed verbatim back
+	 * to Anthropic on subsequent turns (gated on same-provider trust)
+	 * or the model loses reasoning continuity. Codex Tier-3 pass-7.
+	 */
+	thinkingRedactedData?: string;
 	toolId?: string;
 	toolName?: string;
 	toolJson?: string;
@@ -498,11 +524,21 @@ async function parseSSEStream(
 			}
 		} else if (eventType === "content_block_start") {
 			const idx = data.index as number;
-			const cb = data.content_block as { type: string; id?: string; name?: string; text?: string; thinking?: string; input?: unknown };
+			const cb = data.content_block as { type: string; id?: string; name?: string; text?: string; thinking?: string; data?: string; input?: unknown };
 			if (cb.type === "text") {
 				blocks.set(idx, { type: "text", text: cb.text || "" });
 			} else if (cb.type === "thinking") {
 				blocks.set(idx, { type: "thinking", text: cb.thinking || "" });
+			} else if (cb.type === "redacted_thinking") {
+				// Capture the opaque encrypted thinking payload now;
+				// content_block_stop will finalize it. Without this,
+				// the block was silently dropped and the assistant
+				// message came back empty. Codex Tier-3 pass-7.
+				blocks.set(idx, {
+					type: "thinking",
+					text: "",
+					thinkingRedactedData: cb.data || "",
+				});
 			} else if (cb.type === "tool_use") {
 				blocks.set(idx, {
 					type: "tool_use",
@@ -544,12 +580,15 @@ async function parseSSEStream(
 			if (block.type === "text") {
 				finalContent.push({ type: "text", text: block.text });
 			} else if (block.type === "thinking") {
-				const thinkingBlock: { type: "thinking"; text: string; signature?: string } = {
+				const thinkingBlock: { type: "thinking"; text: string; signature?: string; redactedData?: string } = {
 					type: "thinking",
 					text: block.text,
 				};
 				if (block.thinkingSignature) {
 					thinkingBlock.signature = block.thinkingSignature;
+				}
+				if (block.thinkingRedactedData) {
+					thinkingBlock.redactedData = block.thinkingRedactedData;
 				}
 				finalContent.push(thinkingBlock);
 			} else if (block.type === "tool_use") {
@@ -577,6 +616,14 @@ async function parseSSEStream(
 			if (delta?.stop_reason) {
 				stopReason = mapStopReason(delta.stop_reason);
 				sawTerminal = true;
+				if (stopReason === "error") {
+					stream.push({
+						type: "error",
+						error: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`,
+					});
+					errored = true;
+					return;
+				}
 			}
 			const usageDelta = data.usage as
 				| { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
