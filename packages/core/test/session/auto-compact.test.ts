@@ -696,6 +696,76 @@ describe("createAutoCompactorWithPersistence", () => {
 		expect(sm.appendCompaction).toHaveBeenCalled();
 	});
 
+	it("charges the live tracker even on the deferred-persistence path (cut past mapping)", async () => {
+		// Codex budget-fix pass-10 HIGH: when the kept tail lies past
+		// the persisted mapping, persistence is deferred — but the
+		// summary LLM call already ran and cost real dollars. The live
+		// tracker MUST still be charged so the in-process cap enforces
+		// that spend. Skipping the charge on the deferred path was
+		// pass-9's regression.
+		const recorded: { usage: any; turnIndex: number }[] = [];
+		const tracker = {
+			recordTurn: (_m: any, u: any, t: number) => recorded.push({ usage: u, turnIndex: t }),
+			isBudgetExceeded: () => false,
+		};
+
+		function summaryStream() {
+			const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+				(e) => e.type === "done",
+				(e) => {
+					if (e.type === "done") return e.message;
+					throw new Error("unexpected");
+				},
+			);
+			const message: AssistantMessage = {
+				role: "assistant",
+				content: [{ type: "text", text: "summary" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: { inputTokens: 500, outputTokens: 100, cost: 0.0123 },
+			};
+			queueMicrotask(() => {
+				stream.push({ type: "start", message });
+				stream.push({ type: "done", message });
+			});
+			return stream;
+		}
+
+		const sm = {
+			appendCompaction: vi.fn(() => "entry-id"),
+			// Mapping covers only the first 2 messages — kept tail will
+			// lie past the mapping → persistence deferred → firstKeptEntryId null.
+			buildMessageToEntryMapping: () => {
+				const out: (string | null)[] = [];
+				for (let i = 0; i < 2; i++) out.push(`entry-${i}`);
+				return out;
+			},
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: summaryStream as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+			costTracker: tracker,
+		});
+
+		const ctx: AgentContext = {
+			messages: buildOversizedMessages(22),
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await compactor(ctx);
+
+		// Persistence SHOULD have been deferred (mapping too short).
+		expect(sm.appendCompaction).not.toHaveBeenCalled();
+		// But the tracker SHOULD still have been charged — the summary
+		// call happened and in-process enforcement must reflect it.
+		expect(recorded.length).toBe(1);
+		expect(recorded[0].usage.cost).toBe(0.0123);
+	});
+
 	it("does NOT charge the live tracker if appendCompaction throws (atomicity)", async () => {
 		// Codex budget-fix pass-9 HIGH: the persistence wrapper must
 		// charge the tracker AFTER persist succeeds. If we charged

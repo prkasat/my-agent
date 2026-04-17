@@ -432,18 +432,31 @@ export function createAutoCompactorWithPersistence(
           context.messages.push(...preCompactionMessages);
           throw persistErr;
         }
+      }
 
-        // Persist succeeded. NOW charge the live tracker for the
-        // summary call. This is the only path that records the
-        // ancillary spend live; all other paths rely on the
-        // priorCumulativeCost snapshot for restart replay.
-        if (options.costTracker && compactionResult.summaryUsage) {
-          options.costTracker.recordTurn(
-            context.model,
-            compactionResult.summaryUsage,
-            -1,
-          );
-        }
+      // Charge the live tracker for the summary call. Fires on BOTH
+      // the persisted path (firstKeptEntryId non-null, appendCompaction
+      // succeeded) AND the deferred path (firstKeptEntryId null, no
+      // persist ran). The summary LLM call happened for real either
+      // way, so the in-process cap MUST enforce it — skipping the
+      // charge on the deferred path would let a near-budget session
+      // overspend via compaction's hidden LLM call without the cap
+      // ever noticing. Codex budget-fix pass-10 finding.
+      //
+      // Restart-safety for the deferred path: the next successful
+      // compaction's snapshot folds in the prior synthetic
+      // compaction_summary's priorCumulativeCost (which already
+      // contains THIS round's summary cost). On process crash before
+      // that next round, the deferred summary spend is lost — a
+      // known tradeoff of the defer-persistence design. The persist
+      // failure path above reaches `throw persistErr` before this,
+      // so a failed write does NOT double-charge.
+      if (options.costTracker && compactionResult.summaryUsage) {
+        options.costTracker.recordTurn(
+          context.model,
+          compactionResult.summaryUsage,
+          -1,
+        );
       }
     }
 
