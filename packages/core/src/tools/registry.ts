@@ -68,3 +68,31 @@ export function createReadOnlyToolDefinitions(cwd: string, options?: ToolsOption
 export function createReadOnlyTools(cwd: string, options?: ToolsOptions): Tool[] {
 	return createReadOnlyToolDefinitions(cwd, options).map(wrapToolDefinition);
 }
+
+/**
+ * Snapshot of every shipped tool's current schema version.
+ *
+ * The session file records each tool call with its arguments at the
+ * version that produced them. When a tool's schema changes in a
+ * backwards-incompatible way (rename a field, drop a field, change a
+ * required type), bump that tool's `version` AND register an args
+ * migrator. Reading an old session entry would then key off the
+ * stored `toolVersion` to translate the args before re-executing or
+ * re-displaying.
+ *
+ * Today every tool is at v1 and there is no migration framework yet —
+ * this is the baseline so future bumps have a "from" to migrate from.
+ *
+ * The snapshot is built from the same factory the agent uses, with a
+ * throwaway cwd, so it can never drift from the actual shipped
+ * versions. If you add a tool, add it to createAllToolDefinitions and
+ * this function automatically picks it up.
+ */
+export function getToolVersions(): Record<ToolName, number> {
+	const defs = createAllToolDefinitions("/");
+	const out: Record<string, number> = {};
+	for (const [name, def] of Object.entries(defs)) {
+		out[name] = def.version;
+	}
+	return out as Record<ToolName, number>;
+}

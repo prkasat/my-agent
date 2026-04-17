@@ -41,6 +41,18 @@ export interface AgentTool<TParams extends TSchema = TSchema, TDetails = unknown
 	name: string;
 	description: string;
 	parameters: TParams;
+	/**
+	 * Schema version for this tool's `parameters`. Bump when changing the
+	 * parameter shape in a backwards-incompatible way (renaming a field,
+	 * removing a field, changing a field's type/required-ness). Stable
+	 * tweaks like description text or new optional fields don't require a
+	 * bump. Defaults to 1 when omitted; readers MUST treat undefined as 1.
+	 *
+	 * Recorded so a future migration step can map old serialized tool-call
+	 * arguments in session files onto the current schema. There is no
+	 * migration framework yet — this is the scaffolding it would key off.
+	 */
+	version?: number;
 	/** Transform raw args before validation */
 	prepareArguments?: (raw: unknown) => Static<TParams>;
 	/**

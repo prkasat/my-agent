@@ -115,6 +115,7 @@ export {
 	createCodingTools,
 	createReadOnlyToolDefinitions,
 	createReadOnlyTools,
+	getToolVersions,
 } from "./tools/registry.js";
 export type { ToolName, ToolsOptions } from "./tools/registry.js";
 

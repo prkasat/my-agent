@@ -96,6 +96,7 @@ export function createEditToolDefinition(
 	return {
 		name: "edit",
 		label: "edit",
+		version: 1,
 		description:
 			"Edit a file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block, merge them into one edit.",
 		promptSnippet: "Make precise file edits with exact text replacement",

@@ -73,6 +73,7 @@ export function createReadToolDefinition(
 	return {
 		name: "read",
 		label: "read",
+		version: 1,
 		description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments (auto-resized if needed). For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files.`,
 		promptSnippet: "Read file contents",
 		promptGuidelines: ["Use read to examine files instead of cat or sed."],
