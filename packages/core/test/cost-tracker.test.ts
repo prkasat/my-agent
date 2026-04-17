@@ -151,6 +151,127 @@ describe("CostTracker", () => {
 		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
 	});
 
+	it("loadFromMessages rejects a malformed priorCumulativeCost snapshot (Infinity locks session)", () => {
+		// Codex budget-fix pass-5 MEDIUM: a corrupted/edited session file
+		// that writes `priorCumulativeCost: Infinity` would permanently
+		// lock the session under any cap on resume. The loader MUST
+		// treat malformed values as "unknown prior spend" and skip the
+		// seed rather than honor it.
+		const tracker = new CostTracker(0.01);
+		const messages = [
+			{
+				role: "custom" as const,
+				type: "compaction_summary" as const,
+				summary: "rogue",
+				tokensBefore: 100,
+				tokensAfter: 10,
+				timestamp: Date.now(),
+				priorCumulativeCost: Number.POSITIVE_INFINITY,
+			},
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "ok" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.001 },
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		// Only the real assistant turn should be counted; the malformed
+		// snapshot is dropped entirely.
+		expect(loaded).toBe(1);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
+		expect(tracker.isBudgetExceeded()).toBe(false);
+	});
+
+	it("loadFromMessages rejects a negative priorCumulativeCost snapshot", () => {
+		// Negative values would let an attacker or buggy writer GIFT the
+		// session free headroom under the cap. Skip instead.
+		const tracker = new CostTracker(0.01);
+		const messages = [
+			{
+				role: "custom" as const,
+				type: "compaction_summary" as const,
+				summary: "rogue",
+				tokensBefore: 100,
+				tokensAfter: 10,
+				timestamp: Date.now(),
+				priorCumulativeCost: -100,
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(loaded).toBe(0);
+		expect(tracker.getSummary().totalCost).toBe(0);
+	});
+
+	it("recordTurn keeps totalCost finite when usage.cost is NaN (falls back to per-million estimate)", () => {
+		// Codex budget-fix pass-5 MEDIUM: a single NaN added straight
+		// into totalCost would make `totalCost >= cap` return false
+		// forever (>= NaN === false) and silently disable enforcement.
+		// The calculator rejects the NaN and falls back to the token-
+		// based estimate, so totalCost stays finite and the cap still
+		// works.
+		const tracker = new CostTracker(0.01);
+		tracker.recordTurn(
+			PRICED_MODEL,
+			{ inputTokens: 100, outputTokens: 50, cost: Number.NaN },
+			0,
+		);
+		expect(Number.isFinite(tracker.getSummary().totalCost)).toBe(true);
+		// 100/1M * 3 + 50/1M * 15 = $0.001050 — positive, so a follow-up
+		// that blows past the cap still gets stopped.
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.00105, 6);
+		expect(tracker.isBudgetExceeded()).toBe(false);
+	});
+
+	it("recordTurn keeps totalCost finite when usage.cost is Infinity", () => {
+		// Without the isValidCost gate, Infinity would add into
+		// totalCost and permanently lock the session under its cap.
+		// The calculator rejects it and uses the token-based fallback.
+		const tracker = new CostTracker(0.01);
+		tracker.recordTurn(
+			PRICED_MODEL,
+			{ inputTokens: 100, outputTokens: 50, cost: Number.POSITIVE_INFINITY },
+			0,
+		);
+		expect(Number.isFinite(tracker.getSummary().totalCost)).toBe(true);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.00105, 6);
+		expect(tracker.isBudgetExceeded()).toBe(false);
+	});
+
+	it("recordTurn also sanitizes NaN in token counters", () => {
+		// A NaN `inputTokens` would poison totalInputTokens the same way.
+		// The cost calculator treats NaN tokens as 0 and the token
+		// counters do too.
+		const tracker = new CostTracker(0.01);
+		tracker.recordTurn(
+			PRICED_MODEL,
+			{ inputTokens: Number.NaN, outputTokens: 50, cost: 0.001 },
+			0,
+		);
+		// Token counter stays finite (NaN rejected, counted as 0).
+		expect(Number.isFinite(tracker.getSummary().totalInputTokens)).toBe(true);
+		expect(tracker.getSummary().totalInputTokens).toBe(0);
+		expect(tracker.getSummary().totalOutputTokens).toBe(50);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
+	});
+
+	it("recordTurn rejects negative usage.cost and falls back to the per-million estimate", () => {
+		// Malformed `cost: -5` must not be honored (negative cost would
+		// let providers buy budget back). The calculator falls back to
+		// the token-based estimate from model.cost, which is strictly
+		// non-negative.
+		const tracker = new CostTracker(0.01);
+		tracker.recordTurn(
+			PRICED_MODEL,
+			{ inputTokens: 100, outputTokens: 50, cost: -5 },
+			0,
+		);
+		// 100/1M * 3 + 50/1M * 15 = $0.001050
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.00105, 6);
+		expect(tracker.getSummary().totalCost).toBeGreaterThan(0);
+	});
+
 	it("loadFromMessages skips aborted and error assistant messages", () => {
 		const tracker = new CostTracker();
 		const messages = [

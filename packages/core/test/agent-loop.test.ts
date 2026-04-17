@@ -755,6 +755,141 @@ describe("Agent Loop", () => {
 		expect((last as { toolCallId: string }).toolCallId).toBe("t1");
 	});
 
+	it("fails fast on resume when the replayed spend already exceeds the cap (no compaction LLM call)", async () => {
+		// Codex budget-fix pass-5 HIGH: an already-over-budget session
+		// resumed in a fresh process MUST bail before any LLM call
+		// happens. Without this early check, streamAssistantResponse()
+		// runs transformContext() first, which (for sessions with
+		// auto-compact wired in) can trigger an LLM-backed compaction —
+		// unmetered spend on top of an already-exceeded budget.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001);
+
+		let llmCalls = 0;
+		let transformCalls = 0;
+		const llm = () => {
+			llmCalls++;
+			// If this ever runs we've failed: budget should have fired first.
+			throw new Error("LLM should not run on already-over-budget resume");
+		};
+
+		const priorAssistant = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "earlier spend" }],
+			stopReason: "stop" as const,
+			timestamp: Date.now() - 60_000,
+			usage: { inputTokens: 100, outputTokens: 50, cost: 0.01 }, // WAY over $0.001 cap
+		};
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "earlier" }, priorAssistant, { role: "user", content: "resume" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm as any,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+				transformContext: (ctx) => {
+					transformCalls++;
+					return ctx;
+				},
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		// Neither the LLM nor the transform should have been invoked.
+		expect(llmCalls).toBe(0);
+		expect(transformCalls).toBe(0);
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+	});
+
+	it("missing usage on a turn does not bypass the budget check", async () => {
+		// Codex budget-fix pass-5 HIGH: if the post-turn check was guarded
+		// by `if (assistantMessage.usage)`, a provider response with no
+		// usage would skip BOTH recordTurn AND the budget check,
+		// letting the loop continue even when accumulated spend already
+		// exceeds the cap. The check must run independently.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001);
+		// Pre-seed the tracker so it's already past cap without the
+		// current turn contributing (simulates: prior spend replayed,
+		// this turn reports no usage at all).
+		tracker.recordTurn(
+			{ id: "test", provider: "test", cost: { inputPerMillion: 0, outputPerMillion: 0 } } as any,
+			{ inputTokens: 100, outputTokens: 50, cost: 0.002 },
+			0,
+		);
+
+		let secondLlmCall = false;
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				// Deliberately NO `usage` field on this message.
+				content: [{ type: "text", text: "no usage reported" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			} as any,
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "should not happen" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "hi" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+				getFollowUpMessages: () => {
+					secondLlmCall = true;
+					return [{ role: "user", content: "follow" }];
+				},
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		// Follow-up loop must NOT kick in — budget stopped things first.
+		expect(secondLlmCall).toBe(false);
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+	});
+
 	it("ends the loop with reason=error when the cost budget is exceeded", async () => {
 		const { CostTracker } = await import("../src/agent/cost-tracker.js");
 		const tracker = new CostTracker(0.001); // tiny budget

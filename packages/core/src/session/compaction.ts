@@ -15,6 +15,7 @@ import type { AgentMessage, AgentContext } from "../agent/types.js";
 import type { AssistantMessage, Message, Model, StreamFunction, Usage } from "@my-agent/ai";
 import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
+import { calculateUsageCost } from "../agent/cost-tracker.js";
 
 // ============================================================================
 // Token Estimation
@@ -830,6 +831,17 @@ export async function compact(
   // reload there's no in-memory state), recover it from the most recent
   // compaction_summary we found, so its content isn't lost.
   let inferredPreviousSummary: string | undefined;
+  // Rebuild the prior cumulative-cost snapshot from whichever
+  // compaction_summary is in flight. This matters when a fresh
+  // process compacts a session that already compacted before:
+  // `options.previousCompaction` is only set in-memory by the
+  // auto-compactor's continuation state, so on resume the caller
+  // has no object to hand us — we MUST recover the snapshot from
+  // the persisted compaction_summary message itself, otherwise the
+  // new snapshot we write would only account for this round and
+  // the prior spend would vanish from the session's accounting.
+  // Codex budget-fix pass-5 finding.
+  let inferredPriorCumulativeCost: number | undefined;
   const filteredToSummarize: AgentMessage[] = [];
   for (const msg of messagesToSummarize) {
     // Custom-role compaction summary — drop, capture content as fallback
@@ -842,6 +854,11 @@ export async function compact(
       if ("summary" in msg && typeof (msg as { summary: unknown }).summary === "string") {
         // Last one wins — most recent compaction summary
         inferredPreviousSummary = (msg as { summary: string }).summary;
+      }
+      const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
+      if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+        // Last one wins too — most recent snapshot carries the full chain.
+        inferredPriorCumulativeCost = raw;
       }
       continue;
     }
@@ -875,16 +892,40 @@ export async function compact(
   // — without it, compaction would erase prior spend from the context
   // and a fresh process could blow past maxCostPerSession.
   // Codex budget-fix pass-4 finding.
-  let priorCumulativeCost = options.previousCompaction?.priorCumulativeCost ?? 0;
+  //
+  // Seed order of precedence:
+  //   1. options.previousCompaction — in-memory continuation (same-process
+  //      auto-compactor already knows the running total).
+  //   2. inferredPriorCumulativeCost — recovered from a compaction_summary
+  //      inside `messagesToSummarize`. Covers fresh-process re-compaction:
+  //      without this, the new snapshot would only reflect this round and
+  //      silently erase the previously persisted accumulated spend.
+  //      Codex budget-fix pass-5 finding.
+  //   3. 0 — genuinely no prior compaction anywhere in the chain.
+  //
+  // Per-turn cost uses the same formula the live tracker uses so that
+  // token-only providers (e.g. Anthropic, which does NOT emit
+  // usage.cost on every turn) still contribute their spend to the
+  // snapshot. Before this, `typeof msg.usage?.cost === "number"` silently
+  // dropped every such turn and a restart-then-resume lost their dollars.
+  // Codex budget-fix pass-5 finding.
+  const previousSnapshot =
+    options.previousCompaction?.priorCumulativeCost ??
+    inferredPriorCumulativeCost ??
+    0;
+  let priorCumulativeCost = previousSnapshot;
   for (const msg of messagesToSummarize) {
     if (
       "role" in msg &&
       msg.role === "assistant" &&
       msg.stopReason !== "aborted" &&
       msg.stopReason !== "error" &&
-      typeof msg.usage?.cost === "number"
+      msg.usage
     ) {
-      priorCumulativeCost += msg.usage.cost;
+      const turnCost = calculateUsageCost(options.model, msg.usage);
+      if (Number.isFinite(turnCost) && turnCost > 0) {
+        priorCumulativeCost += turnCost;
+      }
     }
   }
   details.priorCumulativeCost = priorCumulativeCost;

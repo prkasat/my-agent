@@ -1174,6 +1174,141 @@ describe("compact: priorCumulativeCost snapshot", () => {
     expect(result.details.priorCumulativeCost).toBeCloseTo(0.020 + newlyCompacted, 6);
   });
 
+  it("recovers priorCumulativeCost from a compaction_summary when previousCompaction is absent (fresh-process re-compaction)", async () => {
+    // Codex budget-fix pass-5 CRITICAL: on fresh-process re-compaction,
+    // the in-memory `previousCompaction` object is gone (only persisted
+    // state survives across restarts). If the snapshot logic seeds
+    // only from `options.previousCompaction?.priorCumulativeCost`, the
+    // second compaction would silently overwrite the first snapshot
+    // with only its own newly-summarized turns, permanently erasing
+    // the earlier spend from the session. compact() MUST recover the
+    // prior snapshot from the compaction_summary message inside its
+    // input and chain it forward.
+    const filler = buildBigText();
+    const priorCompaction = {
+      role: "custom" as const,
+      type: "compaction_summary" as const,
+      summary: "earlier work, spent four cents",
+      tokensBefore: 5000,
+      tokensAfter: 500,
+      timestamp: Date.now(),
+      priorCumulativeCost: 0.04,
+    };
+    const messages: AgentMessage[] = [
+      priorCompaction,
+      { role: "user", content: `u1 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a2 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50, cost: 0.003 },
+      },
+      { role: "user", content: `u3 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a4 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 50, outputTokens: 25, cost: 0.001 },
+      },
+      { role: "user", content: `u5 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a6 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 25, outputTokens: 10, cost: 0.002 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50,
+      model: fakeModel,
+      streamFn: fakeStreamFn("compacted") as any,
+      // NOTE: no `previousCompaction` — simulates fresh process.
+    });
+
+    expect(result.cutIndex).toBeGreaterThan(0);
+
+    // Sum costs of compacted assistant turns (skipping the prior
+    // compaction_summary, which is recovered via priorCumulativeCost).
+    let newCosts = 0;
+    for (let i = 0; i < result.cutIndex; i++) {
+      const msg = messages[i];
+      if ("role" in msg && msg.role === "assistant" && typeof msg.usage?.cost === "number") {
+        newCosts += msg.usage.cost;
+      }
+    }
+
+    // New snapshot must be prior-snapshot + new-costs, NOT just new-costs.
+    expect(result.details.priorCumulativeCost).toBeCloseTo(0.04 + newCosts, 6);
+    expect(result.details.priorCumulativeCost!).toBeGreaterThan(0.04);
+  });
+
+  it("snapshots token-only turns via per-million estimate (Anthropic-style: no usage.cost)", async () => {
+    // Codex budget-fix pass-5 HIGH: providers that don't emit per-call
+    // dollar cost (e.g. Anthropic native) must still contribute their
+    // spend to the compaction snapshot. If compact() only counts turns
+    // where `typeof usage.cost === "number"`, every compacted Anthropic
+    // turn drops to zero and the post-restart cap undercounts.
+    const pricedModel: Model = {
+      id: "anthropic-like",
+      name: "test",
+      provider: "anthropic",
+      contextWindow: 200_000,
+      maxOutputTokens: 4096,
+      supportsTools: true,
+      supportsStreaming: true,
+      supportsThinking: false,
+      cost: { inputPerMillion: 3, outputPerMillion: 15 },
+    } as unknown as Model;
+
+    const filler = buildBigText();
+    const messages: AgentMessage[] = [
+      { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a1 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        // Deliberately NO `cost` field — token-only provider.
+        usage: { inputTokens: 1_000_000, outputTokens: 100_000 },
+      },
+      { role: "user", content: `u2 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a3 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 500_000, outputTokens: 50_000 },
+      },
+      { role: "user", content: `u4 ${filler}`, timestamp: Date.now() },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: `a5 ${filler}` }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: { inputTokens: 100, outputTokens: 50 },
+      },
+    ];
+
+    const result = await compact(messages, {
+      keepRecentTokens: 50,
+      model: pricedModel,
+      streamFn: fakeStreamFn("compacted") as any,
+    });
+
+    expect(result.cutIndex).toBeGreaterThan(0);
+    // Every compacted turn should contribute its token-based cost. With
+    // 1M input at $3 + 0.1M output at $15 that's $4.50, etc.
+    expect(result.details.priorCumulativeCost).toBeGreaterThan(0);
+    // Sanity: the first compacted turn alone at $3 per 1M input and
+    // $15 per 1M output adds up to 3 + 1.5 = $4.50. With additional
+    // turns in the compacted prefix we expect >= $4.50.
+    expect(result.details.priorCumulativeCost!).toBeGreaterThanOrEqual(4.5);
+  });
+
   it("excludes aborted and error assistant turns from the snapshot", async () => {
     // Aborted/error assistant turns may carry phantom usage.cost
     // values (the provider was mid-stream when the call ended). The

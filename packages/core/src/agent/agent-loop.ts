@@ -142,6 +142,22 @@ async function runLoop(
 	if (config.costTracker?.loadFromMessages && context.messages.length > 0) {
 		turnIndex = config.costTracker.loadFromMessages(context.messages, context.model);
 	}
+
+	// Fail fast if the restored/accumulated spend is already past the
+	// cap. Without this, a resumed over-budget session would still
+	// enter streamAssistantResponse() — which runs transformContext
+	// first and can trigger an LLM-backed auto-compaction BEFORE the
+	// cap fires at the post-turn check. That compaction call is
+	// unmetered spend on top of an already-exceeded budget.
+	// Codex budget-fix pass-5 finding.
+	if (config.costTracker?.isBudgetExceeded?.()) {
+		stream.push({
+			type: "agent_end",
+			reason: "error",
+			error: "Cost budget exceeded for this session",
+		});
+		return;
+	}
 	const maxTurns = config.maxTurns ?? 50;
 
 	// === Outer Loop: Follow-up messages ===
@@ -216,8 +232,18 @@ async function runLoop(
 			// session ends with a dangling assistant tool_call turn that
 			// agentLoopContinue refuses to resume and providers reject
 			// on replay. Codex budget-fix pass-2 finding.
-			if (config.costTracker && assistantMessage.usage) {
-				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
+			//
+			// The budget check fires REGARDLESS of whether the provider
+			// emitted usage on this turn. recordTurn is the only thing
+			// that needs usage; isBudgetExceeded reads the accumulated
+			// total and would otherwise stay silent on missing-usage
+			// streams, letting the loop keep running while the caller
+			// has no way to know spend crossed the cap.
+			// Codex budget-fix pass-5 finding.
+			if (config.costTracker) {
+				if (assistantMessage.usage) {
+					config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
+				}
 				if (config.costTracker.isBudgetExceeded()) {
 					if (toolCalls.length > 0) {
 						context.messages.push(...padCancelledToolResults(toolCalls, []));

@@ -19,6 +19,56 @@ export interface TurnCost {
 	timestamp: number;
 }
 
+/**
+ * Reject inputs that would silently break budget enforcement:
+ *   - NaN totals stay forever-not-greater than the cap (>= NaN === false).
+ *   - Infinity locks the session permanently below cap.
+ *   - Negative values let a malformed provider buy budget back.
+ *
+ * The same gate guards every cost ingress: live usage.cost from the
+ * provider, the per-million estimate fallback, and persisted snapshot
+ * fields like priorCumulativeCost. Codex budget-fix pass-5 finding.
+ */
+function isValidCost(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Compute the per-turn cost for a (model, usage) pair using the same
+ * rules CostTracker uses internally:
+ *   - upstream-reported usage.cost wins when present and valid,
+ *   - otherwise estimate from model.cost per-million pricing,
+ *   - cached input is billed at 10% of the input rate.
+ *
+ * Exported so other accounting paths (compaction snapshot replay,
+ * session-restoration replay) compute cost identically. Drift between
+ * "what the live tracker bills" and "what the snapshot persists"
+ * would let providers that don't emit usage.cost (e.g. Anthropic
+ * native, which is token-only) silently lose spend across restarts.
+ * Codex budget-fix pass-5 finding.
+ *
+ * Returns 0 when inputs are not usable rather than NaN/throw, so a
+ * single bad turn cannot poison the cumulative total.
+ */
+export function calculateUsageCost(model: Model, usage: Usage): number {
+	if (isValidCost(usage.cost)) {
+		return usage.cost;
+	}
+	const inputTokens = isValidCost(usage.inputTokens) ? usage.inputTokens : 0;
+	const outputTokens = isValidCost(usage.outputTokens) ? usage.outputTokens : 0;
+	const cacheReadTokens = isValidCost(usage.cacheReadTokens) ? usage.cacheReadTokens : 0;
+	const inputPerMillion = model.cost?.inputPerMillion;
+	const outputPerMillion = model.cost?.outputPerMillion;
+	if (!isValidCost(inputPerMillion) || !isValidCost(outputPerMillion)) {
+		return 0;
+	}
+	const inputCost = (inputTokens / 1_000_000) * inputPerMillion;
+	const outputCost = (outputTokens / 1_000_000) * outputPerMillion;
+	const cacheReadCost = (cacheReadTokens / 1_000_000) * inputPerMillion * 0.1;
+	const total = inputCost + outputCost + cacheReadCost;
+	return isValidCost(total) ? total : 0;
+}
+
 export class CostTracker {
 	private costs: SessionCosts = {
 		totalInputTokens: 0,
@@ -33,18 +83,28 @@ export class CostTracker {
 
 	recordTurn(model: Model, usage: Usage, turnIndex: number): void {
 		const cost = this.calculateCost(model, usage);
+		// calculateCost never returns a non-finite/negative number by
+		// construction, but be defensive: a future regression there would
+		// otherwise poison the running total in a way `isBudgetExceeded`
+		// can't detect.
+		if (!isValidCost(cost)) return;
 
-		this.costs.totalInputTokens += usage.inputTokens;
-		this.costs.totalOutputTokens += usage.outputTokens;
-		this.costs.totalCacheReadTokens += usage.cacheReadTokens || 0;
-		this.costs.totalCacheWriteTokens += usage.cacheWriteTokens || 0;
+		const input = isValidCost(usage.inputTokens) ? usage.inputTokens : 0;
+		const output = isValidCost(usage.outputTokens) ? usage.outputTokens : 0;
+		const cacheRead = isValidCost(usage.cacheReadTokens) ? usage.cacheReadTokens : 0;
+		const cacheWrite = isValidCost(usage.cacheWriteTokens) ? usage.cacheWriteTokens : 0;
+
+		this.costs.totalInputTokens += input;
+		this.costs.totalOutputTokens += output;
+		this.costs.totalCacheReadTokens += cacheRead;
+		this.costs.totalCacheWriteTokens += cacheWrite;
 		this.costs.totalCost += cost;
 
 		this.costs.turnCosts.push({
 			turnIndex,
 			model: model.id,
-			inputTokens: usage.inputTokens,
-			outputTokens: usage.outputTokens,
+			inputTokens: input,
+			outputTokens: output,
 			cost,
 			timestamp: Date.now(),
 		});
@@ -93,18 +153,22 @@ export class CostTracker {
 				"role" in msg &&
 				msg.role === "custom" &&
 				"type" in msg &&
-				msg.type === "compaction_summary" &&
-				typeof (msg as { priorCumulativeCost?: number }).priorCumulativeCost === "number"
+				msg.type === "compaction_summary"
 			) {
-				const priorCost = (msg as { priorCumulativeCost: number }).priorCumulativeCost;
-				if (priorCost > 0) {
-					this.costs.totalCost += priorCost;
+				const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
+				// Treat a malformed (NaN/Infinity/negative) snapshot as
+				// "unknown prior spend" rather than seeding a value that
+				// would permanently lock the session under its cap or
+				// (for a negative value) gift the session free headroom.
+				// Codex budget-fix pass-5 finding.
+				if (isValidCost(raw) && raw > 0) {
+					this.costs.totalCost += raw;
 					this.costs.turnCosts.push({
 						turnIndex: loaded,
 						model: "compaction-snapshot",
 						inputTokens: 0,
 						outputTokens: 0,
-						cost: priorCost,
+						cost: raw,
 						timestamp: (msg as { timestamp?: number }).timestamp ?? Date.now(),
 					});
 					loaded++;
@@ -135,20 +199,14 @@ export class CostTracker {
 		return `$${totalCost.toFixed(4)}${budget} (${totalInputTokens.toLocaleString()} in / ${totalOutputTokens.toLocaleString()} out)`;
 	}
 
+	/**
+	 * Per-turn cost calculation. Delegates to the shared helper so live
+	 * accounting, compaction snapshots, and cross-process resume all
+	 * agree on what a turn costs. A provider that emits authoritative
+	 * `usage.cost` wins; otherwise we estimate from `model.cost` using
+	 * the same 10%-of-input price for cached reads.
+	 */
 	private calculateCost(model: Model, usage: Usage): number {
-		// Prefer the upstream's authoritative per-call cost (OpenRouter
-		// reports this in `chunk.usage.cost` when `includeRealCost` is
-		// enabled on the provider). The static per-million estimate
-		// drifts from reality whenever the model's price changes mid-
-		// session, when caching/discount tiers apply, or when the
-		// upstream router fans out across providers with different
-		// pricing — `usage.cost` captures all of those exactly.
-		if (typeof usage.cost === "number") {
-			return usage.cost;
-		}
-		const inputCost = (usage.inputTokens / 1_000_000) * model.cost.inputPerMillion;
-		const outputCost = (usage.outputTokens / 1_000_000) * model.cost.outputPerMillion;
-		const cacheReadCost = ((usage.cacheReadTokens || 0) / 1_000_000) * model.cost.inputPerMillion * 0.1;
-		return inputCost + outputCost + cacheReadCost;
+		return calculateUsageCost(model, usage);
 	}
 }
