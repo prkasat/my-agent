@@ -642,6 +642,17 @@ export class SessionManager {
     this.byId.clear();
     this.leafId = null;
     this.flushed = false;
+    // Reset every piece of session-scoped derived state so a reused
+    // manager (open() then newSession()) doesn't leak prior-session
+    // labels, freshness baseline, or leaf-selection into the new
+    // session. Without this, the first appendLabelChange on the new
+    // session statSyncs the (not-yet-flushed) new sessionFile, gets
+    // ENOENT, and throws "disappeared" — even though the session is
+    // brand new. Codex labels pass-12 finding.
+    this.labelsByTargetId.clear();
+    this.labelsByName.clear();
+    this.lastLoadedMtimeMs = null;
+    this.leafSelectedByUser = false;
 
     if (this.persist) {
       const fileTimestamp = timestamp.replace(/[:.]/g, "-");

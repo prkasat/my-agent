@@ -1371,6 +1371,32 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass12-fix: newSession() resets label state and freshness baseline", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u1 = manager.appendMessage({ role: "user", content: "first session", timestamp: Date.now() });
+      manager.appendLabelChange(u1, "old-label");
+
+      // Open a brand new session on the same manager.
+      manager.newSession();
+      const u2 = manager.appendMessage({ role: "user", content: "fresh", timestamp: Date.now() });
+
+      // The old label must not be visible in the new session.
+      expect(manager.findEntryByLabel("old-label")).toBeUndefined();
+      expect(manager.getLabel(u1)).toBeUndefined();
+
+      // Labeling on the new session must work, not throw "disappeared"
+      // because lastLoadedMtimeMs leaked from the old session.
+      expect(() => manager.appendLabelChange(u2, "new-label")).not.toThrow();
+      expect(manager.findEntryByLabel("new-label")).toBe(u2);
+
+      // No cross-session displaces leak: the new label entry doesn't
+      // displace the old session's label.
+      const labelEntry = manager.getEntries().find(
+        (e): e is Extract<SessionEntry, { type: "label" }> => e.type === "label" && e.targetId === u2,
+      );
+      expect(labelEntry?.displaces).toBeUndefined();
+    });
+
     it("Codex-pass11-fix: post-rename failures cannot truncate the published snapshot", () => {
       // Simulating a real post-rename dir-fsync failure is platform
       // dependent; instead, exercise the surrounding contract:
