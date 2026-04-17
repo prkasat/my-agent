@@ -770,7 +770,21 @@ export class SessionManager {
     let fd = -1;
     try {
       fd = openSync(tmpPath, "w");
-      writeSync(fd, content);
+      // writeSync may write fewer bytes than requested under disk
+      // pressure or for large payloads. Loop until the full buffer
+      // is committed before fsync/rename — otherwise the rename
+      // would atomically publish a TRUNCATED snapshot, which is
+      // worse than not-renaming-at-all.
+      // Codex labels pass-10 finding.
+      const buf = Buffer.from(content, "utf8");
+      let written = 0;
+      while (written < buf.length) {
+        const n = writeSync(fd, buf, written, buf.length - written);
+        if (n <= 0) {
+          throw new Error(`rewriteFile: writeSync stalled at ${written}/${buf.length} bytes`);
+        }
+        written += n;
+      }
       // Flush this file's contents+metadata to stable storage
       // before the rename, so the new bytes are durable even if
       // the system crashes immediately after the rename returns.
@@ -861,8 +875,32 @@ export class SessionManager {
       this.rewriteFile();
       this.flushed = true;
     } else {
-      // Incremental append
-      appendFileSync(this.sessionFile, JSON.stringify(entry) + "\n");
+      // Incremental append. When the caller asked for forced
+      // persistence (e.g. extension entries, label writes), fsync
+      // before returning so the API only acknowledges after the
+      // bytes hit stable storage. Without fsync a power loss right
+      // after the call could lose a label move and resurrect the
+      // previous owner. Codex labels pass-10 finding.
+      const line = JSON.stringify(entry) + "\n";
+      if (force) {
+        const fd = openSync(this.sessionFile, "a");
+        try {
+          const buf = Buffer.from(line, "utf8");
+          let written = 0;
+          while (written < buf.length) {
+            const n = writeSync(fd, buf, written, buf.length - written);
+            if (n <= 0) {
+              throw new Error(`persistEntry: writeSync stalled at ${written}/${buf.length} bytes`);
+            }
+            written += n;
+          }
+          fsyncSync(fd);
+        } finally {
+          closeSync(fd);
+        }
+      } else {
+        appendFileSync(this.sessionFile, line);
+      }
     }
     this.recordFreshMtime();
   }
@@ -1813,11 +1851,21 @@ export class SessionManager {
       prevId = labelId;
     }
 
+    // Mirror the lazy-promotion rule: the fork header keeps the
+    // parent's schema version unless the fork itself emits a v2-only
+    // entry. Prevents pass-9-style needless upgrades that would
+    // lock a v1 binary out of an unlabeled forked session.
+    // Codex labels pass-10 finding.
+    const parentHeader = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
+    const parentVersion = parentHeader?.version ?? CURRENT_SESSION_VERSION;
+    const hasV2Entry = newEntries.some((e) => isV2OnlyEntry(e));
+    const forkVersion = hasV2Entry ? Math.max(parentVersion, CURRENT_SESSION_VERSION) : parentVersion;
+
     if (!this.persist) {
       // In-memory mode - just replace current session with the path
       const header: SessionHeader = {
         type: "session",
-        version: CURRENT_SESSION_VERSION,
+        version: forkVersion,
         id: newSessionId,
         cwd: this.cwd,
         timestamp,
@@ -1836,7 +1884,7 @@ export class SessionManager {
 
     const header: SessionHeader = {
       type: "session",
-      version: CURRENT_SESSION_VERSION,
+      version: forkVersion,
       id: newSessionId,
       cwd: this.cwd,
       timestamp,

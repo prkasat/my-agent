@@ -1371,6 +1371,76 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass10-fix: forking an unlabeled v1 session keeps the fork at v1", () => {
+      const file = join(tempDir, "legacy.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "legacy-session",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "legacy", timestamp: Date.now() },
+      };
+      const assistantEntry = {
+        type: "message",
+        id: "a1",
+        parentId: "u1",
+        timestamp: new Date().toISOString(),
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "ok" }],
+          stopReason: "stop",
+          timestamp: Date.now(),
+        },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(
+        file,
+        `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n${JSON.stringify(assistantEntry)}\n`,
+      );
+
+      const manager = SessionManager.open(file);
+      const forkPath = manager.forkSession();
+      expect(forkPath).toBeTruthy();
+      const forkHeader = JSON.parse(fs.readFileSync(forkPath!, "utf-8").split("\n")[0]);
+      // No labels involved → fork must stay at v1 so v1 binaries can read it.
+      expect(forkHeader.version).toBe(1);
+    });
+
+    it("Codex-pass10-fix: forking a labeled v1 session promotes the fork to v2", () => {
+      const file = join(tempDir, "legacy-labeled.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "legacy-labeled",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "x", timestamp: Date.now() },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(file, `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n`);
+
+      const manager = SessionManager.open(file);
+      // Add a label — promotes the original to v2, which then forks must also be.
+      manager.appendLabelChange("u1", "marker");
+      const forkPath = manager.forkSession();
+      expect(forkPath).toBeTruthy();
+      const forkHeader = JSON.parse(fs.readFileSync(forkPath!, "utf-8").split("\n")[0]);
+      expect(forkHeader.version).toBe(2);
+    });
+
     it("Codex-pass9-fix: flush() refreshes mtime so post-flush deletes are caught", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
