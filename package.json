@@ -8,8 +8,8 @@
 		"node": ">=20.0.0"
 	},
 	"scripts": {
-		"build": "tsc -b packages/ai packages/core packages/cli",
-		"dev": "tsc -b --watch packages/ai packages/core packages/cli",
+		"build": "tsc -b packages/ai packages/core packages/cli packages/tui",
+		"dev": "tsc -b --watch packages/ai packages/core packages/cli packages/tui",
 		"test": "vitest",
 		"lint": "biome check .",
 		"format": "biome format --write .",

@@ -217,9 +217,20 @@ async function runLoop(
 
 			stream.push({ type: "turn_end", turnIndex, usage: assistantMessage.usage });
 
-			// Auto-wire cost tracking (budget enforcement disabled — free models only)
+			// Auto-wire cost tracking. Budget enforcement only fires when
+			// the tracker was constructed with a maxCostPerSession — for
+			// free-tier sessions (no budget configured) this is a no-op
+			// and behaves exactly like the previous "record only" path.
 			if (config.costTracker && assistantMessage.usage) {
 				config.costTracker.recordTurn(context.model, assistantMessage.usage, turnIndex);
+				if (config.costTracker.isBudgetExceeded()) {
+					stream.push({
+						type: "agent_end",
+						reason: "error",
+						error: "Cost budget exceeded for this session",
+					});
+					return;
+				}
 			}
 
 			turnIndex++;

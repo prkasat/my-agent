@@ -595,4 +595,60 @@ describe("Agent Loop", () => {
 		expect(llmMessages[0].role).toBe("user");
 		expect(llmMessages[1].role).toBe("assistant");
 	});
+
+	it("ends the loop with reason=error when the cost budget is exceeded", async () => {
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001); // tiny budget
+
+		// Two assistant turns wired with a tool call so the loop would
+		// continue past the first turn if the budget check did not fire.
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "first turn" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.999 },
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "should not run" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "You are helpful.",
+				messages: [],
+				tools: [],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+				getFollowUpMessages: () => [{ role: "user", content: "again" }],
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+		// The "should not run" second LLM response must not have been consumed.
+		expect(tracker.getSummary().turnCosts).toHaveLength(1);
+	});
 });
