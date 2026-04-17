@@ -1019,8 +1019,19 @@ export class SessionManager {
    * assistant message.
    */
   appendLabelChange(targetId: string, label: string | undefined): string {
-    if (!this.byId.has(targetId)) {
+    const target = this.byId.get(targetId);
+    if (!target) {
       throw new Error(`Cannot label entry ${targetId}: entry not found`);
+    }
+    // Disallow labeling a LabelEntry. Labels-on-labels create a
+    // dangling-target hazard: forkSession drops all LabelEntries
+    // from the path and re-synthesizes only the current label
+    // state, so a label whose target is itself a LabelEntry would
+    // be remapped to an ID that the fork never emits, leaving the
+    // forked file with a label pointing at nothing. Codex labels
+    // pass-4 finding.
+    if (target.type === "label") {
+      throw new Error(`Cannot label entry ${targetId}: cannot label a label entry`);
     }
     const trimmed = label?.trim();
 
@@ -1575,14 +1586,19 @@ export class SessionManager {
     // entries that remapEntry refused (e.g. label entries — fork
     // synthesizes fresh ones from current state below); preserve
     // the parent chain so following entries still point at a real
-    // previous ID.
+    // previous ID. Track which old IDs actually survived emission so
+    // label synthesis can filter by emitted-ness, not just by
+    // idMap membership (every path entry gets a remapping, but
+    // dropped entries don't end up in the output file).
     const newEntries: SessionEntry[] = [];
+    const emittedOldIds = new Set<string>();
     let prevId: string | null = null;
     for (const entry of path) {
       const newId = idMap.get(entry.id)!;
       const newEntry = remapEntry(entry, newId, prevId);
       if (!newEntry) continue;
       newEntries.push(newEntry);
+      emittedOldIds.add(entry.id);
       prevId = newId;
     }
 
@@ -1594,6 +1610,11 @@ export class SessionManager {
     // appendix that establishes ground-truth label state.
     let labelTimestampOffset = 0;
     for (const [origTargetId, label] of this.labelsByTargetId) {
+      // Filter by actually-emitted IDs, not just idMap membership.
+      // appendLabelChange already rejects labeling a LabelEntry, but
+      // belt-and-suspenders: any other case where remapEntry drops
+      // an entry must not cause us to write a dangling label.
+      if (!emittedOldIds.has(origTargetId)) continue;
       const newTargetId = idMap.get(origTargetId);
       if (!newTargetId) continue;
       const labelId = generateId(usedIds);

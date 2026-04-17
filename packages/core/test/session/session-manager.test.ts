@@ -1371,6 +1371,14 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass4-fix: rejects labeling a LabelEntry to prevent dangling fork targets", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const msgId = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      const labelId = manager.appendLabelChange(msgId, "x");
+
+      expect(() => manager.appendLabelChange(labelId, "meta")).toThrow(/cannot label a label/);
+    });
+
     it("Codex-pass3-fix: label move is one atomic LabelEntry with displaces", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const a = manager.appendMessage({ role: "user", content: "a", timestamp: Date.now() });
