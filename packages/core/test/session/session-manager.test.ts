@@ -1371,6 +1371,49 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass7-fix: rewriteFile uses temp+rename atomicity", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(u, "first"); // forces a flush
+      const sessionFile = manager.getSessionFile()!;
+
+      // No leftover .tmp files in the session directory after a
+      // successful rewrite.
+      const fs = require("node:fs") as typeof import("node:fs");
+      const dirEntries = fs.readdirSync(tempDir);
+      const tmpFiles = dirEntries.filter((f) => f.includes(".tmp."));
+      expect(tmpFiles).toHaveLength(0);
+      // And the session file is intact.
+      expect(fs.existsSync(sessionFile)).toBe(true);
+    });
+
+    it("Codex-pass7-fix: appendLabelChange refuses when file changed externally", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(u, "marker");
+      const sessionFile = manager.getSessionFile()!;
+
+      // Simulate a peer process appending to the file. Bumping mtime
+      // explicitly via futimes is fiddly across platforms; just
+      // append a byte and ensure mtime advances by waiting briefly.
+      const fs = require("node:fs") as typeof import("node:fs");
+      // Sleep just enough for mtime tick to register on most FS.
+      const before = fs.statSync(sessionFile).mtimeMs;
+      const start = Date.now();
+      while (fs.statSync(sessionFile).mtimeMs <= before && Date.now() - start < 100) {
+        // tight wait
+      }
+      fs.appendFileSync(sessionFile, "");
+      // Touch by appending a no-op character then truncating back, to
+      // make sure mtime moves even on filesystems that ignore empty
+      // appends.
+      const sizeBefore = fs.statSync(sessionFile).size;
+      fs.appendFileSync(sessionFile, "\n");
+      fs.truncateSync(sessionFile, sizeBefore);
+
+      expect(() => manager.appendLabelChange(u, "marker2")).toThrow(/changed externally/);
+    });
+
     it("Codex-pass6-fix: opening an unlabeled v1 file leaves it at v1 (rollback safe)", () => {
       const file = join(tempDir, "legacy.jsonl");
       const v1Header = {

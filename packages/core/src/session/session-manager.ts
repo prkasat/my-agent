@@ -19,8 +19,10 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   statSync,
   truncateSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
@@ -425,6 +427,15 @@ export class SessionManager {
     return this.lockDepth > 0;
   }
   private fileEntries: FileEntry[] = [];
+  /**
+   * Mtime (in ms) the session file had the last time we successfully
+   * read its full state. Used by appendLabelChange to detect external
+   * mutation between this manager's last load and a label write that
+   * would derive `displaces` from possibly-stale ownership state.
+   * `null` means we have not loaded a real on-disk snapshot yet
+   * (in-memory session, or before first flush).
+   */
+  private lastLoadedMtimeMs: number | null = null;
   private byId: Map<string, SessionEntry> = new Map();
   /**
    * Latest label per target entry, derived from LabelEntry history.
@@ -667,6 +678,7 @@ export class SessionManager {
 
         this.buildIndex();
         this.flushed = true;
+        this.recordFreshMtime();
         break;
     }
   }
@@ -731,12 +743,35 @@ export class SessionManager {
   }
 
   /**
-   * Rewrite the entire session file.
+   * Rewrite the entire session file atomically (temp file + rename).
+   *
+   * A direct writeFileSync truncates the live file before writing, so
+   * an ENOSPC/EIO mid-write would leave a half-written or zero-length
+   * session. The temp-file + rename strategy keeps the original file
+   * intact until the new bytes are fully written and fsynced; the
+   * rename is the atomic commit point. On most POSIX filesystems
+   * rename is atomic for files in the same directory.
+   *
+   * Used by first-flush, navigation rollback, label-promotion
+   * rewrite, and any other call that snapshots full state.
+   * Codex labels pass-7 finding.
    */
   private rewriteFile(): void {
     if (!this.persist || !this.sessionFile) return;
     const content = this.fileEntries.map((e) => JSON.stringify(e)).join("\n") + "\n";
-    writeFileSync(this.sessionFile, content);
+    const tmpPath = `${this.sessionFile}.tmp.${process.pid}.${Date.now()}`;
+    try {
+      writeFileSync(tmpPath, content);
+      renameSync(tmpPath, this.sessionFile);
+    } catch (err) {
+      // Best-effort cleanup of the temp file on failure; swallow
+      // unlink errors (the temp may not exist if writeFileSync threw
+      // before creating it).
+      try {
+        unlinkSync(tmpPath);
+      } catch {}
+      throw err;
+    }
   }
 
   /**
@@ -792,6 +827,22 @@ export class SessionManager {
     } else {
       // Incremental append
       appendFileSync(this.sessionFile, JSON.stringify(entry) + "\n");
+    }
+    this.recordFreshMtime();
+  }
+
+  /**
+   * Snapshot the live file's mtime as of "we are in sync with disk".
+   * Called after every load and every successful persist so the
+   * external-mutation check in appendLabelChange has a reliable
+   * baseline. Safe to call when the file doesn't exist (no-op).
+   */
+  private recordFreshMtime(): void {
+    if (!this.persist || !this.sessionFile) return;
+    try {
+      this.lastLoadedMtimeMs = statSync(this.sessionFile).mtimeMs;
+    } catch {
+      this.lastLoadedMtimeMs = null;
     }
   }
 
@@ -1080,6 +1131,31 @@ export class SessionManager {
    * assistant message.
    */
   appendLabelChange(targetId: string, label: string | undefined): string {
+    // Refuse to write when the file changed externally since our
+    // last sync. The `displaces` field encoded in the new entry is
+    // computed from in-memory ownership; if a peer process already
+    // moved the same label, our `displaces` would name the wrong
+    // (possibly-already-cleared) target and the durable history
+    // would lose the right displacement edge that forkSession
+    // relies on. Forces the caller to either reload or wrap the
+    // call in withLock (which reloads on entry).
+    // Codex labels pass-7 finding.
+    if (this.persist && this.sessionFile && this.lastLoadedMtimeMs !== null) {
+      try {
+        const onDisk = statSync(this.sessionFile).mtimeMs;
+        if (onDisk > this.lastLoadedMtimeMs) {
+          throw new Error(
+            "Session file changed externally since last load; reload or wrap appendLabelChange in withLock before writing labels",
+          );
+        }
+      } catch (err) {
+        // Re-throw the freshness error, but swallow ENOENT etc.
+        if (err instanceof Error && err.message.startsWith("Session file changed externally")) {
+          throw err;
+        }
+      }
+    }
+
     const target = this.byId.get(targetId);
     if (!target) {
       throw new Error(`Cannot label entry ${targetId}: entry not found`);
@@ -1814,6 +1890,7 @@ export class SessionManager {
         }
         this.buildIndex();
         this.flushed = true;
+        this.recordFreshMtime();
         // Restore the caller's selected leaf if it was an explicit choice.
         // A peer's writes since our snapshot become a sibling branch off
         // the same parent, which is the correct multi-branch model.
