@@ -1371,6 +1371,43 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass5-fix: writes session files at the new schema version", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      // Force a flush via a label entry (force=true), since message
+      // entries are deferred until the first assistant turn.
+      manager.appendLabelChange(u, "marker");
+      const sessionFile = manager.getSessionFile()!;
+      const header = JSON.parse(readFileSync(sessionFile, "utf-8").split("\n")[0]);
+      expect(header.type).toBe("session");
+      expect(header.version).toBeGreaterThanOrEqual(2);
+    });
+
+    it("Codex-pass5-fix: refuses files written by a newer schema", () => {
+      const file = join(tempDir, "from-the-future.jsonl");
+      const futureHeader = {
+        type: "session",
+        id: "future-session",
+        version: 999,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "hi", timestamp: Date.now() },
+      };
+      const body = `${JSON.stringify(futureHeader)}\n${JSON.stringify(userEntry)}\n`;
+      mkdirSync(tempDir, { recursive: true });
+      // Write the file directly so we can simulate a newer-schema producer.
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(file, body);
+
+      expect(() => SessionManager.open(file)).toThrow(/newer than supported|upgrade required/);
+    });
+
     it("Codex-pass4-fix: rejects labeling a LabelEntry to prevent dangling fork targets", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const msgId = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });

@@ -132,6 +132,20 @@ function loadSessionFile(filePath: string): LoadSessionResult {
       return { status: "corrupted", error: "Invalid session header" };
     }
 
+    // Forward-compat guard: refuse files written by a newer schema.
+    // Without this, an older binary would happily load a v2 file
+    // and silently mishandle entry types it doesn't understand
+    // (e.g. v1 forkSession would copy a label.targetId verbatim
+    // and durably corrupt the child file). Better to fail loudly
+    // and let the user upgrade. Codex labels pass-5 finding.
+    const headerVersion = (header as SessionHeader).version ?? 1;
+    if (headerVersion > CURRENT_SESSION_VERSION) {
+      return {
+        status: "corrupted",
+        error: `Session file schema version ${headerVersion} is newer than supported (${CURRENT_SESSION_VERSION}); upgrade required`,
+      };
+    }
+
     return { status: "ok", entries };
   } catch (err) {
     return { status: "corrupted", error: String(err) };

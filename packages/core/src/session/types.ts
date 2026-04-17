@@ -312,5 +312,14 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 /**
  * Current session schema version.
  * Increment when making breaking changes to session format.
+ *
+ * Version history:
+ *   v1 — initial schema
+ *   v2 — adds LabelEntry (`type: "label"`) with optional
+ *        `displaces?: string[]` for atomic single-owner moves.
+ *        Older readers don't know how to remap label.targetId on
+ *        fork (their forkSession would copy the targetId verbatim
+ *        and corrupt navigation), so we bump the version and the
+ *        loader rejects newer files.
  */
-export const CURRENT_SESSION_VERSION = 1;
+export const CURRENT_SESSION_VERSION = 2;
