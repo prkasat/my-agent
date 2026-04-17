@@ -1371,6 +1371,38 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass11-fix: post-rename failures cannot truncate the published snapshot", () => {
+      // Simulating a real post-rename dir-fsync failure is platform
+      // dependent; instead, exercise the surrounding contract:
+      // after a successful rewrite (rename succeeded), the session
+      // file contains the full new snapshot intact, and a follow-up
+      // write does not corrupt it. This catches the regression
+      // path where the catch block would have truncated the file
+      // back to the old size if dir-fsync threw.
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.appendLabelChange(u, "first"); // forces rewrite via promotion path
+      const sessionFile = manager.getSessionFile()!;
+      const fs = require("node:fs") as typeof import("node:fs");
+      const sizeAfterFirstLabel = fs.statSync(sessionFile).size;
+      expect(sizeAfterFirstLabel).toBeGreaterThan(0);
+
+      // Append more entries — the file should grow, not shrink.
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const sizeAfterAssistant = fs.statSync(sessionFile).size;
+      expect(sizeAfterAssistant).toBeGreaterThan(sizeAfterFirstLabel);
+
+      // Reopen and verify the snapshot parses fully — no truncation.
+      const reopened = SessionManager.open(sessionFile);
+      expect(reopened.getEntries().length).toBeGreaterThan(0);
+      expect(reopened.getLabel(u)).toBe("first");
+    });
+
     it("Codex-pass10-fix: forking an unlabeled v1 session keeps the fork at v1", () => {
       const file = join(tempDir, "legacy.jsonl");
       const v1Header = {

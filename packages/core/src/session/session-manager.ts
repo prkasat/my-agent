@@ -792,11 +792,15 @@ export class SessionManager {
       closeSync(fd);
       fd = -1;
       renameSync(tmpPath, this.sessionFile);
-      // Fsync the parent directory so the new directory entry
-      // (the rename) survives a crash. Without this, the rename
-      // can be undone by a crash even though the file's bytes are
-      // safely on disk. Some filesystems (e.g. tmpfs) don't
-      // support directory fsync; treat EINVAL/ENOTSUP as a no-op.
+      // Past this point the new snapshot is already published and
+      // visible to readers. ANY further error MUST NOT propagate
+      // up — appendEntry's catch path would interpret it as "the
+      // write didn't happen" and truncate the live file back to
+      // the old byte length, mangling the just-published bytes.
+      // The directory fsync below is a best-effort durability hint
+      // (it makes the rename survive a power loss); failure to do
+      // it leaves the file correct in normal operation, just less
+      // crash-safe. Swallow everything. Codex labels pass-11.
       try {
         const dirFd = openSync(this.sessionFile.substring(0, this.sessionFile.lastIndexOf("/")) || ".", "r");
         try {
@@ -804,14 +808,13 @@ export class SessionManager {
         } finally {
           closeSync(dirFd);
         }
-      } catch (dirErr) {
-        const code = (dirErr as NodeJS.ErrnoException).code;
-        if (code !== "EINVAL" && code !== "ENOTSUP" && code !== "EISDIR") {
-          throw dirErr;
-        }
+      } catch {
+        // Best-effort durability hint — see comment above.
       }
     } catch (err) {
-      // Best-effort cleanup of the temp file on failure.
+      // Pre-rename failure: the live file is unchanged. Clean up
+      // the temp file and rethrow so the caller can retry or roll
+      // back in-memory state safely.
       if (fd !== -1) {
         try {
           closeSync(fd);
