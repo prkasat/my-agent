@@ -190,16 +190,18 @@ export class CostTracker {
 			if (
 				"role" in msg &&
 				msg.role === "assistant" &&
-				msg.usage &&
-				// `aborted` turns can carry phantom partial usage from a
-				// half-streamed response, so they're still skipped on
-				// replay. `error` turns DO carry authoritative billed
-				// usage (Anthropic pause_turn etc.), so they MUST be
-				// replayed — otherwise restart-after-failure resets the
-				// cap and the next attempt can spend freely.
-				// Codex budget-fix pass-7 finding.
-				msg.stopReason !== "aborted"
+				msg.usage
 			) {
+				// Replay ALL assistant turns that carry usage — including
+				// `error` (Anthropic pause_turn carries authoritative
+				// billing) and `aborted` (the provider often finalizes
+				// billing on its side before we stop reading the stream).
+				// Live `recordTurn` already counts both unconditionally;
+				// dropping either here would create a "billed live, lost
+				// on restart" asymmetry that lets the cap re-open after
+				// a process restart. The isValidCost gate inside
+				// recordTurn still filters NaN/Infinity/negative inputs.
+				// Codex budget-fix pass-8 finding.
 				this.recordTurn(model, msg.usage, loaded);
 				loaded++;
 			}

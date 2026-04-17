@@ -1451,11 +1451,14 @@ describe("compact: priorCumulativeCost snapshot", () => {
     expect(recorded[0].turnIndex).toBe(-1);
   });
 
-  it("excludes aborted and error assistant turns from the snapshot", async () => {
-    // Aborted/error assistant turns may carry phantom usage.cost
-    // values (the provider was mid-stream when the call ended). The
-    // snapshot must skip them — the same filter that the cost
-    // tracker's recordTurn skips them with on the live path.
+  it("includes ALL assistant turns with valid usage in the snapshot (error AND aborted)", async () => {
+    // Codex budget-fix pass-8 HIGH: the live tracker counts both
+    // error and aborted turns when usage is present (the provider
+    // may have already billed them). Compaction's snapshot MUST
+    // align — otherwise a billed error/aborted turn that gets
+    // compacted away vanishes from the only restart-replayable
+    // record and the cap re-opens. The previous "skip both" rule
+    // was the cause of pass-8's third finding.
     const filler = buildBigText();
     const messages: AgentMessage[] = [
       { role: "user", content: `u0 ${filler}`, timestamp: Date.now() },
@@ -1472,7 +1475,7 @@ describe("compact: priorCumulativeCost snapshot", () => {
         content: [{ type: "text", text: `aborted ${filler}` }],
         stopReason: "aborted",
         timestamp: Date.now(),
-        usage: { inputTokens: 999_999, outputTokens: 0, cost: 9.999 },
+        usage: { inputTokens: 200, outputTokens: 0, cost: 0.003 },
       },
       { role: "user", content: `u4 ${filler}`, timestamp: Date.now() },
       {
@@ -1480,7 +1483,7 @@ describe("compact: priorCumulativeCost snapshot", () => {
         content: [{ type: "text", text: `errored ${filler}` }],
         stopReason: "error",
         timestamp: Date.now(),
-        usage: { inputTokens: 999_999, outputTokens: 0, cost: 9.999 },
+        usage: { inputTokens: 300, outputTokens: 0, cost: 0.005 },
       },
       { role: "user", content: `u6 ${filler}`, timestamp: Date.now() },
       {
@@ -1500,23 +1503,19 @@ describe("compact: priorCumulativeCost snapshot", () => {
 
     expect(result.cutIndex).toBeGreaterThan(0);
 
-    // Only the non-aborted, non-error turns inside the compacted
-    // prefix should contribute. Build the expected sum the same way.
+    // Every assistant turn with valid usage in the compacted prefix
+    // contributes — including aborted and error turns.
     let expected = 0;
     for (let i = 0; i < result.cutIndex; i++) {
       const msg = messages[i];
       if (
         "role" in msg &&
         msg.role === "assistant" &&
-        msg.stopReason !== "aborted" &&
-        msg.stopReason !== "error" &&
         typeof msg.usage?.cost === "number"
       ) {
         expected += msg.usage.cost;
       }
     }
     expect(result.details.priorCumulativeCost).toBeCloseTo(expected, 6);
-    // And critically: the phantom 9.999 values MUST NOT be in there.
-    expect(result.details.priorCumulativeCost!).toBeLessThan(1);
   });
 });

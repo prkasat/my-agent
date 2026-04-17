@@ -320,14 +320,15 @@ describe("CostTracker", () => {
 		expect(usage.cost).toBeCloseTo(4.5, 6);
 	});
 
-	it("loadFromMessages skips aborted but replays error assistant messages (Anthropic pause_turn etc.)", () => {
-		// Codex budget-fix pass-7 HIGH: error turns can carry
-		// authoritative billed usage (Anthropic emits a terminal `error`
-		// message with usage on pause_turn etc.). Skipping them on
-		// replay would let restart-after-failure reset the cap and the
-		// next attempt could spend freely. Aborted turns are still
-		// skipped — their usage is unreliable phantom from a
-		// half-streamed response.
+	it("loadFromMessages replays error AND aborted turns when usage is present (consistent with live policy)", () => {
+		// Codex budget-fix pass-8 HIGH: live recordTurn counts both
+		// error and aborted turns (their usage may reflect real
+		// provider billing). loadFromMessages MUST also replay both;
+		// any asymmetry creates a "billed live, lost on restart" hole
+		// where the cap re-opens after a process restart. The
+		// isValidCost gate inside recordTurn still filters NaN/
+		// Infinity/negative inputs, so genuinely garbage usage is
+		// rejected at the calculator layer.
 		const tracker = new CostTracker();
 		const messages = [
 			{
@@ -342,7 +343,7 @@ describe("CostTracker", () => {
 				content: [{ type: "text" as const, text: "aborted" }],
 				stopReason: "aborted" as const,
 				timestamp: Date.now(),
-				usage: { inputTokens: 200, outputTokens: 0, cost: 0.999 },
+				usage: { inputTokens: 200, outputTokens: 0, cost: 0.003 },
 			},
 			{
 				role: "assistant" as const,
@@ -353,9 +354,9 @@ describe("CostTracker", () => {
 			},
 		];
 		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
-		// stop + error count; aborted skipped.
-		expect(loaded).toBe(2);
-		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001 + 0.005, 6);
+		// All three count.
+		expect(loaded).toBe(3);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001 + 0.003 + 0.005, 6);
 	});
 
 	it("recordTurn live-records error turns so failure spend counts toward the cap", () => {

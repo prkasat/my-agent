@@ -325,6 +325,16 @@ export function createAutoCompactorWithPersistence(
     // loop has flushed those messages.
     preCompactionMapping = options.sessionManager.buildMessageToEntryMapping();
 
+    // Snapshot the pre-compaction transcript so we can roll back if
+    // appendCompaction throws. Without rollback, a persist failure
+    // leaves the in-memory context shrunk and the summary call
+    // already charged, but no durable CompactionEntry on disk — so
+    // a restart would lose the priorCumulativeCost snapshot for the
+    // compacted-away spend. With rollback, on persist failure the
+    // process keeps the original messages and the next compaction
+    // round can retry. Codex budget-fix pass-8 finding.
+    const preCompactionMessages = context.messages.slice();
+
     // Always run the in-memory compaction. Compaction has two concerns —
     // "shrink the LLM context" and "record what was shrunk in the session
     // file". The first MUST always succeed when the context is over the
@@ -365,12 +375,28 @@ export function createAutoCompactorWithPersistence(
       // lands inside the mapping range, and at worst defers persistence
       // by one or two turns.
       if (firstKeptEntryId) {
-        options.sessionManager.appendCompaction(
-          summary,
-          firstKeptEntryId,
-          tokensBefore,
-          details
-        );
+        try {
+          options.sessionManager.appendCompaction(
+            summary,
+            firstKeptEntryId,
+            tokensBefore,
+            details
+          );
+        } catch (persistErr) {
+          // Persistence failed (disk full, permission, transient fs
+          // error). Roll the in-memory context BACK to its
+          // pre-compaction state so disk and memory stay aligned —
+          // the next compaction round will retry. The summary LLM
+          // call's spend HAS already been charged to the live
+          // tracker (it really happened) so the live cap still
+          // enforces it; on restart the original messages survive
+          // in the session file and replay rebuilds the bulk of the
+          // spend, only the summary call's cost is genuinely lost
+          // until next round overwrites the snapshot.
+          context.messages.length = 0;
+          context.messages.push(...preCompactionMessages);
+          throw persistErr;
+        }
       }
     }
 

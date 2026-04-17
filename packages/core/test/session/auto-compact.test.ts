@@ -696,6 +696,47 @@ describe("createAutoCompactorWithPersistence", () => {
 		expect(sm.appendCompaction).toHaveBeenCalled();
 	});
 
+	it("rolls back the in-memory transcript when appendCompaction throws (no half-state)", async () => {
+		// Codex budget-fix pass-8 HIGH: if persistence fails after the
+		// in-memory compaction (disk full, permission, transient fs
+		// error), the previous behavior left context.messages shrunk
+		// while no durable CompactionEntry was written. On restart,
+		// the priorCumulativeCost snapshot for the compacted spend
+		// would be missing. The wrapper now restores the
+		// pre-compaction transcript and re-throws so the caller knows
+		// to retry.
+		const messages = buildOversizedMessages(22);
+		const beforeLength = messages.length;
+		const sm = {
+			appendCompaction: vi.fn(() => {
+				throw new Error("disk full");
+			}),
+			buildMessageToEntryMapping: () => {
+				const out: (string | null)[] = [];
+				for (let i = 0; i < 22; i++) out.push(`entry-${i}`);
+				return out;
+			},
+		};
+
+		const compactor = createAutoCompactorWithPersistence({
+			streamFn: fakeStreamFn("summary") as any,
+			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			sessionManager: sm,
+		});
+
+		const context: AgentContext = {
+			messages,
+			model: fakeModel,
+			systemPrompt: "",
+			tools: [],
+		};
+
+		await expect(compactor(context)).rejects.toThrow(/disk full/);
+
+		// In-memory context MUST be restored to its pre-compaction length.
+		expect(context.messages.length).toBe(beforeLength);
+	});
+
 	it("skips persistence (but still compacts) when cut point is past the mapping", async () => {
 		// Build a context where the kept tail consists of un-mapped messages.
 		const messages = buildOversizedMessages(22);

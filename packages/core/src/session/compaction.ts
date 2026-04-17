@@ -975,13 +975,15 @@ export async function compact(
     0;
   let priorCumulativeCost = previousSnapshot;
   for (const msg of messagesToSummarize) {
-    if (
-      "role" in msg &&
-      msg.role === "assistant" &&
-      msg.stopReason !== "aborted" &&
-      msg.stopReason !== "error" &&
-      msg.usage
-    ) {
+    if ("role" in msg && msg.role === "assistant" && msg.usage) {
+      // Snapshot ALL assistant turns with valid usage — including
+      // `error` and `aborted`. The previous filter dropped both,
+      // which created a hole: a live-billed error/aborted turn that
+      // was later compacted away would vanish from the only
+      // restart-replayable record (the priorCumulativeCost snapshot).
+      // Live recordTurn and loadFromMessages both count these turns;
+      // the snapshot must agree or restart re-opens budget headroom.
+      // Codex budget-fix pass-8 finding.
       const turnCost = calculateUsageCost(options.model, msg.usage);
       if (Number.isFinite(turnCost) && turnCost > 0) {
         priorCumulativeCost += turnCost;
