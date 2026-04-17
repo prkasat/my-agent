@@ -13,13 +13,17 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	label: string;
 	description: string;
 	/**
-	 * Schema version for `parameters`. Required so every shipped tool
-	 * carries an explicit baseline; mirrors `AgentTool.version` (which is
-	 * optional only because not every external consumer of AgentTool
-	 * sets it). Bump when changing the parameter shape in a
-	 * backwards-incompatible way.
+	 * Schema version for `parameters`. Optional at the type boundary so
+	 * external custom-tool authors aren't forced to set it on upgrade —
+	 * `wrapToolDefinition` and `createToolDefinitionFromAgentTool`
+	 * normalize a missing value to 1 (matching the documented "treat
+	 * undefined as 1" reader contract). Bump when changing the parameter
+	 * shape in a backwards-incompatible way (rename a field, drop a
+	 * field, change a required type). Stable tweaks like description text
+	 * or new optional fields don't require a bump. All shipped my-agent
+	 * tools declare `version` explicitly.
 	 */
-	version: number;
+	version?: number;
 	/** One-liner injected into system prompt */
 	promptSnippet?: string;
 	/** Usage guidelines for the LLM */
@@ -44,7 +48,11 @@ export function wrapToolDefinition<TParams extends TSchema, TDetails = unknown>(
 		name: def.name,
 		description: def.description,
 		parameters: def.parameters,
-		version: def.version,
+		// Default to v1 when the source ToolDefinition didn't declare a
+		// version — matches the documented "treat undefined as 1" reader
+		// contract and keeps the public surface non-breaking for external
+		// custom-tool authors.
+		version: def.version ?? 1,
 		prepareArguments: def.prepareArguments,
 		execute: def.execute,
 	};

@@ -84,4 +84,20 @@ describe("schema-versioned tool registry", () => {
       expect(tool.version, `${name}`).toBe(def.version);
     }
   });
+
+  it("wrapToolDefinition normalizes a missing version to 1 (public API non-breaking)", () => {
+    // External consumers built ToolDefinitions before `version` existed.
+    // The type now allows omission and the wrapper fills in 1, so an
+    // unmodified downstream definition still produces a valid AgentTool.
+    // Codex tool-registry pass-1 finding (medium).
+    const def = {
+      name: "external-tool",
+      label: "External",
+      description: "x",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+    };
+    const tool = wrapToolDefinition(def as Parameters<typeof wrapToolDefinition>[0]);
+    expect(tool.version).toBe(1);
+  });
 });

@@ -92,7 +92,11 @@ export function getToolVersions(): Record<ToolName, number> {
 	const defs = createAllToolDefinitions("/");
 	const out: Record<string, number> = {};
 	for (const [name, def] of Object.entries(defs)) {
-		out[name] = def.version;
+		// Tool definition `version` is optional at the type boundary;
+		// treat undefined as 1 per the reader contract. Every shipped
+		// tool sets it explicitly, so this branch only fires for hand-
+		// rolled definitions that omitted it.
+		out[name] = def.version ?? 1;
 	}
 	return out as Record<ToolName, number>;
 }
