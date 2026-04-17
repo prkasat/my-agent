@@ -131,7 +131,17 @@ async function runLoop(
 
 	stream.push({ type: "agent_start" });
 
+	// Replay prior turn usage into the cost tracker before the first
+	// new turn. Without this, resuming a session in a fresh process
+	// would reset cumulative spend to zero and let the next turn
+	// exceed `maxCostPerSession`. The tracker's loadFromMessages is a
+	// no-op when it already has recorded turns (same-process loop
+	// continuation), so this is safe to call unconditionally.
+	// Codex budget-fix pass-3 finding.
 	let turnIndex = 0;
+	if (config.costTracker?.loadFromMessages && context.messages.length > 0) {
+		turnIndex = config.costTracker.loadFromMessages(context.messages, context.model);
+	}
 	const maxTurns = config.maxTurns ?? 50;
 
 	// === Outer Loop: Follow-up messages ===

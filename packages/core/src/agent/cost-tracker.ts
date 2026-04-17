@@ -1,4 +1,5 @@
 import type { Usage, Model } from "@my-agent/ai";
+import type { AgentMessage } from "./types.js";
 
 export interface SessionCosts {
 	totalInputTokens: number;
@@ -53,6 +54,46 @@ export class CostTracker {
 	isBudgetExceeded(): boolean {
 		if (this.maxCostPerSession === undefined) return false;
 		return this.costs.totalCost >= this.maxCostPerSession;
+	}
+
+	/**
+	 * Replay assistant `usage` records from a prior session into this
+	 * tracker so a hard `maxCostPerSession` cap survives process
+	 * restarts. Without this, resuming a session in a fresh process
+	 * would reset cumulative spend to zero and let the next turn
+	 * exceed the cap. Codex budget-fix pass-3 finding.
+	 *
+	 * No-op if the tracker already has any recorded turns — loading
+	 * twice would double-count. The caller should invoke this once
+	 * per process, before the first new turn runs.
+	 *
+	 * Returns the number of prior turns loaded so the caller can
+	 * continue numbering subsequent turns from there (avoids
+	 * `turn_index` collisions in the event stream).
+	 *
+	 * `model` is used as a fallback when a prior assistant message
+	 * has no `usage.cost`. Mixing models across resume is supported
+	 * because OpenRouter-reported `usage.cost` (when present) is
+	 * authoritative regardless of `model.cost`.
+	 */
+	loadFromMessages(messages: AgentMessage[], model: Model): number {
+		if (this.costs.totalCost > 0 || this.costs.turnCosts.length > 0) {
+			return 0;
+		}
+		let loaded = 0;
+		for (const msg of messages) {
+			if (
+				"role" in msg &&
+				msg.role === "assistant" &&
+				msg.usage &&
+				msg.stopReason !== "aborted" &&
+				msg.stopReason !== "error"
+			) {
+				this.recordTurn(model, msg.usage, loaded);
+				loaded++;
+			}
+		}
+		return loaded;
 	}
 
 	getSummary(): SessionCosts {

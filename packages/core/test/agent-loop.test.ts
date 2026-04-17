@@ -596,6 +596,88 @@ describe("Agent Loop", () => {
 		expect(llmMessages[1].role).toBe("assistant");
 	});
 
+	it("budget enforcement survives a cross-process resume via loadFromMessages", async () => {
+		// Codex budget-fix pass-3 HIGH: simulate resuming a session in
+		// a fresh process. The new tracker starts at zero, but the
+		// agentLoop must replay prior assistant usage from the
+		// existing context.messages so the cap still blocks the next
+		// tool-using turn.
+		const { CostTracker } = await import("../src/agent/cost-tracker.js");
+		const tracker = new CostTracker(0.001);
+
+		let toolExecutions = 0;
+		const dangerousTool = {
+			name: "danger",
+			description: "Should not run after a resumed over-budget session",
+			parameters: Type.Object({}),
+			execute: async () => {
+				toolExecutions++;
+				return { content: [{ type: "text" as const, text: "executed" }] };
+			},
+		};
+
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{ type: "text", text: "needs a tool" },
+					{ type: "tool_call", id: "t-resume", name: "danger", arguments: "{}" },
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+				usage: { inputTokens: 10, outputTokens: 5, cost: 0.0001 },
+			},
+		]);
+
+		// Prior session history with a near-budget assistant turn.
+		const priorAssistant = {
+			role: "assistant" as const,
+			content: [{ type: "text" as const, text: "earlier work" }],
+			stopReason: "stop" as const,
+			timestamp: Date.now() - 60_000,
+			usage: { inputTokens: 100, outputTokens: 50, cost: 0.0009 },
+		};
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[
+				{ role: "user", content: "earlier prompt" },
+				priorAssistant,
+				{ role: "user", content: "follow-up" },
+			],
+			{
+				systemPrompt: "You are helpful.",
+				messages: [],
+				tools: [dangerousTool],
+				model: {
+					id: "test",
+					provider: "test",
+					cost: { inputPerMillion: 0, outputPerMillion: 0 },
+				} as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				costTracker: tracker,
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		// Resume must have replayed prior $0.0009 + new $0.0001 ≥ $0.001.
+		expect(tracker.getSummary().totalCost).toBeGreaterThanOrEqual(0.001);
+		// Dangerous tool must NOT have executed.
+		expect(toolExecutions).toBe(0);
+		expect(events.find((e) => e.type === "tool_execution_start")).toBeUndefined();
+		const end = events.find((e) => e.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toMatch(/budget/i);
+	});
+
 	it("budget check fires before tool execution on the over-budget turn", async () => {
 		// Codex budget-fix pass-1 HIGH: an assistant message that BOTH
 		// exceeds maxCostPerSession AND requests a tool call must not

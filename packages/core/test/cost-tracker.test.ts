@@ -49,4 +49,75 @@ describe("CostTracker", () => {
 		// non-zero value; the upstream said the call was free.
 		expect(tracker.getSummary().totalCost).toBe(0);
 	});
+
+	it("loadFromMessages replays prior usage so resume preserves cumulative spend", async () => {
+		// Codex budget-fix pass-3 HIGH: a hard cap survives process
+		// restart only if the resumed tracker rebuilds cumulative spend
+		// from the persisted assistant `usage` records. Bare `new
+		// CostTracker(maxCostPerSession)` would reset to zero.
+		const tracker = new CostTracker(0.001);
+		const messages = [
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "prior turn" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.0009 },
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(loaded).toBe(1);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.0009, 6);
+		expect(tracker.isBudgetExceeded()).toBe(false);
+
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 50, outputTokens: 25, cost: 0.0002 }, loaded);
+		expect(tracker.isBudgetExceeded()).toBe(true);
+	});
+
+	it("loadFromMessages is idempotent — re-calling does not double-count", () => {
+		const tracker = new CostTracker(0.01);
+		const messages = [
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "x" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.005 },
+			},
+		];
+		tracker.loadFromMessages(messages, PRICED_MODEL);
+		const second = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(second).toBe(0);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.005, 6);
+	});
+
+	it("loadFromMessages skips aborted and error assistant messages", () => {
+		const tracker = new CostTracker();
+		const messages = [
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "ok" }],
+				stopReason: "stop" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 100, outputTokens: 50, cost: 0.001 },
+			},
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "aborted" }],
+				stopReason: "aborted" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 200, outputTokens: 0, cost: 0.999 },
+			},
+			{
+				role: "assistant" as const,
+				content: [{ type: "text" as const, text: "errored" }],
+				stopReason: "error" as const,
+				timestamp: Date.now(),
+				usage: { inputTokens: 300, outputTokens: 0, cost: 0.999 },
+			},
+		];
+		const loaded = tracker.loadFromMessages(messages, PRICED_MODEL);
+		expect(loaded).toBe(1);
+		expect(tracker.getSummary().totalCost).toBeCloseTo(0.001, 6);
+	});
 });

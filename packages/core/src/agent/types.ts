@@ -125,7 +125,18 @@ export interface AgentLoopConfig {
 	/** Hook: called after a tool executes. Can modify the result. */
 	afterToolCall?: (ctx: AfterToolCallContext) => Promise<AfterToolCallResult | undefined>;
 	/** Optional cost tracker — auto-wired to record usage after each turn */
-	costTracker?: { recordTurn: (model: Model, usage: Usage, turnIndex: number) => void; isBudgetExceeded: () => boolean };
+	costTracker?: {
+		recordTurn: (model: Model, usage: Usage, turnIndex: number) => void;
+		isBudgetExceeded: () => boolean;
+		/**
+		 * Optional: replay prior assistant `usage` records into the
+		 * tracker so a hard `maxCostPerSession` cap survives process
+		 * restarts. agentLoop calls this once before the first new turn
+		 * so resumed sessions keep their cumulative spend. The tracker
+		 * is responsible for making this a no-op when already populated.
+		 */
+		loadFromMessages?: (messages: AgentMessage[], model: Model) => number;
+	};
 }
 
 // === Hook Types ===
