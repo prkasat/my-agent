@@ -906,6 +906,7 @@ export class SessionManager {
     // class as the pass-14 fix for persistEntry's forced first-flush).
     this.rewriteFile();
     this.flushed = true;
+    this.recordFreshMtime();
   }
 
   /**
@@ -1853,6 +1854,11 @@ export class SessionManager {
     this.fileEntries = [header, ...newEntries];
     this.buildIndex();
     this.flushed = true;
+    // Refresh the freshness baseline for the NEW file. Without
+    // this, the next appendLabelChange would compare the fork's
+    // mtime against the parent file's older snapshot and falsely
+    // throw "changed externally". Codex labels pass-9 finding.
+    this.recordFreshMtime();
 
     return newSessionFile;
   }

@@ -1371,6 +1371,43 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass9-fix: flush() refreshes mtime so post-flush deletes are caught", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      manager.flush();
+      const sessionFile = manager.getSessionFile()!;
+
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.unlinkSync(sessionFile);
+
+      // Without flush() recording the freshness baseline, the
+      // disappeared-file check would have been skipped because
+      // lastLoadedMtimeMs was null after the deferred-write path.
+      expect(() => manager.appendLabelChange(u, "marker")).toThrow(/disappeared/);
+    });
+
+    it("Codex-pass9-fix: forkSession refreshes mtime so first label on fork works", () => {
+      const manager = SessionManager.create("/test/cwd", tempDir);
+      manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
+      const a = manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      manager.appendLabelChange(a, "first");
+      // Fork to a new file; the manager now points at it.
+      const forkFile = manager.forkSession();
+      expect(forkFile).toBeTruthy();
+
+      // Append a real (non-label) message on the fork so we have a
+      // valid label target, then attempt to label it. Without the
+      // fix, this would falsely throw "changed externally" because
+      // the freshness baseline still pointed at the OLD file's mtime.
+      const newU = manager.appendMessage({ role: "user", content: "fork-side", timestamp: Date.now() });
+      expect(() => manager.appendLabelChange(newU, "post-fork")).not.toThrow();
+    });
+
     it("Codex-pass8-fix: refuses label write when session file disappeared", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });
