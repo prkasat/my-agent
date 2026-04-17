@@ -1371,6 +1371,63 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(reopened.getLabel(a)).toBeUndefined();
     });
 
+    it("Codex-pass6-fix: opening an unlabeled v1 file leaves it at v1 (rollback safe)", () => {
+      const file = join(tempDir, "legacy.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "legacy-session",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "legacy", timestamp: Date.now() },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(file, `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n`);
+
+      // Open and append a non-label entry — the file must NOT bump
+      // to v2, otherwise a v1 binary couldn't read it back.
+      const manager = SessionManager.open(file);
+      manager.appendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        stopReason: "stop",
+        timestamp: Date.now(),
+      });
+      const header = JSON.parse(fs.readFileSync(file, "utf-8").split("\n")[0]);
+      expect(header.version).toBe(1);
+    });
+
+    it("Codex-pass6-fix: writing a label promotes the header to v2 lazily", () => {
+      const file = join(tempDir, "lazy-promote.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "lp-session",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "x", timestamp: Date.now() },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(file, `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n`);
+
+      const manager = SessionManager.open(file);
+      manager.appendLabelChange("u1", "marker");
+      const header = JSON.parse(fs.readFileSync(file, "utf-8").split("\n")[0]);
+      expect(header.version).toBe(2);
+    });
+
     it("Codex-pass5-fix: writes session files at the new schema version", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });

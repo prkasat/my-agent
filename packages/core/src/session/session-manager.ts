@@ -175,6 +175,14 @@ function isValidSessionFile(filePath: string): boolean {
 /**
  * Run migrations to bring entries to current version.
  * Returns true if any migration was applied.
+ *
+ * IMPORTANT: This does NOT promote the header version when there is
+ * no actual data transform to perform. v1->v2 added LabelEntry but
+ * leaves all v1 entries unchanged on disk; bumping the header on
+ * read would lock out a v1 binary from a session that never used a
+ * v2-only feature. The header gets promoted lazily by `appendEntry`
+ * the first time a v2-only entry type is actually written.
+ * Codex labels pass-6 finding.
  */
 function migrateToCurrentVersion(entries: FileEntry[]): boolean {
   const header = entries.find((e) => e.type === "session") as SessionHeader | undefined;
@@ -182,15 +190,24 @@ function migrateToCurrentVersion(entries: FileEntry[]): boolean {
 
   if (version >= CURRENT_SESSION_VERSION) return false;
 
-  // Future migrations go here:
-  // if (version < 2) migrateV1ToV2(entries);
+  // Future data-transform migrations go here. Example shape:
+  //   if (version < 3) migrateV2ToV3(entries);
+  // Only bump the header inside a branch that actually rewrites
+  // entries. v1 -> v2 has no transform, so we leave the header alone
+  // and let lazy promotion handle it.
 
-  // Update header version
-  if (header) {
-    header.version = CURRENT_SESSION_VERSION;
-  }
+  // Returning false signals no rewrite needed.
+  return false;
+}
 
-  return true;
+/**
+ * True for entry types introduced in schema v2 (LabelEntry).
+ * Used to lazily promote the header when a v2-only entry is first
+ * persisted into a v1 file, so unlabeled v1 sessions remain readable
+ * by v1 binaries.
+ */
+function isV2OnlyEntry(entry: FileEntry): boolean {
+  return entry.type === "label";
 }
 
 // ============================================================================
@@ -826,6 +843,28 @@ export class SessionManager {
     const prevFlushed = this.flushed;
     const sessionFileSnapshot = this.sessionFileBytes();
 
+    // Lazily promote header version when persisting a v2-only entry
+    // for the first time. Bumping eagerly on read would lock out v1
+    // binaries from sessions that never used a v2 feature; bumping
+    // lazily means unlabeled v1 sessions stay readable by v1
+    // binaries until a label is actually written.
+    // Codex labels pass-6 finding.
+    let prevHeaderVersion = 0;
+    let promotedHeader: SessionHeader | undefined;
+    if (isV2OnlyEntry(entry)) {
+      const header = this.fileEntries.find((e) => e.type === "session") as SessionHeader | undefined;
+      if (header && header.version < CURRENT_SESSION_VERSION) {
+        prevHeaderVersion = header.version;
+        promotedHeader = header;
+        header.version = CURRENT_SESSION_VERSION;
+        // The header lives at the top of the file. To get the new
+        // version on disk, the next persist must do a full rewrite
+        // rather than an incremental append — clearing flushed
+        // forces persistEntry to take the rewriteFile path.
+        this.flushed = false;
+      }
+    }
+
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
@@ -841,6 +880,14 @@ export class SessionManager {
       this.leafId = prevLeafId;
       this.leafSelectedByUser = prevLeafSelected;
       this.flushed = prevFlushed;
+      // Roll back the header-version promotion if we performed one
+      // and the persist failed. Otherwise the in-memory header would
+      // claim v2 but disk would still be v1, and the next successful
+      // append would write a v2 header without the entry that
+      // motivated the bump.
+      if (promotedHeader) {
+        promotedHeader.version = prevHeaderVersion;
+      }
       if (
         this.lockHeld &&
         sessionFileSnapshot >= 0 &&
