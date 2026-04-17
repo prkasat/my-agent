@@ -447,6 +447,22 @@ export function createAutoCompactorWithPersistence(
           // inside SessionManager.appendEntry. Without the lock, a
           // partial trailing line stays on disk and later parses as
           // malformed silently. Codex budget-fix pass-9 finding.
+          //
+          // KNOWN LIMITATION (Codex pass-11): under concurrent
+          // writers, a peer process can append between when we
+          // captured `preCompactionMapping` and when withLock
+          // acquires + auto-reloads. In that window the new
+          // compaction entry chains off the peer's leaf (auto-reload
+          // refreshed our in-memory tree), but the firstKeptEntryId
+          // we picked still references a real persisted entry, so
+          // the entry is well-formed even if its placement in the
+          // tree differs from what we computed against the
+          // pre-LLM-call snapshot. A full CAS-and-retry would
+          // require either holding the lock across the LLM call
+          // (which serializes peers across a multi-second/minute
+          // operation) or exposing a stable file signature through
+          // the persistence interface. Single-writer setups (the
+          // common case for this CLI/TUI) are unaffected.
           const persist = () =>
             options.sessionManager.appendCompaction(
               summary,
