@@ -994,4 +994,25 @@ describe("evaluateCompaction", () => {
     expect(result.tokensBefore).toBe(0);
     expect(result.savingsRatio).toBe(0);
   });
+
+  it("counts a previousSummary toward tokensBefore on multi-round merges", () => {
+    // A multi-round compaction sees a small new transcript merged
+    // with a large prior summary. Without the prior summary in
+    // tokensBefore, the merged output would falsely look "larger
+    // than the input it summarized." Codex self-eval pass-1 finding.
+    const newTranscript: AgentMessage[] = [
+      { role: "user", content: "tiny new turn", timestamp: Date.now() },
+    ];
+    const priorSummary = "Z".repeat(4000); // ~1000 tokens
+    const merged = "Z".repeat(3500); // ~875 tokens — smaller than the merged input
+    const result = evaluateCompaction(
+      newTranscript,
+      merged,
+      { readFiles: [], modifiedFiles: [] },
+      { previousSummary: priorSummary },
+    );
+    expect(result.tokensBefore).toBeGreaterThan(900); // includes prior summary
+    expect(result.warnings.some((w) => w.includes("larger than the input"))).toBe(false);
+    expect(result.savingsRatio).toBeLessThan(1);
+  });
 });

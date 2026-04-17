@@ -676,15 +676,29 @@ export interface CompactionResult {
  *   state).
  *
  * `summarizedMessages` is the list that was actually fed to the LLM
- * (post-filtering of prior compaction summaries), not the raw input,
- * because that's what the size ratio is meaningful against.
+ * (post-filtering of prior compaction summaries). When the LLM was
+ * also asked to merge a `previousSummary` (multi-round compaction),
+ * pass it via `options.previousSummary` so its tokens count toward
+ * `tokensBefore` and the size-regression check stops false-flagging
+ * the merged output as "larger than the input." Codex self-eval
+ * pass-1 finding.
  */
 export function evaluateCompaction(
   summarizedMessages: AgentMessage[],
   summary: string,
   trackedFiles: { readFiles: string[]; modifiedFiles: string[] },
+  options?: { previousSummary?: string },
 ): CompactionEvaluation {
-  const tokensBefore = estimateContextTokens(summarizedMessages);
+  const transcriptTokens = estimateContextTokens(summarizedMessages);
+  // Add the prior summary's token estimate so multi-round compactions
+  // measure the FULL input the LLM was asked to digest. Without this,
+  // a small new transcript merged with a large prior summary would
+  // look like the model "blew up" the input even when the merged
+  // summary is well-shaped.
+  const priorSummaryTokens = options?.previousSummary
+    ? options.previousSummary.length / 4
+    : 0;
+  const tokensBefore = transcriptTokens + priorSummaryTokens;
   const trimmed = summary.trim();
   const tokensAfterSummary = trimmed.length / 4;
   // Guard against divide-by-zero when there was nothing to summarize.
@@ -855,13 +869,21 @@ export async function compact(
   details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
 
   // Self-eval against the post-filter input so the size ratio reflects
-  // what the LLM actually saw. The XML file-operations footer that we
+  // what the LLM actually saw. Pass the prior summary too — when a
+  // multi-round compaction merges a large prior summary with a small
+  // new transcript, omitting it would make the merged output look
+  // larger than its input. The XML file-operations footer that we
   // append below is deterministic and not a measure of summary quality,
   // so it's evaluated against the raw LLM output.
-  details.evaluation = evaluateCompaction(filteredToSummarize, summary, {
-    readFiles: details.readFiles,
-    modifiedFiles: details.modifiedFiles,
-  });
+  details.evaluation = evaluateCompaction(
+    filteredToSummarize,
+    summary,
+    {
+      readFiles: details.readFiles,
+      modifiedFiles: details.modifiedFiles,
+    },
+    { previousSummary: effectivePreviousSummary },
+  );
 
   // Enrich summary with file-operation XML sections so future calls
   // (and human readers) can quickly recover what files this branch
