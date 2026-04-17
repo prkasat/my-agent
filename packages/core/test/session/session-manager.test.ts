@@ -1564,6 +1564,90 @@ describe("SessionManager.withLock cross-process behavior", () => {
       expect(fs.existsSync(sessionFile)).toBe(true);
     });
 
+    it("Codex-pass13-fix: v1 promotion does not clobber peer writes", () => {
+      // Simulate the v1-promotion TOCTOU window: a legacy v1 session
+      // file exists on disk, we open it, and a peer process appends
+      // entries before our first label write. The label write triggers
+      // a v1->v2 header promotion which forces a full-file rewrite —
+      // without the CAS guard, that rewrite would publish our stale
+      // in-memory snapshot back over the peer's just-appended entries.
+      const file = join(tempDir, "legacy.jsonl");
+      const v1Header = {
+        type: "session",
+        id: "legacy-session",
+        version: 1,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      const userEntry = {
+        type: "message",
+        id: "u1",
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "legacy", timestamp: Date.now() },
+      };
+      const fs = require("node:fs") as typeof import("node:fs");
+      fs.writeFileSync(
+        file,
+        `${JSON.stringify(v1Header)}\n${JSON.stringify(userEntry)}\n`,
+      );
+
+      const manager = SessionManager.open(file);
+
+      // Peer process appends an entry; advance mtime past our baseline.
+      const before = fs.statSync(file).mtimeMs;
+      const start = Date.now();
+      while (fs.statSync(file).mtimeMs <= before && Date.now() - start < 100) {
+        // tight wait for mtime tick
+      }
+      const peerEntry = {
+        type: "message",
+        id: "u2-peer",
+        parentId: "u1",
+        timestamp: new Date().toISOString(),
+        message: { role: "user", content: "peer-write", timestamp: Date.now() },
+      };
+      fs.appendFileSync(file, JSON.stringify(peerEntry) + "\n");
+
+      // Label write must refuse rather than clobber the peer's bytes.
+      expect(() => manager.appendLabelChange("u1", "marker")).toThrow(
+        /changed externally/,
+      );
+
+      // Peer's entry is still on disk.
+      const onDisk = fs.readFileSync(file, "utf-8");
+      expect(onDisk).toContain("u2-peer");
+      expect(onDisk).toContain("peer-write");
+    });
+
+    it("Codex-pass13-fix: discovery skips future-version session files", () => {
+      // A session file from a newer binary version must not abort
+      // discovery. The legitimate-session check skips it; the user
+      // sees only files this binary can read instead of crashing
+      // with an unsupported-version error during continueRecent().
+      const fs = require("node:fs") as typeof import("node:fs");
+      const futureFile = join(tempDir, "future-session.jsonl");
+      const futureHeader = {
+        type: "session",
+        id: "future-session",
+        version: 9999,
+        cwd: "/test/cwd",
+        timestamp: new Date().toISOString(),
+      };
+      fs.writeFileSync(futureFile, JSON.stringify(futureHeader) + "\n");
+
+      // Also create a normal session so listSessions has something to return.
+      const ok = SessionManager.create("/test/cwd", tempDir);
+      ok.appendMessage({ role: "user", content: "ok", timestamp: Date.now() });
+      ok.flush();
+
+      const sessions = SessionManager.listSessions("/test/cwd", tempDir);
+      return sessions.then((list) => {
+        const ids = list.map((s) => s.id);
+        expect(ids).not.toContain("future-session");
+      });
+    });
+
     it("Codex-pass7-fix: appendLabelChange refuses when file changed externally", () => {
       const manager = SessionManager.create("/test/cwd", tempDir);
       const u = manager.appendMessage({ role: "user", content: "hi", timestamp: Date.now() });

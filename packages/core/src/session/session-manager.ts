@@ -159,8 +159,15 @@ function loadSessionFile(filePath: string): LoadSessionResult {
 }
 
 /**
- * Quick validation that a file is a valid session file.
+ * Quick validation that a file is a valid session file we can read.
  * Only reads the first line (header).
+ *
+ * Rejects files whose schema version exceeds CURRENT_SESSION_VERSION
+ * so the discovery path (continueRecent / findMostRecentSession)
+ * doesn't hand the loader a future-version file and abort startup.
+ * The user can still open such a file explicitly to see the error;
+ * automatic resume just falls back to the next compatible session.
+ * Codex labels pass-13 finding.
  */
 function isValidSessionFile(filePath: string): boolean {
   try {
@@ -168,7 +175,9 @@ function isValidSessionFile(filePath: string): boolean {
     const firstLine = content.split("\n")[0]?.trim();
     if (!firstLine) return false;
     const header = JSON.parse(firstLine);
-    return header.type === "session" && typeof header.id === "string";
+    if (header.type !== "session" || typeof header.id !== "string") return false;
+    const version = typeof header.version === "number" ? header.version : 1;
+    return version <= CURRENT_SESSION_VERSION;
   } catch {
     return false;
   }
@@ -346,6 +355,14 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
     if (entries.length === 0) return null;
     const header = entries[0];
     if (header.type !== "session") return null;
+    // Skip future-version files so discovery (listSessions /
+    // listAllSessions) doesn't expose entries this binary can't
+    // safely read. Same rationale as isValidSessionFile.
+    // Codex labels pass-13 finding.
+    const headerVersion = typeof (header as SessionHeader).version === "number"
+      ? (header as SessionHeader).version
+      : 1;
+    if (headerVersion > CURRENT_SESSION_VERSION) return null;
 
     const stats = await stat(filePath);
     let messageCount = 0;
@@ -886,6 +903,25 @@ export class SessionManager {
       // overwriting write keeps first-flush idempotent: failure
       // leaves the file in some bad state, but the next retry
       // overwrites it cleanly with the current snapshot.
+      //
+      // CAS guard: if the file already exists on disk (i.e., we're
+      // taking the rewrite path NOT because of first-flush, but
+      // because flushed was cleared by a v1->v2 header promotion),
+      // revalidate the on-disk mtime against our last-known baseline
+      // immediately before publishing. Without this, a peer process
+      // could append between appendLabelChange's preflight and this
+      // call, and our snapshot rewrite would clobber those bytes.
+      // Codex labels pass-13 finding (label-write TOCTOU on legacy
+      // v1 sessions). For the genuine first-flush case (no file
+      // exists yet) the check is a no-op.
+      if (this.lastLoadedMtimeMs !== null && existsSync(this.sessionFile)) {
+        const onDiskMtime = statSync(this.sessionFile).mtimeMs;
+        if (onDiskMtime > this.lastLoadedMtimeMs) {
+          throw new Error(
+            "Session file changed externally during write; reload or wrap in withLock before retrying",
+          );
+        }
+      }
       this.rewriteFile();
       this.flushed = true;
     } else {
