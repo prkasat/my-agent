@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   handleSlashCommand,
   type SlashSessionManager,
+  type SlashContext,
 } from "../src/repl/slash-commands.js";
 import type { SessionInfo } from "@my-agent/core";
 
@@ -16,14 +17,20 @@ function makeSession(overrides: Partial<SlashSessionManager> = {}): SlashSession
   };
 }
 
+function makeContext(sessionOverrides: Partial<SlashSessionManager> = {}): SlashContext {
+  return {
+    session: makeSession(sessionOverrides),
+  };
+}
+
 describe("handleSlashCommand", () => {
   it("returns null for non-slash input so the REPL can route it to the agent", async () => {
-    const result = await handleSlashCommand("hello world", makeSession());
+    const result = await handleSlashCommand("hello world", makeContext());
     expect(result).toBeNull();
   });
 
   it("returns help text for /help", async () => {
-    const result = await handleSlashCommand("/help", makeSession());
+    const result = await handleSlashCommand("/help", makeContext());
     expect(result?.action).toBe("continue");
     expect(result?.output).toMatch(/\/branch/);
     expect(result?.output).toMatch(/\/sessions/);
@@ -31,26 +38,26 @@ describe("handleSlashCommand", () => {
   });
 
   it("aliases /? to /help", async () => {
-    const result = await handleSlashCommand("/?", makeSession());
+    const result = await handleSlashCommand("/?", makeContext());
     expect(result?.output).toMatch(/\/branch/);
   });
 
   it("returns quit action for /quit and /exit", async () => {
-    const quit = await handleSlashCommand("/quit", makeSession());
+    const quit = await handleSlashCommand("/quit", makeContext());
     expect(quit?.action).toBe("quit");
-    const exit = await handleSlashCommand("/exit", makeSession());
+    const exit = await handleSlashCommand("/exit", makeContext());
     expect(exit?.action).toBe("quit");
   });
 
   it("/branch forks the session and returns switch-session with the new path", async () => {
     let forkArg: string | undefined;
-    const session = makeSession({
+    const ctx = makeContext({
       forkSession: (leafId) => {
         forkArg = leafId;
         return "/sessions/forked.jsonl";
       },
     });
-    const result = await handleSlashCommand("/branch", session);
+    const result = await handleSlashCommand("/branch", ctx);
     expect(result?.action).toBe("switch-session");
     if (result?.action === "switch-session") {
       expect(result.sessionPath).toBe("/sessions/forked.jsonl");
@@ -62,26 +69,26 @@ describe("handleSlashCommand", () => {
   });
 
   it("/fork is an alias for /branch", async () => {
-    const result = await handleSlashCommand("/fork", makeSession());
+    const result = await handleSlashCommand("/fork", makeContext());
     expect(result?.action).toBe("switch-session");
   });
 
   it("/branch surfaces a friendly message when forkSession returns no path (in-memory)", async () => {
-    const session = makeSession({
+    const ctx = makeContext({
       forkSession: () => undefined,
     });
-    const result = await handleSlashCommand("/branch", session);
+    const result = await handleSlashCommand("/branch", ctx);
     expect(result?.action).toBe("continue");
     expect(result?.output).toMatch(/branch failed/);
   });
 
   it("/branch catches SessionManager errors instead of crashing the REPL", async () => {
-    const session = makeSession({
+    const ctx = makeContext({
       forkSession: () => {
         throw new Error("No leaf to fork from");
       },
     });
-    const result = await handleSlashCommand("/branch", session);
+    const result = await handleSlashCommand("/branch", ctx);
     expect(result?.action).toBe("continue");
     expect(result?.output).toMatch(/No leaf to fork from/);
   });
@@ -107,10 +114,10 @@ describe("handleSlashCommand", () => {
         firstMessage: "Refactor the parser to support multi-line strings",
       },
     ];
-    const session = makeSession({
+    const ctx = makeContext({
       listSessionsForCwd: async () => sessions,
     });
-    const result = await handleSlashCommand("/sessions", session);
+    const result = await handleSlashCommand("/sessions", ctx);
     expect(result?.action).toBe("continue");
     expect(result?.output).toMatch(/a \(3 msgs\)/);
     expect(result?.output).toMatch(/current \(7 msgs\)/);
@@ -122,32 +129,32 @@ describe("handleSlashCommand", () => {
   it("/sessions reports empty state cleanly", async () => {
     const result = await handleSlashCommand(
       "/sessions",
-      makeSession({ listSessionsForCwd: async () => [] }),
+      makeContext({ listSessionsForCwd: async () => [] }),
     );
     expect(result?.output).toMatch(/no sessions/i);
   });
 
   it("/sessions handles host without listSessionsForCwd", async () => {
-    const session = makeSession();
-    delete (session as { listSessionsForCwd?: unknown }).listSessionsForCwd;
-    const result = await handleSlashCommand("/sessions", session);
+    const ctx = makeContext();
+    delete (ctx.session as { listSessionsForCwd?: unknown }).listSessionsForCwd;
+    const result = await handleSlashCommand("/sessions", ctx);
     expect(result?.output).toMatch(/not available/);
   });
 
   it("unknown commands return a continue action with a help hint", async () => {
-    const result = await handleSlashCommand("/wat", makeSession());
+    const result = await handleSlashCommand("/wat", makeContext());
     expect(result?.action).toBe("continue");
     expect(result?.output).toMatch(/unknown command/);
     expect(result?.output).toMatch(/\/help/);
   });
 
   it("is case-insensitive for command names", async () => {
-    const result = await handleSlashCommand("/HELP", makeSession());
+    const result = await handleSlashCommand("/HELP", makeContext());
     expect(result?.output).toMatch(/\/branch/);
   });
 
   it("ignores extra whitespace and tolerates leading/trailing spaces", async () => {
-    const result = await handleSlashCommand("   /help   ", makeSession());
+    const result = await handleSlashCommand("   /help   ", makeContext());
     expect(result?.output).toMatch(/\/branch/);
   });
 });

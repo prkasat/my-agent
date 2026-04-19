@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { Footer, type FooterData } from "../../src/components/footer.js";
-import type { FooterTheme } from "../../src/theme.js";
+import { Footer, type FooterData } from "../../../src/ui/components/footer.js";
+import type { FooterTheme } from "../../../src/ui/theme.js";
 import { visibleWidth } from "@mariozechner/pi-tui";
 
 // Simple theme without styling for testing

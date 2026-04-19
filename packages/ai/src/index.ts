@@ -21,6 +21,8 @@ export type {
 	ToolCallContent,
 	ContentBlock,
 	StreamFunction,
+	AsyncStreamFunction,
+	StreamFunctionLike,
 } from "./types.js";
 
 // Core
@@ -37,6 +39,21 @@ export { createAnthropicStream } from "./providers/anthropic.js";
 
 // OpenAI-compatible provider factory (for custom registration)
 export { createOpenAICompatibleStream } from "./providers/openai-compatible.js";
+
+// Retry utilities
+export { withRetry, isRetryable } from "./utils/retry.js";
+export type { RetryConfig } from "./utils/retry.js";
+
+// OAuth providers
+export {
+	registerOAuthProvider,
+	getOAuthProvider,
+	getOAuthProviders,
+	createAnthropicOAuthProvider,
+	createGitHubCopilotOAuthProvider,
+	registerBuiltinOAuthProviders,
+} from "./providers/oauth.js";
+export type { OAuthProvider, LoginResult, TokenResult } from "./providers/oauth.js";
 
 // Register built-in providers on import
 import "./providers/index.js";

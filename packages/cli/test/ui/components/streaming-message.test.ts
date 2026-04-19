@@ -3,9 +3,9 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { StreamingMessage } from "../../src/components/streaming-message.js";
+import { StreamingMessage } from "../../../src/ui/components/streaming-message.js";
 import type { MarkdownTheme } from "@mariozechner/pi-tui";
-import type { AssistantMessageTheme } from "../../src/theme.js";
+import type { AssistantMessageTheme } from "../../../src/ui/theme.js";
 
 // Simple theme without styling for testing
 const testMarkdownTheme: MarkdownTheme = {

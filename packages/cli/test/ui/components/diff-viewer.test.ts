@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { DiffViewer, MultiDiffViewer, parseDiff, parseMultiDiff, type DiffData } from "../../src/components/diff-viewer.js";
-import type { DiffViewerTheme } from "../../src/theme.js";
+import { DiffViewer, MultiDiffViewer, parseDiff, parseMultiDiff, type DiffData } from "../../../src/ui/components/diff-viewer.js";
+import type { DiffViewerTheme } from "../../../src/ui/theme.js";
 
 // Simple theme without styling for testing
 const testTheme: DiffViewerTheme = {

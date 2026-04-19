@@ -143,6 +143,12 @@ export type AssistantMessageEvent =
 
 export type StreamFunction = (model: Model, context: Context, options: StreamOptions) => AssistantMessageEventStream;
 
+/** Async variant that returns a Promise (used by the registry's stream() function) */
+export type AsyncStreamFunction = (model: Model, context: Context, options: StreamOptions) => Promise<AssistantMessageEventStream>;
+
+/** Either sync or async stream function — the agent loop handles both */
+export type StreamFunctionLike = StreamFunction | AsyncStreamFunction;
+
 // Forward reference — implemented in event-stream.ts
 import type { EventStream } from "./utils/event-stream.js";
 export type AssistantMessageEventStream = EventStream<AssistantMessageEvent, AssistantMessage>;

@@ -160,6 +160,55 @@ export {
 	collectEntriesForBranchSummary,
 } from "./session/index.js";
 
+// Extension system
+export {
+	ExtensionRunner,
+	ExtensionLoader,
+	FileExtensionStorage,
+	MemoryExtensionStorage,
+	MetricsTracker,
+	noopUI,
+	noopActions,
+	createMockContext,
+	createMockUI,
+	createMockActions,
+	activateForTest,
+} from "./extensions/index.js";
+
+export type {
+	ExtensionEvent,
+	ExtensionEventType,
+	ExtensionEventBase,
+	ExtensionEventByType,
+	ExtensionEventHandler,
+	ExtensionDefinition,
+	ExtensionMetadata,
+	ExtensionManifest,
+	ExtensionContext,
+	ExtensionConfigSchema,
+	ExtensionCommand,
+	ExtensionUI,
+	ExtensionActions,
+	ExtensionStorage,
+	ExtensionMetrics,
+	ExtensionFailureMode,
+	StorageScope,
+	UISelectItem,
+	ToolInterceptResult,
+	ToolResultModification,
+	ToolMiddleware,
+	ToolMiddlewareContext,
+	MetricsRecorder,
+	ExtensionRunnerOptions,
+	LogSink,
+	LoaderOptions,
+	StorageOptions,
+	MockContext,
+	MockUI,
+	MockActions,
+	MockContextOptions,
+} from "./extensions/index.js";
+
 export type {
 	SessionHeader,
 	SessionEntryBase,
@@ -185,3 +234,12 @@ export type {
 	BranchSummaryResult,
 	GenerateBranchSummaryOptions,
 } from "./session/index.js";
+
+// Prompt templates
+export {
+	loadPromptTemplates,
+	expandTemplate,
+	matchTemplate,
+	getTemplateHelp,
+} from "./templates/prompt-templates.js";
+export type { PromptTemplate, TemplateLoadConfig } from "./templates/prompt-templates.js";

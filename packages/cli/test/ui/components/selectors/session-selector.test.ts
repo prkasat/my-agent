@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { createSessionSelector, type SessionInfo } from "../../../src/components/selectors/session-selector.js";
+import { createSessionSelector, type SessionInfo } from "../../../../src/ui/components/selectors/session-selector.js";
 import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
 
 // Simple theme without styling for testing

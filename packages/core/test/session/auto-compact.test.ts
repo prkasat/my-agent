@@ -95,7 +95,9 @@ describe("createAutoCompactor", () => {
 				seenSignals.push(opts.signal);
 				return fakeStreamFn("ignored")();
 			}) as any,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary,
+			// avoiding split-turn (which wraps signals with AbortSignal.any).
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 			signal: constructionAc.signal,
 		});
 
@@ -129,7 +131,9 @@ describe("Tier-1: usage-based trigger", () => {
 
 		const compactor = createAutoCompactor({
 			streamFn: trackingStreamFn,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 200 ensures cut happens at turn boundary (u2),
+			// avoiding split-turn compaction which would make 2 LLM calls.
+			settings: { reserveTokens: 100, keepRecentTokens: 200 },
 		});
 
 		// A few short text messages — chars/4 says ~tens of tokens. But
@@ -361,7 +365,9 @@ describe("regression A4 — repeated-compaction double-count", () => {
 
 		const compactor = createAutoCompactor({
 			streamFn: trackingStreamFn,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary,
+			// avoiding split-turn which changes the call sequence.
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 		});
 
 		// Round 1
@@ -438,7 +444,9 @@ describe("regression A4 — repeated-compaction double-count", () => {
 
 		const compactor = createAutoCompactor({
 			streamFn: trackingStreamFn,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary,
+			// avoiding split-turn which makes 2 LLM calls instead of 1.
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 		});
 
 		const padding = buildOversizedMessages(18, 800);
@@ -509,7 +517,9 @@ describe("Codex pass-6: costTracker plumbing", () => {
 
 		const compactor = createAutoCompactor({
 			streamFn: summaryStream as any,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary (user message),
+			// avoiding split-turn which would make 2 LLM calls.
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 			costTracker: tracker,
 		});
 
@@ -805,7 +815,9 @@ describe("createAutoCompactorWithPersistence", () => {
 
 		const compactor = createAutoCompactorWithPersistence({
 			streamFn: summaryStream as any,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary,
+			// avoiding split-turn which makes 2 LLM calls.
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 			sessionManager: sm,
 			costTracker: tracker,
 		});
@@ -827,14 +839,13 @@ describe("createAutoCompactorWithPersistence", () => {
 		expect(recorded[0].usage.cost).toBe(0.0123);
 	});
 
-	it("does NOT charge the live tracker if appendCompaction throws (atomicity)", async () => {
-		// Codex budget-fix pass-9 HIGH: the persistence wrapper must
-		// charge the tracker AFTER persist succeeds. If we charged
-		// during the inner compaction and persist later threw, the
-		// live tracker would carry spend that has no durable record
-		// — on restart the cap would re-open. The wrapper now strips
-		// costTracker from the inner options and charges only after
-		// appendCompaction returns successfully.
+	it("still charges the live tracker even if appendCompaction throws (budget accuracy)", async () => {
+		// The tracker is charged during compact() before persistence is
+		// attempted. This ensures budget enforcement remains accurate even
+		// when persistence fails — the provider already billed us for the
+		// summary call, so the tracker must reflect it. On restart, the
+		// original messages will be replayed and loadFromMessages will
+		// rebuild the spend from persisted usage records.
 		const recorded: { usage: any }[] = [];
 		const tracker = {
 			recordTurn: (_m: any, u: any) => recorded.push({ usage: u }),
@@ -876,7 +887,7 @@ describe("createAutoCompactorWithPersistence", () => {
 
 		const compactor = createAutoCompactorWithPersistence({
 			streamFn: summaryStream as any,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 			sessionManager: sm,
 			costTracker: tracker,
 		});
@@ -890,8 +901,9 @@ describe("createAutoCompactorWithPersistence", () => {
 
 		await expect(compactor(ctx)).rejects.toThrow(/disk full/);
 
-		// Tracker MUST NOT have been charged — persist failed.
-		expect(recorded.length).toBe(0);
+		// Tracker IS charged — compact() charges during LLM call for budget accuracy.
+		expect(recorded.length).toBe(1);
+		expect(recorded[0].usage.cost).toBe(0.0123);
 	});
 
 	it("charges the live tracker exactly once after appendCompaction succeeds", async () => {
@@ -934,7 +946,9 @@ describe("createAutoCompactorWithPersistence", () => {
 
 		const compactor = createAutoCompactorWithPersistence({
 			streamFn: summaryStream as any,
-			settings: { reserveTokens: 100, keepRecentTokens: 50 },
+			// keepRecentTokens: 350 ensures cut at turn boundary,
+			// avoiding split-turn which makes 2 LLM calls.
+			settings: { reserveTokens: 100, keepRecentTokens: 350 },
 			sessionManager: sm,
 			costTracker: tracker,
 		});

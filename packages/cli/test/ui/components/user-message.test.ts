@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { UserMessage } from "../../src/components/user-message.js";
-import type { UserMessageTheme } from "../../src/theme.js";
+import { UserMessage } from "../../../src/ui/components/user-message.js";
+import type { UserMessageTheme } from "../../../src/ui/theme.js";
 
 // Simple theme without styling for testing
 const testTheme: UserMessageTheme = {

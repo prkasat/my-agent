@@ -8,7 +8,7 @@ import {
 	getAgentKeybindingActions,
 	getDefaultKeyForAction,
 	getActionDescription,
-} from "../src/keybindings.js";
+} from "../../src/ui/keybindings.js";
 
 describe("AGENT_KEYBINDINGS", () => {
 	it("defines all expected action categories", () => {

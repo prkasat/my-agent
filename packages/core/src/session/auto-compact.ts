@@ -6,7 +6,7 @@
  */
 
 import type { AgentContext, AgentMessage } from "../agent/types.js";
-import type { StreamFunction } from "@my-agent/ai";
+import type { StreamFunctionLike } from "@my-agent/ai";
 import type { CompactionDetails, CompactionSettings } from "./types.js";
 import { DEFAULT_COMPACTION_SETTINGS } from "./types.js";
 import {
@@ -37,7 +37,6 @@ export interface CompactionCallbackResult {
   /**
    * The summary LLM call's reported usage, so the persistence wrapper
    * can charge a live cost tracker AFTER appendCompaction succeeds.
-   * Codex budget-fix pass-9 finding.
    */
   summaryUsage?: import("@my-agent/ai").Usage;
 }
@@ -55,8 +54,8 @@ export interface CompactionCallback {
 export interface AutoCompactorOptions {
   /** Compaction settings */
   settings?: Partial<CompactionSettings>;
-  /** Stream function for LLM summarization */
-  streamFn: StreamFunction;
+  /** Stream function for LLM summarization (sync or async) */
+  streamFn: StreamFunctionLike;
   /** API key resolver */
   getApiKey?: (provider: string) => Promise<string | undefined>;
   /** Callback when compaction occurs */
@@ -70,10 +69,8 @@ export interface AutoCompactorOptions {
    */
   onError?: "skip" | "throw";
   /**
-   * Cost tracker that the compaction summarization LLM call should be
-   * charged against. When omitted, the auto-compactor's summary call
-   * is unmetered and a near-budget session can silently overdraw via
-   * auto-compaction. Codex budget-fix pass-6 finding.
+   * Cost tracker for the compaction summarization LLM call. When omitted,
+   * the summary call is unmetered and won't count toward maxCostPerSession.
    */
   costTracker?: CompactionCostHook;
 }
@@ -198,6 +195,12 @@ export function createAutoCompactor(
         costTracker: options.costTracker,
       });
     } catch (err) {
+      // Budget exceeded errors must always propagate - they indicate the
+      // session should stop regardless of fail-open policy. Swallowing
+      // them would let an overbudget session continue into the next turn.
+      if (err instanceof Error && err.message.includes("budget exceeded")) {
+        throw err;
+      }
       if (errorPolicy === "throw") {
         throw err;
       }
@@ -211,7 +214,9 @@ export function createAutoCompactor(
       return context;
     }
 
-    // Update state
+    // Update state BEFORE checking budget — the compaction already happened
+    // and billed us, so we need to preserve its result for restart recovery
+    // even if we're about to throw for budget exceeded.
     state.lastSummary = result.summary;
     state.lastDetails = result.details;
 
@@ -247,6 +252,12 @@ export function createAutoCompactor(
     // the agent-loop keeps appending to the original context.messages reference.
     context.messages.length = 0;
     context.messages.push(...newMessages);
+
+    // Check budget AFTER state and context are updated. The compaction
+    // result is preserved for restart recovery even if we throw here.
+    if (options.costTracker?.isBudgetExceeded?.()) {
+      throw new Error("Cost budget exceeded after compaction");
+    }
 
     return context;
   } as AutoCompactorTransform;
@@ -284,11 +295,8 @@ export interface PersistenceSessionManager {
   buildMessageToEntryMapping: () => (string | null)[];
   /**
    * Optional cross-process lock. When provided, the persistence wrapper
-   * runs `appendCompaction` inside it. The lock activates the
-   * session-manager's disk-rollback path (truncateSync to the
-   * pre-write size) on persist failure — without it, a failed write
-   * leaves a partial trailing line on disk that later parses
-   * silently as a malformed entry. Codex budget-fix pass-9 finding.
+   * runs `appendCompaction` inside it, enabling disk-rollback on persist
+   * failure to avoid partial trailing lines.
    */
   withLock?: <T>(fn: () => Promise<T>) => Promise<T>;
 }
@@ -311,13 +319,20 @@ export function createAutoCompactorWithPersistence(
   // Capture the mapping before compaction transforms the context
   let preCompactionMapping: (string | null)[] = [];
 
-  // Strip costTracker from the inner options so the summary call is
-  // NOT charged via compact()'s onUsage. The wrapper charges the
-  // tracker AFTER appendCompaction succeeds — preserving atomicity
-  // across persist failures (live tracker and disk stay aligned).
-  // Codex budget-fix pass-9 finding.
+  // Pass costTracker to inner compactor for accurate budget tracking.
+  // Previously we stripped it to keep tracker/disk sync on persist failure,
+  // but this caused split-turn partial failures to lose spend tracking
+  // (provider billed us but tracker didn't know, breaking budget enforcement).
+  //
+  // Now compact() charges tracker for all successful LLM calls, even if
+  // the overall compaction fails or persist fails later. This means:
+  // - On split-turn partial failure: tracker reflects partial spend (correct
+  //   for current session's budget enforcement)
+  // - On persist failure: tracker is ahead of disk. On restart, loadFromMessages
+  //   replays only persisted spend, reopening budget by the compaction cost.
+  //   This is acceptable: persist failures are rare, and accurate current-session
+  //   budget enforcement is more valuable than perfect cross-restart accounting.
   const innerOptions: AutoCompactorOptions = { ...options };
-  delete (innerOptions as { costTracker?: unknown }).costTracker;
 
   const compactor = createAutoCompactor({
     ...innerOptions,
@@ -349,56 +364,54 @@ export function createAutoCompactorWithPersistence(
     // loop has flushed those messages.
     preCompactionMapping = options.sessionManager.buildMessageToEntryMapping();
 
-    // Defensive alignment: a PRIOR deferred compaction may have left a
-    // synthetic `compaction_summary` at context.messages[0] that has
-    // NO corresponding CompactionEntry on disk. Real
-    // SessionManager.buildMessageToEntryMapping() only prepends the
-    // null slot when a persisted compaction entry exists, so in that
-    // case the returned mapping is shorter than context.messages AND
-    // shifted by the count of in-memory-only synthetic prefix
-    // messages. Without realignment, a later compaction round would
-    // use `mapping[cutIndex]` that points at the wrong persisted
-    // entry — and firstKeptEntryId would anchor to the wrong place,
-    // corrupting session replay. Pad the mapping with leading nulls
-    // to match context.messages' index base. Codex budget-fix
-    // pass-10 finding.
-    let syntheticPrefixCount = 0;
-    while (syntheticPrefixCount < context.messages.length) {
-      const m = context.messages[syntheticPrefixCount];
-      if (
-        "role" in m &&
-        m.role === "custom" &&
-        "type" in m &&
-        m.type === "compaction_summary"
-      ) {
-        syntheticPrefixCount++;
+    // Build aligned mapping: walk context.messages and assign entry IDs
+    // or nulls based on message type. This handles runtime-only messages
+    // interspersed with persisted entries (e.g., extension messages with
+    // sendToLlm injected after a branch_summary).
+    //
+    // Message types and their mapping:
+    // - branch_summary: persisted (BranchSummaryEntry), has entry ID
+    // - compaction_summary: may be persisted (mapping has null) or fresh
+    // - extension with sendToLlm: runtime-only, needs null
+    // - user/assistant/toolResult: persisted, has entry ID
+    //
+    // The original mapping from buildMessageToEntryMapping() contains
+    // entry IDs for persisted messages and nulls for compaction_summary.
+    // We walk context.messages and consume from the original mapping for
+    // persisted types, or insert null for runtime-only types.
+    const originalMapping = preCompactionMapping;
+    let origIdx = 0;
+    preCompactionMapping = [];
+    for (const m of context.messages) {
+      if ("role" in m && m.role === "custom" && "type" in m) {
+        const msgType = (m as { type: string }).type;
+        if (msgType === "branch_summary") {
+          // Persisted - use next entry from original mapping
+          preCompactionMapping.push(originalMapping[origIdx] ?? null);
+          origIdx++;
+        } else if (msgType === "compaction_summary") {
+          // compaction_summary might be persisted (mapping has null at this
+          // position) or freshly generated (not in mapping yet). Consume
+          // the existing null if present.
+          if (originalMapping[origIdx] === null) {
+            preCompactionMapping.push(null);
+            origIdx++;
+          } else {
+            // Fresh summary not yet in mapping - add null without consuming
+            preCompactionMapping.push(null);
+          }
+        } else {
+          // extension, etc. - runtime-only, add null without consuming
+          preCompactionMapping.push(null);
+        }
       } else {
-        break;
+        // user/assistant/toolResult - persisted, use original mapping
+        preCompactionMapping.push(originalMapping[origIdx] ?? null);
+        origIdx++;
       }
     }
-    let existingNullPrefix = 0;
-    while (
-      existingNullPrefix < preCompactionMapping.length &&
-      preCompactionMapping[existingNullPrefix] === null
-    ) {
-      existingNullPrefix++;
-    }
-    if (syntheticPrefixCount > existingNullPrefix) {
-      const needed = syntheticPrefixCount - existingNullPrefix;
-      preCompactionMapping = [
-        ...Array.from({ length: needed }, () => null as string | null),
-        ...preCompactionMapping,
-      ];
-    }
 
-    // Snapshot the pre-compaction transcript so we can roll back if
-    // appendCompaction throws. Without rollback, a persist failure
-    // leaves the in-memory context shrunk and the summary call
-    // already charged, but no durable CompactionEntry on disk — so
-    // a restart would lose the priorCumulativeCost snapshot for the
-    // compacted-away spend. With rollback, on persist failure the
-    // process keeps the original messages and the next compaction
-    // round can retry. Codex budget-fix pass-8 finding.
+    // Snapshot pre-compaction transcript for rollback on persist failure
     const preCompactionMessages = context.messages.slice();
 
     // Always run the in-memory compaction. Compaction has two concerns —
@@ -407,7 +420,24 @@ export function createAutoCompactorWithPersistence(
     // limit, otherwise context grows until the provider rejects the call.
     // The second can defer to a later turn when the persistence mapping
     // catches up to the in-memory state.
-    const result = await compactor(context, signal);
+    //
+    // Catch budget exceptions: the inner compactor may throw after mutating
+    // context but before we persist. We must persist before rethrowing so
+    // the priorCumulativeCost snapshot survives restart.
+    let result: AgentContext;
+    let deferredBudgetError: Error | null = null;
+    try {
+      result = await compactor(context, signal);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes("budget exceeded")) {
+        // Compaction succeeded (context mutated) but budget check threw.
+        // Continue to persist the compaction, then rethrow.
+        deferredBudgetError = err;
+        result = context; // Context was already mutated by compactor
+      } else {
+        throw err;
+      }
+    }
 
     const compactionResult = capturedCompaction as CompactionCallbackResult | undefined;
     if (compactionResult !== undefined && compactionResult.cutIndex > 0) {
@@ -442,27 +472,7 @@ export function createAutoCompactorWithPersistence(
       // by one or two turns.
       if (firstKeptEntryId) {
         try {
-          // Wrap in withLock when the session manager exposes one so
-          // a failed write triggers the disk-level truncate rollback
-          // inside SessionManager.appendEntry. Without the lock, a
-          // partial trailing line stays on disk and later parses as
-          // malformed silently. Codex budget-fix pass-9 finding.
-          //
-          // KNOWN LIMITATION (Codex pass-11): under concurrent
-          // writers, a peer process can append between when we
-          // captured `preCompactionMapping` and when withLock
-          // acquires + auto-reloads. In that window the new
-          // compaction entry chains off the peer's leaf (auto-reload
-          // refreshed our in-memory tree), but the firstKeptEntryId
-          // we picked still references a real persisted entry, so
-          // the entry is well-formed even if its placement in the
-          // tree differs from what we computed against the
-          // pre-LLM-call snapshot. A full CAS-and-retry would
-          // require either holding the lock across the LLM call
-          // (which serializes peers across a multi-second/minute
-          // operation) or exposing a stable file signature through
-          // the persistence interface. Single-writer setups (the
-          // common case for this CLI/TUI) are unaffected.
+          // Use withLock when available for atomic persist with rollback
           const persist = () =>
             options.sessionManager.appendCompaction(
               summary,
@@ -492,30 +502,19 @@ export function createAutoCompactorWithPersistence(
         }
       }
 
-      // Charge the live tracker for the summary call. Fires on BOTH
-      // the persisted path (firstKeptEntryId non-null, appendCompaction
-      // succeeded) AND the deferred path (firstKeptEntryId null, no
-      // persist ran). The summary LLM call happened for real either
-      // way, so the in-process cap MUST enforce it — skipping the
-      // charge on the deferred path would let a near-budget session
-      // overspend via compaction's hidden LLM call without the cap
-      // ever noticing. Codex budget-fix pass-10 finding.
-      //
-      // Restart-safety for the deferred path: the next successful
-      // compaction's snapshot folds in the prior synthetic
-      // compaction_summary's priorCumulativeCost (which already
-      // contains THIS round's summary cost). On process crash before
-      // that next round, the deferred summary spend is lost — a
-      // known tradeoff of the defer-persistence design. The persist
-      // failure path above reaches `throw persistErr` before this,
-      // so a failed write does NOT double-charge.
-      if (options.costTracker && compactionResult.summaryUsage) {
-        options.costTracker.recordTurn(
-          context.model,
-          compactionResult.summaryUsage,
-          -1,
-        );
+      // Budget check after compaction. The tracker was already charged by
+      // compact() (via commitUsageToTracker), so we just need to check if
+      // the session exceeded its limit. This check runs even on deferred
+      // persistence paths to prevent overbudget sessions from continuing.
+      if (options.costTracker?.isBudgetExceeded?.()) {
+        throw new Error("Cost budget exceeded after compaction");
       }
+    }
+
+    // Rethrow deferred budget error after persistence succeeded.
+    // The compaction is now persisted so priorCumulativeCost survives restart.
+    if (deferredBudgetError) {
+      throw deferredBudgetError;
     }
 
     return result;

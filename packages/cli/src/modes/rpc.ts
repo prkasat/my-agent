@@ -1,4 +1,7 @@
 import * as readline from "node:readline";
+import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { Settings } from "../config/settings.js";
+import type { PromptTemplate } from "@my-agent/core";
 
 /**
  * RPC mode: headless agent server.
@@ -9,6 +12,12 @@ import * as readline from "node:readline";
  * Commands: prompt, abort, getState
  * Events: ready, agent_start, message_update, tool_execution, agent_end
  */
+
+export interface RpcConfig {
+	settings?: Settings;
+	oauthStorage?: OAuthStorage;
+	templates?: Map<string, PromptTemplate>;
+}
 
 export interface RpcCommand {
 	id: string;
@@ -27,7 +36,7 @@ export interface RpcEvent {
 	data: unknown;
 }
 
-export function startRpcServer(agentFactory: unknown) {
+export function startRpcServer(config?: RpcConfig) {
 	const rl = readline.createInterface({ input: process.stdin });
 
 	function send(msg: RpcResponse | RpcEvent): void {

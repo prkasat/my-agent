@@ -1358,7 +1358,10 @@ describe("compact: priorCumulativeCost snapshot", () => {
     ];
 
     const result = await compact(messages, {
-      keepRecentTokens: 50,
+      // keepRecentTokens: 100 ensures cut at turn boundary (index 2 = u2),
+      // avoiding split-turn which makes 2 LLM calls. Each message is ~62
+      // tokens, so 100 tokens keeps u2+a3 (124 tok) and cuts at u2.
+      keepRecentTokens: 100,
       model: fakeModel,
       streamFn: summaryStreamFn as any,
       // No costTracker — purely testing the snapshot, which must
@@ -1438,7 +1441,9 @@ describe("compact: priorCumulativeCost snapshot", () => {
     ];
 
     await compact(messages, {
-      keepRecentTokens: 50,
+      // keepRecentTokens: 100 ensures cut at turn boundary (index 2 = u2),
+      // avoiding split-turn which makes 2 LLM calls.
+      keepRecentTokens: 100,
       model: fakeModel,
       streamFn: summaryStreamFn as any,
       costTracker: tracker,

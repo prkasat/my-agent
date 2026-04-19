@@ -12,7 +12,7 @@
  */
 
 import type { AgentMessage, AgentContext } from "../agent/types.js";
-import type { AssistantMessage, Message, Model, StreamFunction, Usage } from "@my-agent/ai";
+import type { AssistantMessage, Message, Model, StreamFunctionLike, Usage } from "@my-agent/ai";
 import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
 import { calculateUsageCost } from "../agent/cost-tracker.js";
@@ -249,26 +249,69 @@ export function measureContextTokens(
 // ============================================================================
 
 /**
- * Find a valid cut point in the message list.
- *
- * Rules:
- * - Keep at least keepRecentTokens of recent context
- * - Never cut at a toolResult (would orphan it from its tool call)
- *
- * When `forceProgress` is true and the chars/4 estimate would otherwise
- * keep ALL messages (because the visible content is small even though
- * provider Usage says we're over the limit — typical of cached / thinking
- * heavy turns), the function still returns a non-zero cut so the auto-
- * compactor can make progress instead of silently looping. The fallback
- * keeps the last assistant turn's tail intact (so the conversation has
- * something to anchor on) but drops the older oldest turn at minimum.
+ * Result of finding a cut point, including split-turn information.
  */
-export function findCutPoint(
+export interface CutPointResult {
+  /** Index of first message to keep */
+  firstKeptIndex: number;
+  /** Index of user message that starts the turn being split, or -1 if not splitting */
+  turnStartIndex: number;
+  /** Whether this cut splits a turn (cut point is not at a turn boundary) */
+  isSplitTurn: boolean;
+}
+
+/**
+ * Find the user message that starts the turn containing the given index.
+ * Returns -1 if no user message is found before the index.
+ */
+function findTurnStartIndex(messages: AgentMessage[], fromIndex: number): number {
+  for (let i = fromIndex; i >= 0; i--) {
+    const msg = messages[i];
+    if ("role" in msg && msg.role === "user") {
+      return i;
+    }
+    // Custom messages that convert to user content also start turns
+    if ("role" in msg && msg.role === "custom" && "type" in msg) {
+      const type = msg.type;
+      // Branch summaries and compaction summaries start turns
+      if (type === "branch_summary" || type === "compaction_summary") {
+        return i;
+      }
+      // Extension messages with sendToLlm: true convert to user messages
+      if (
+        type === "extension" &&
+        "sendToLlm" in msg &&
+        (msg as { sendToLlm?: boolean }).sendToLlm === true
+      ) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Check if a message is a valid cut point (not a toolResult).
+ */
+function isValidCutPoint(msg: AgentMessage): boolean {
+  if (!("role" in msg)) return false;
+  // Never cut at toolResult — would orphan it from its tool_call
+  return msg.role !== "toolResult";
+}
+
+/**
+ * Find a valid cut point in the message list with split-turn information.
+ *
+ * Internal function that returns full CutPointResult including whether the
+ * cut occurs mid-turn. Used by compact() for split-turn compaction.
+ */
+function findCutPointWithSplitInfo(
   messages: AgentMessage[],
   keepRecentTokens: number,
   forceProgress = false,
-): number {
-  if (messages.length === 0) return 0;
+): CutPointResult {
+  const noCut: CutPointResult = { firstKeptIndex: 0, turnStartIndex: -1, isSplitTurn: false };
+  if (messages.length === 0) return noCut;
 
   // Walk backwards, accumulating tokens
   let tokens = 0;
@@ -283,35 +326,81 @@ export function findCutPoint(
   }
 
   // If total tokens < keepRecentTokens, normally don't cut anything.
-  // But when the caller has independent evidence (provider Usage) that
-  // the context IS over the model's window, we MUST drop something —
-  // otherwise the auto-compactor will livelock: trigger says "compact",
-  // findCutPoint says "nothing to cut", context unchanged, repeat.
+  // But when forceProgress is set (provider Usage says we're over limit),
+  // we MUST drop something to avoid livelock.
   if (cutIndex === messages.length) {
-    if (!forceProgress) return 0;
-    // Need at least one kept message AND one summarized message; with
-    // fewer than 2 messages there's nothing meaningful to compact, even
-    // under forceProgress, so bail out rather than produce an empty
-    // summary or an orphaned tail.
-    if (messages.length < 2) return 0;
-    // Force-cut at half the messages, then snap forward past any
-    // toolResult so we don't orphan a tool_call. This is a degraded
-    // path; the regular keepRecentTokens budget still wins whenever
-    // it can. clamped to keep at least 1 message in the kept tail.
+    if (!forceProgress) return noCut;
+    if (messages.length < 2) return noCut;
+    // Force-cut at half the messages, clamped to keep at least 1 message
     cutIndex = Math.max(1, Math.min(messages.length - 1, Math.floor(messages.length / 2)));
   }
 
-  // Adjust: don't cut at a toolResult (would orphan it)
+  // Adjust: don't cut at a toolResult (would orphan it from its tool_call).
+  // First try advancing forward to find a valid cut point.
+  const originalCutIndex = cutIndex;
   while (cutIndex < messages.length) {
     const msg = messages[cutIndex];
-    if ("role" in msg && msg.role === "toolResult") {
+    if (!isValidCutPoint(msg)) {
       cutIndex++;
     } else {
       break;
     }
   }
 
-  return Math.max(0, cutIndex);
+  // If we advanced past all messages (all trailing toolResults), look backward
+  // for the last valid cut point instead. This handles contexts that end with
+  // pending tool results (common when resuming after tool execution).
+  if (cutIndex >= messages.length && originalCutIndex > 0) {
+    cutIndex = originalCutIndex - 1;
+    while (cutIndex > 0) {
+      const msg = messages[cutIndex];
+      if (isValidCutPoint(msg)) {
+        break;
+      }
+      cutIndex--;
+    }
+  }
+
+  cutIndex = Math.max(0, cutIndex);
+  if (cutIndex === 0 || cutIndex >= messages.length) return noCut;
+
+  // Determine if this is a split turn. A split occurs when the cut lands
+  // mid-turn (after the turn start, before the turn ends). Cuts exactly at
+  // turn boundaries (user messages, branch_summary, compaction_summary,
+  // extension with sendToLlm) are NOT splits.
+  const cutMsg = messages[cutIndex];
+  const turnStartIndex = findTurnStartIndex(messages, cutIndex);
+  // Cut is at a turn boundary if turnStartIndex equals cutIndex, or if
+  // no turn start was found (turnStartIndex === -1, e.g., leading assistant).
+  const isAtTurnBoundary = turnStartIndex === cutIndex || turnStartIndex === -1;
+
+  return {
+    firstKeptIndex: cutIndex,
+    turnStartIndex: isAtTurnBoundary ? -1 : turnStartIndex,
+    isSplitTurn: !isAtTurnBoundary,
+  };
+}
+
+/**
+ * Find a valid cut point in the message list.
+ *
+ * Rules:
+ * - Keep at least keepRecentTokens of recent context
+ * - Never cut at a toolResult (would orphan it from its tool call)
+ *
+ * When `forceProgress` is true and the chars/4 estimate would otherwise
+ * keep ALL messages, the function still returns a non-zero cut so the
+ * auto-compactor can make progress. This handles cases where provider
+ * Usage reports overflow but chars/4 underestimates (cached/thinking turns).
+ *
+ * @returns Index of the first message to keep (0 means no cut needed)
+ */
+export function findCutPoint(
+  messages: AgentMessage[],
+  keepRecentTokens: number,
+  forceProgress = false,
+): number {
+  return findCutPointWithSplitInfo(messages, keepRecentTokens, forceProgress).firstKeptIndex;
 }
 
 // ============================================================================
@@ -385,26 +474,57 @@ const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. 
 Do NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.`;
 
 /**
- * Body of the summarization request appended after the transcript.
- *
- * Bullet-list focus areas keep the summary small and consistent across
- * compaction rounds. Tracked file operations are emitted by the calling
- * code as XML sections (<read-files>, <modified-files>) AFTER the
- * summary text — those are deterministic and don't need the LLM.
+ * Structured summarization prompt that produces a consistent, scannable format.
+ * The explicit sections help the model organize information and make it easier
+ * for the resuming assistant to quickly find what it needs.
  */
-const SUMMARIZATION_INSTRUCTIONS = `Summarize the conversation above into a structured handoff that the AI assistant can use to continue the work seamlessly. Focus on:
+const SUMMARIZATION_INSTRUCTIONS = `Create a structured context checkpoint summary using this EXACT format:
 
-1. The user's most recent request and any in-flight task
-2. Decisions made and the reasoning behind them
-3. Files modified and the nature of the changes
-4. Constraints, conventions, or preferences the assistant must keep honoring
-5. The state of work right before this summary (what was just completed, what's next)
+## Goal
+[What is the user trying to accomplish? Can be multiple items if covering different tasks.]
+
+## Constraints & Preferences
+- [Any constraints, preferences, or requirements mentioned by user]
+- [Or "(none)" if none were mentioned]
+
+## Progress
+### Done
+- [x] [Completed tasks/changes]
+
+### In Progress
+- [ ] [Current work]
+
+## Key Decisions
+- [Important decisions made and their reasoning]
+
+## Next Steps
+- [What needs to happen next to continue the work]
 
 Be concise but preserve all information needed to continue without re-asking. Do NOT include greetings, meta-commentary, or invitations to continue the conversation.`;
 
 const SUMMARIZATION_INSTRUCTIONS_WITH_PRIOR = `${SUMMARIZATION_INSTRUCTIONS}
 
 A previous summary is provided in <previous-summary>. Merge its content with the new conversation into ONE cohesive summary — do not append, do not duplicate.`;
+
+/**
+ * Prompt for summarizing the prefix portion of a split turn.
+ * When a single turn is too large to keep, we split it and summarize
+ * only the prefix while keeping the recent suffix intact.
+ */
+const TURN_PREFIX_SUMMARIZATION_PROMPT = `This is the PREFIX of a turn that was too large to keep. The SUFFIX (recent work) is retained.
+
+Summarize the prefix to provide context for the retained suffix:
+
+## Original Request
+[What did the user ask for in this turn?]
+
+## Early Progress
+- [Key decisions and work done in the prefix]
+
+## Context for Suffix
+- [Information needed to understand the retained recent work]
+
+Be concise. Focus on what's needed to understand the kept suffix.`;
 
 /** Maximum chars per tool result in the serialized summary input. */
 export const TOOL_RESULT_MAX_CHARS = 2000;
@@ -565,19 +685,41 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
 }
 
 /**
+ * Strip file-operation footers from a summary to avoid duplicating them
+ * when the summary is reused directly without re-summarization.
+ */
+const FILE_FOOTER_RE = /\n\n<(read-files|modified-files)>[\s\S]*?<\/\1>/gi;
+function stripFileFooters(summary: string): string {
+  return summary.replace(FILE_FOOTER_RE, "");
+}
+
+/**
+ * Parse file-operation footers from a summary to recover read/modified files.
+ * Used when resuming from a persisted compaction_summary where previousCompaction
+ * details are not available in memory.
+ */
+const READ_FILES_RE = /<read-files>([\s\S]*?)<\/read-files>/i;
+const MODIFIED_FILES_RE = /<modified-files>([\s\S]*?)<\/modified-files>/i;
+function parseFileFooters(summary: string): { readFiles: string[]; modifiedFiles: string[] } {
+  const readMatch = READ_FILES_RE.exec(summary);
+  const modifiedMatch = MODIFIED_FILES_RE.exec(summary);
+  return {
+    readFiles: readMatch ? readMatch[1].trim().split("\n").filter((p) => p.trim()) : [],
+    modifiedFiles: modifiedMatch ? modifiedMatch[1].trim().split("\n").filter((p) => p.trim()) : [],
+  };
+}
+
+/**
  * Generate a compaction summary using the LLM.
  *
  * `options.onUsage` is invoked once with the summary call's `usage` (if
  * the provider reports any) so a caller wiring a budget cap can charge
- * the side LLM call against the same session total. Without this hook
- * the summarization call would spend outside the cap and a session
- * sitting near the limit could silently overdraw via auto-compaction.
- * Codex budget-fix pass-6 finding.
+ * the side LLM call against the same session total.
  */
 export async function generateCompactionSummary(
   messages: AgentMessage[],
   model: Model,
-  streamFn: StreamFunction,
+  streamFn: StreamFunctionLike,
   options?: {
     previousSummary?: string;
     apiKey?: string;
@@ -632,17 +774,56 @@ export async function generateCompactionSummary(
   if (result.usage && options?.onUsage) {
     options.onUsage(result.usage);
   }
-  // Defensive layer (Codex pass-8): even with input escape and the
-  // "summarize-do-not-continue" system prompt, the LLM CAN echo back
-  // attacker wrapper tags from the transcript verbatim. Persisting
-  // that text and later interpolating it into the next compaction's
-  // <previous-summary> block (or the [Previous conversation summary]
-  // user message at replay) would let an injected `</previous-summary>`
-  // close the wrapper of the downstream prompt. Re-apply the escape on
-  // the OUTPUT so persisted summaries never carry literal wrapper-close
-  // tokens. We don't try to scrub "imperative" prose — that's an
-  // unsolved AI safety problem and a heuristic scrub is more dangerous
-  // than the bug it tries to fix.
+  // The LLM can echo wrapper tags from the transcript verbatim. Re-apply
+  // escape on output so persisted summaries never carry literal wrapper-
+  // close tokens that could break future prompt interpolation.
+  return escapeWrapperTags(
+    result.content
+      .filter((c): c is { type: "text"; text: string } => c.type === "text")
+      .map((c) => c.text)
+      .join(""),
+  );
+}
+
+/**
+ * Generate a summary for the prefix portion of a split turn.
+ *
+ * When a single turn exceeds the token budget, we keep the recent suffix
+ * and summarize just the prefix to provide context for the kept portion.
+ */
+export async function generateTurnPrefixSummary(
+  messages: AgentMessage[],
+  model: Model,
+  streamFn: StreamFunctionLike,
+  options?: {
+    apiKey?: string;
+    signal?: AbortSignal;
+    onUsage?: (usage: Usage) => void;
+  }
+): Promise<string> {
+  const llmMessages = defaultConvertToLlm(messages);
+  const formatted = formatMessagesForSummary(llmMessages);
+
+  const prompt = `<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+
+  const streamOrPromise = streamFn(
+    model,
+    {
+      systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+      messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+    },
+    {
+      maxTokens: 2048, // Smaller budget for turn prefix
+      apiKey: options?.apiKey,
+      signal: options?.signal,
+    }
+  );
+  const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
+
+  const result: AssistantMessage = await stream.result();
+  if (result.usage && options?.onUsage) {
+    options.onUsage(result.usage);
+  }
   return escapeWrapperTags(
     result.content
       .filter((c): c is { type: "text"; text: string } => c.type === "text")
@@ -667,13 +848,9 @@ export interface CompactionResult {
   /** Compaction metadata */
   details: CompactionDetails;
   /**
-   * The summarization LLM call's reported usage, if the provider
-   * emitted any. Exposed separately from `details.priorCumulativeCost`
-   * so the caller can charge a live cost tracker AFTER the compaction
-   * entry has been durably persisted. Charging before persist succeeds
-   * means a persist failure leaves the tracker out of sync with disk
-   * (spend recorded live, no snapshot entry on restart).
-   * Codex budget-fix pass-9 finding.
+   * The summarization LLM call's reported usage. Exposed separately so the
+   * caller can charge a live cost tracker AFTER the compaction entry has
+   * been durably persisted, keeping disk and in-memory state in sync.
    */
   summaryUsage?: Usage;
 }
@@ -802,8 +979,8 @@ export interface CompactOptions {
   keepRecentTokens: number;
   /** Model to use for summarization */
   model: Model;
-  /** Stream function for LLM calls */
-  streamFn: StreamFunction;
+  /** Stream function for LLM calls (sync or async) */
+  streamFn: StreamFunctionLike;
   /** Previous compaction details (for file tracking) */
   previousCompaction?: CompactionDetails;
   /** Previous summary (for merging) */
@@ -814,26 +991,24 @@ export interface CompactOptions {
   signal?: AbortSignal;
   /**
    * Force a non-zero cut even when chars/4 says all messages fit inside
-   * keepRecentTokens. Set this when the caller has provider-Usage
-   * evidence that the context is over the model's window — otherwise
-   * findCutPoint will return 0 and the auto-compactor will livelock.
+   * keepRecentTokens. Set when provider-Usage reports overflow to avoid
+   * livelock where the auto-compactor triggers but findCutPoint returns 0.
    */
   forceProgress?: boolean;
   /**
-   * Cost tracker that the summarization LLM call should be charged
-   * against. When omitted, the call is unmetered (legacy behavior).
-   * When provided:
-   *   - the summary call's `usage` is passed through `recordTurn` so
-   *     it counts toward `maxCostPerSession`,
-   *   - `isBudgetExceeded()` is checked before the agent loop is
-   *     allowed to keep running on the result.
-   * Codex budget-fix pass-6 finding.
+   * Cost tracker for the summarization LLM call. When provided, the call's
+   * usage is passed through recordTurn so it counts toward maxCostPerSession.
    */
   costTracker?: CompactionCostHook;
 }
 
 /**
  * Perform compaction on a message list.
+ *
+ * Handles two compaction modes:
+ * 1. Normal: Cut at a turn boundary, summarize history before the cut
+ * 2. Split-turn: Cut mid-turn, generate parallel summaries for history
+ *    and the turn's prefix to provide context for the kept suffix
  *
  * Returns the compacted state (summary + kept messages).
  * The caller is responsible for persisting via SessionManager.
@@ -842,14 +1017,14 @@ export async function compact(
   messages: AgentMessage[],
   options: CompactOptions
 ): Promise<CompactionResult> {
-  const cutIndex = findCutPoint(
+  const cutResult = findCutPointWithSplitInfo(
     messages,
     options.keepRecentTokens,
     options.forceProgress ?? false,
   );
 
   // Nothing to compact
-  if (cutIndex <= 0) {
+  if (cutResult.firstKeptIndex <= 0) {
     return {
       summary: options.previousSummary ?? "",
       keptMessages: messages,
@@ -858,38 +1033,25 @@ export async function compact(
     };
   }
 
-  const messagesToSummarize = messages.slice(0, cutIndex);
-  const keptMessages = messages.slice(cutIndex);
+  const { firstKeptIndex, turnStartIndex, isSplitTurn } = cutResult;
+  const keptMessages = messages.slice(firstKeptIndex);
 
-  // Strip prior compaction summaries from the summarization input.
-  //
-  // Why: my-agent stores compaction summaries as `role: "custom"` messages
-  // and converts them to user messages via customMessageToLlm just before
-  // the LLM call. The previous filter only matched `role: "user"` and so
-  // missed the custom variant entirely — meaning each new compaction would
-  // feed the prior summary in BOTH as part of `messagesToSummarize` (via
-  // defaultConvertToLlm) AND as `previousSummary` in the prompt. That
-  // doubled the summary every round and caused unbounded drift.
-  //
-  // Fix: filter custom-role compaction_summary messages out of the input.
-  // If the caller didn't pass `previousSummary` (e.g., after a session
-  // reload there's no in-memory state), recover it from the most recent
-  // compaction_summary we found, so its content isn't lost.
+  // For split turns, we summarize history (before turn start) and turn prefix
+  // (turn start to cut point) separately, then merge them.
+  const historyEnd = isSplitTurn ? turnStartIndex : firstKeptIndex;
+  const messagesToSummarize = messages.slice(0, historyEnd);
+  const turnPrefixMessages = isSplitTurn
+    ? messages.slice(turnStartIndex, firstKeptIndex)
+    : [];
+
+  // Strip prior compaction summaries from the summarization input to avoid
+  // doubling summaries each round. Recover previousSummary and cost snapshot
+  // from the most recent compaction_summary if caller didn't pass them.
+  // Also scan turnPrefixMessages for split turns where turnStartIndex is 0.
   let inferredPreviousSummary: string | undefined;
-  // Rebuild the prior cumulative-cost snapshot from whichever
-  // compaction_summary is in flight. This matters when a fresh
-  // process compacts a session that already compacted before:
-  // `options.previousCompaction` is only set in-memory by the
-  // auto-compactor's continuation state, so on resume the caller
-  // has no object to hand us — we MUST recover the snapshot from
-  // the persisted compaction_summary message itself, otherwise the
-  // new snapshot we write would only account for this round and
-  // the prior spend would vanish from the session's accounting.
-  // Codex budget-fix pass-5 finding.
   let inferredPriorCumulativeCost: number | undefined;
-  const filteredToSummarize: AgentMessage[] = [];
-  for (const msg of messagesToSummarize) {
-    // Custom-role compaction summary — drop, capture content as fallback
+
+  const extractCompactionInfo = (msg: AgentMessage): boolean => {
     if (
       "role" in msg &&
       msg.role === "custom" &&
@@ -897,123 +1059,184 @@ export async function compact(
       msg.type === "compaction_summary"
     ) {
       if ("summary" in msg && typeof (msg as { summary: unknown }).summary === "string") {
-        // Last one wins — most recent compaction summary
         inferredPreviousSummary = (msg as { summary: string }).summary;
       }
       const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
       if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-        // Last one wins too — most recent snapshot carries the full chain.
         inferredPriorCumulativeCost = raw;
       }
-      continue;
+      return true;
     }
+    return false;
+  };
+
+  const filteredToSummarize: AgentMessage[] = [];
+  for (const msg of messagesToSummarize) {
+    if (extractCompactionInfo(msg)) continue;
     filteredToSummarize.push(msg);
   }
 
-  // Caller-supplied previousSummary takes precedence; fall back to the
-  // one we discovered in the message list (covers session reloads).
+  // For split turns, also filter compaction_summary from turnPrefixMessages.
+  // This handles resumed sessions where turnStartIndex is 0.
+  const filteredTurnPrefix: AgentMessage[] = [];
+  for (const msg of turnPrefixMessages) {
+    if (extractCompactionInfo(msg)) continue;
+    filteredTurnPrefix.push(msg);
+  }
+
   const effectivePreviousSummary = options.previousSummary ?? inferredPreviousSummary;
 
-  // Generate summary (using filtered messages to avoid duplication).
-  // Charge the summarization LLM call against the session budget when
-  // a tracker is wired in — otherwise this call would spend outside
-  // `maxCostPerSession` and a near-budget session could silently
-  // overdraw via auto-compaction. Codex budget-fix pass-6 finding.
-  //
-  // We ALSO capture the summary call's cost locally (regardless of
-  // whether a tracker was passed) so it can be folded into the
-  // persisted `priorCumulativeCost` snapshot. The live tracker is
-  // for in-process accounting; the snapshot is what survives a
-  // restart. Without folding, the side spend is lost on resume.
-  // Codex budget-fix pass-7 finding.
+  // Track total summary cost for the priorCumulativeCost snapshot.
+  // For split-turn compaction, we aggregate usage from both LLM calls.
+  // Cost tracking is atomic: we buffer usage during LLM calls and only
+  // charge the costTracker after all calls complete successfully. This
+  // prevents budget leaks when one split-turn call succeeds but the
+  // other fails.
   let summaryCallCost = 0;
-  let summaryCallUsage: Usage | undefined;
-  const summary = await generateCompactionSummary(
-    filteredToSummarize,
-    options.model,
-    options.streamFn,
-    {
-      previousSummary: effectivePreviousSummary,
-      apiKey: options.apiKey,
-      signal: options.signal,
-      onUsage: (usage) => {
-        summaryCallUsage = usage;
-        const turnCost = calculateUsageCost(options.model, usage);
-        if (Number.isFinite(turnCost) && turnCost > 0) {
-          summaryCallCost = turnCost;
-        }
-        if (options.costTracker) {
-          // Use turnIndex -1 as a sentinel for "ancillary spend"
-          // (compaction/branch-summary), distinct from numbered
-          // user-facing turns. The tracker doesn't dedupe by
-          // turnIndex, so this is purely for the turnCosts log.
-          //
-          // NOTE: charging here is the non-persistence path's
-          // fallback. The persistence wrapper
-          // (createAutoCompactorWithPersistence) explicitly omits
-          // `options.costTracker` and charges the tracker AFTER
-          // appendCompaction succeeds, so a persist failure cannot
-          // leave the tracker out of sync with disk. Codex
-          // budget-fix pass-9 finding.
-          options.costTracker.recordTurn(options.model, usage, -1);
-        }
-      },
-    }
-  );
+  let aggregatedUsage: Usage = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+  };
+  // Buffer for deferred charging after all calls complete
+  const bufferedUsages: Usage[] = [];
 
-  // Track file operations
-  const details = extractFileOperations(messagesToSummarize, options.previousCompaction);
+  const handleUsage = (usage: Usage) => {
+    // Buffer usage for deferred charging (don't charge immediately)
+    bufferedUsages.push(usage);
+    aggregatedUsage = {
+      inputTokens: (aggregatedUsage.inputTokens || 0) + (usage.inputTokens || 0),
+      outputTokens: (aggregatedUsage.outputTokens || 0) + (usage.outputTokens || 0),
+      cacheReadTokens: (aggregatedUsage.cacheReadTokens || 0) + (usage.cacheReadTokens || 0),
+      cacheWriteTokens: (aggregatedUsage.cacheWriteTokens || 0) + (usage.cacheWriteTokens || 0),
+    };
+    const turnCost = calculateUsageCost(options.model, usage);
+    if (Number.isFinite(turnCost) && turnCost > 0) {
+      summaryCallCost += turnCost;
+    }
+  };
+
+  // Charge costTracker for all buffered usages after all calls complete
+  const commitUsageToTracker = () => {
+    if (options.costTracker) {
+      for (const usage of bufferedUsages) {
+        options.costTracker.recordTurn(options.model, usage, -1);
+      }
+    }
+  };
+
+  let summary: string;
+
+  if (isSplitTurn && filteredTurnPrefix.length > 0) {
+    // Generate summaries sequentially. On any failure, commit whatever
+    // usage we've buffered so far — the provider already billed us for
+    // successful calls, so the live tracker must reflect that even if
+    // the overall compaction fails. This prevents budget drift where
+    // billed spend vanishes from our accounting on partial failure.
+    let historyResult: string;
+    let turnPrefixResult: string;
+    try {
+      if (filteredToSummarize.length > 0) {
+        historyResult = await generateCompactionSummary(
+          filteredToSummarize,
+          options.model,
+          options.streamFn,
+          {
+            previousSummary: effectivePreviousSummary,
+            apiKey: options.apiKey,
+            signal: options.signal,
+            onUsage: handleUsage,
+          },
+        );
+      } else {
+        // Strip file footers when reusing prior summary directly to avoid duplication
+        historyResult = stripFileFooters(effectivePreviousSummary ?? "");
+      }
+
+      turnPrefixResult = await generateTurnPrefixSummary(
+        filteredTurnPrefix,
+        options.model,
+        options.streamFn,
+        {
+          apiKey: options.apiKey,
+          signal: options.signal,
+          onUsage: handleUsage,
+        },
+      );
+    } catch (err) {
+      // Commit any buffered usage before rethrowing — we were billed
+      // for successful calls even if the overall compaction fails.
+      // Also check budget: if the partial charge exceeded the cap, wrap
+      // the original error so the caller knows to stop rather than
+      // proceeding under fail-open policy.
+      commitUsageToTracker();
+      if (options.costTracker?.isBudgetExceeded?.()) {
+        const budgetErr = new Error("Cost budget exceeded after partial compaction");
+        (budgetErr as any).cause = err;
+        throw budgetErr;
+      }
+      throw err;
+    }
+    // Both calls succeeded — commit all buffered usage
+    commitUsageToTracker();
+    // Merge into single summary (skip history section if empty)
+    summary = historyResult
+      ? `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`
+      : `**Turn Context (split turn):**\n\n${turnPrefixResult}`;
+  } else {
+    // Non-split-turn compaction: just generate history summary.
+    // Skip LLM call when no new messages to summarize - reuse prior summary.
+    if (filteredToSummarize.length > 0) {
+      summary = await generateCompactionSummary(
+        filteredToSummarize,
+        options.model,
+        options.streamFn,
+        {
+          previousSummary: effectivePreviousSummary,
+          apiKey: options.apiKey,
+          signal: options.signal,
+          onUsage: handleUsage,
+        },
+      );
+      // Commit charges after successful generation
+      commitUsageToTracker();
+    } else if (effectivePreviousSummary) {
+      // Strip existing file footers to avoid duplication - they'll be
+      // re-added via formatFileOperations with the merged file lists.
+      summary = stripFileFooters(effectivePreviousSummary);
+    } else {
+      summary = "";
+    }
+  }
+
+  // Track file operations from all summarized messages (history + turn prefix).
+  // When previousCompaction is not available (fresh-process resume), parse file
+  // footers from the previous summary text to avoid losing tracked paths.
+  const allSummarizedMessages = [...messagesToSummarize, ...turnPrefixMessages];
+  const existingDetails: Partial<CompactionDetails> = options.previousCompaction ?? (
+    effectivePreviousSummary ? parseFileFooters(effectivePreviousSummary) : {}
+  );
+  const details = extractFileOperations(allSummarizedMessages, existingDetails);
   details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
 
-  // Snapshot cumulative cost of every non-aborted/non-error assistant
-  // message being folded into this summary, PLUS any prior compaction's
-  // snapshot (so a multi-round compaction chain keeps accumulating).
-  // The cost tracker reads this on resume to rebuild cumulative spend
-  // — without it, compaction would erase prior spend from the context
-  // and a fresh process could blow past maxCostPerSession.
-  // Codex budget-fix pass-4 finding.
-  //
-  // Seed order of precedence:
-  //   1. options.previousCompaction — in-memory continuation (same-process
-  //      auto-compactor already knows the running total).
-  //   2. inferredPriorCumulativeCost — recovered from a compaction_summary
-  //      inside `messagesToSummarize`. Covers fresh-process re-compaction:
-  //      without this, the new snapshot would only reflect this round and
-  //      silently erase the previously persisted accumulated spend.
-  //      Codex budget-fix pass-5 finding.
-  //   3. 0 — genuinely no prior compaction anywhere in the chain.
-  //
-  // Per-turn cost uses the same formula the live tracker uses so that
-  // token-only providers (e.g. Anthropic, which does NOT emit
-  // usage.cost on every turn) still contribute their spend to the
-  // snapshot. Before this, `typeof msg.usage?.cost === "number"` silently
-  // dropped every such turn and a restart-then-resume lost their dollars.
-  // Codex budget-fix pass-5 finding.
+  // Snapshot cumulative cost for restart recovery. Includes:
+  // 1. Prior compaction's snapshot (in-memory or recovered from compaction_summary)
+  // 2. All assistant turns being folded into this summary
+  // 3. The summarization LLM call(s) themselves
   const previousSnapshot =
     options.previousCompaction?.priorCumulativeCost ??
     inferredPriorCumulativeCost ??
     0;
   let priorCumulativeCost = previousSnapshot;
-  for (const msg of messagesToSummarize) {
+  for (const msg of allSummarizedMessages) {
     if ("role" in msg && msg.role === "assistant" && msg.usage) {
-      // Snapshot ALL assistant turns with valid usage — including
-      // `error` and `aborted`. The previous filter dropped both,
-      // which created a hole: a live-billed error/aborted turn that
-      // was later compacted away would vanish from the only
-      // restart-replayable record (the priorCumulativeCost snapshot).
-      // Live recordTurn and loadFromMessages both count these turns;
-      // the snapshot must agree or restart re-opens budget headroom.
-      // Codex budget-fix pass-8 finding.
       const turnCost = calculateUsageCost(options.model, msg.usage);
       if (Number.isFinite(turnCost) && turnCost > 0) {
         priorCumulativeCost += turnCost;
       }
     }
   }
-  // Include the summarization LLM call's own cost in the snapshot so
-  // it survives a restart. Without this, restart-then-resume reads a
-  // priorCumulativeCost that excludes every prior summary call and
-  // the budget under-counts. Codex budget-fix pass-7 finding.
   priorCumulativeCost += summaryCallCost;
   details.priorCumulativeCost = priorCumulativeCost;
 
@@ -1039,12 +1262,25 @@ export async function compact(
   // has touched without re-parsing the prose.
   const enrichedSummary = summary + formatFileOperations(details.readFiles, details.modifiedFiles);
 
+  // Include summaryCallCost in summaryUsage so the persistence wrapper
+  // charges the same value that's in priorCumulativeCost. This uses the
+  // best available estimate: authoritative usage.cost when available,
+  // otherwise token-based pricing via calculateUsageCost. This keeps
+  // live tracker and persisted snapshot in sync even for mixed reporting.
+  const finalUsage: Usage | undefined =
+    bufferedUsages.length > 0
+      ? {
+          ...aggregatedUsage,
+          cost: summaryCallCost,
+        }
+      : undefined;
+
   return {
     summary: enrichedSummary,
     keptMessages,
-    cutIndex,
+    cutIndex: firstKeptIndex,
     details,
-    summaryUsage: summaryCallUsage,
+    summaryUsage: finalUsage,
   };
 }
 

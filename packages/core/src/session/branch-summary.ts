@@ -190,10 +190,7 @@ export interface GenerateBranchSummaryOptions {
   signal?: AbortSignal;
   /**
    * Invoked once with the summary call's `usage` so a caller wiring
-   * a budget cap can charge the side LLM call against the same
-   * session total. Without this, branch-summary spend escapes the
-   * `maxCostPerSession` enforcement entirely. Codex budget-fix pass-6
-   * finding.
+   * a budget cap can charge the side LLM call against the session total.
    */
   onUsage?: (usage: Usage) => void;
 }
@@ -280,16 +277,8 @@ export async function generateBranchSummary(
   if (result.usage && options.onUsage) {
     options.onUsage(result.usage);
   }
-  // Defensive layer (Codex pass-8): even with the input escape and the
-  // wrapper-only system prompt, the LLM CAN echo back attacker
-  // wrapper tags from the transcript verbatim. Persisting that text and
-  // later interpolating it into a future prompt would let an injected
-  // `</branch-conversation>` close the wrapper of a downstream prompt.
-  // Re-apply the escape on the OUTPUT so persisted summaries cannot
-  // ever carry literal wrapper-close tokens. We are not trying to
-  // sanitize "imperative" prose — that's an unsolved AI safety problem
-  // and trying to scrub it at this layer creates more risk than it
-  // removes (Pi-Mono accepts the same tradeoff).
+  // Escape output to prevent persisted summaries from carrying literal
+  // wrapper-close tokens that could break future prompt interpolation.
   let summary = escapeBranchWrapperTags(
     result.content
       .filter((c): c is { type: "text"; text: string } => c.type === "text")

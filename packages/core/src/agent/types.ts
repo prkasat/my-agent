@@ -3,7 +3,7 @@ import type {
 	Message,
 	AssistantMessage,
 	Model,
-	StreamFunction,
+	StreamFunctionLike,
 	StreamOptions,
 	AssistantMessageEvent,
 	TextContent,
@@ -90,8 +90,8 @@ export interface AgentToolResult<TDetails = unknown> {
 // === Configuration ===
 
 export interface AgentLoopConfig {
-	/** LLM stream function (from @my-agent/ai provider registry) */
-	streamFn: StreamFunction;
+	/** LLM stream function (from @my-agent/ai provider registry) — sync or async */
+	streamFn: StreamFunctionLike;
 	/** Stream options (temperature, maxTokens, etc.) */
 	streamOptions?: StreamOptions;
 	/**

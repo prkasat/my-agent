@@ -3,8 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { ToolExecution } from "../../src/components/tool-execution.js";
-import type { ToolExecutionTheme } from "../../src/theme.js";
+import { ToolExecution } from "../../../src/ui/components/tool-execution.js";
+import type { ToolExecutionTheme } from "../../../src/ui/theme.js";
 
 // Simple theme without styling for testing
 const testTheme: ToolExecutionTheme = {

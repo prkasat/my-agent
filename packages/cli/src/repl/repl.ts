@@ -8,7 +8,10 @@
  */
 
 import * as readline from "node:readline";
-import { handleSlashCommand, type SlashSessionManager } from "./slash-commands.js";
+import { handleSlashCommand, type SlashSessionManager, type SlashContext } from "./slash-commands.js";
+import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { Settings } from "../config/settings.js";
+import type { PromptTemplate } from "@my-agent/core";
 
 export interface ReplDeps {
   /**
@@ -26,8 +29,15 @@ export interface ReplDeps {
   /**
    * Send a free-text prompt to the agent loop. The host streams the
    * agent's output to stdout itself; the REPL just awaits completion.
+   * The optional signal allows cancellation via Ctrl+C.
    */
-  runPrompt: (prompt: string) => Promise<void>;
+  runPrompt: (prompt: string, signal?: AbortSignal) => Promise<void>;
+  /** OAuth credential storage for /login and /logout. */
+  oauthStorage?: OAuthStorage;
+  /** Loaded prompt templates for template expansion. */
+  templates?: Map<string, PromptTemplate>;
+  /** Current settings for /settings and /model. */
+  settings?: Settings;
   /** stdin / stdout for prompts (defaults to process). */
   input?: NodeJS.ReadableStream;
   output?: NodeJS.WritableStream;
@@ -46,20 +56,24 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
     output.write(`${line}\n`);
   };
 
-  writeLine('my-agent REPL — type /help for commands, /quit to exit');
+  const templateCount = deps.templates?.size || 0;
+  const templateNote = templateCount > 0 ? `, ${templateCount} templates` : "";
+  writeLine(`my-agent REPL — type /help for commands${templateNote}, /quit to exit`);
 
   for await (const raw of rl) {
     const line = raw.trim();
     if (!line) continue;
 
     if (line.startsWith("/")) {
-      const result = await handleSlashCommand(line, deps.getSession());
+      const ctx: SlashContext = {
+        session: deps.getSession(),
+        oauthStorage: deps.oauthStorage,
+        templates: deps.templates,
+        settings: deps.settings,
+      };
+      const result = await handleSlashCommand(line, ctx);
+
       if (result?.action === "switch-session") {
-        // Try the switch BEFORE printing the success line, otherwise
-        // a corrupted/unreadable target session would print "branched
-        // session -> X" and then crash the REPL on a SessionManager
-        // exception. Keep the old session active and surface the
-        // failure as a recoverable command error instead.
         try {
           await deps.switchSession(result.sessionPath);
           if (result.output) writeLine(result.output);
@@ -68,15 +82,37 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
         }
         continue;
       }
+
+      if (result?.action === "prompt") {
+        // Template expansion — run the expanded prompt through the agent
+        if (result.output) writeLine(result.output);
+        const controller = new AbortController();
+        const onSigint = () => controller.abort();
+        process.on("SIGINT", onSigint);
+        try {
+          await deps.runPrompt(result.prompt, controller.signal);
+        } catch (err) {
+          writeLine(`error: ${(err as Error).message}`);
+        } finally {
+          process.off("SIGINT", onSigint);
+        }
+        continue;
+      }
+
       if (result?.output) writeLine(result.output);
       if (result?.action === "quit") break;
       continue;
     }
 
+    const controller = new AbortController();
+    const onSigint = () => controller.abort();
+    process.on("SIGINT", onSigint);
     try {
-      await deps.runPrompt(line);
+      await deps.runPrompt(line, controller.signal);
     } catch (err) {
       writeLine(`error: ${(err as Error).message}`);
+    } finally {
+      process.off("SIGINT", onSigint);
     }
   }
 

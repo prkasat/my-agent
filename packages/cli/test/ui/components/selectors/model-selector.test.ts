@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { createModelSelector, type ModelInfo, COMMON_MODELS } from "../../../src/components/selectors/model-selector.js";
+import { createModelSelector, type ModelInfo, COMMON_MODELS } from "../../../../src/ui/components/selectors/model-selector.js";
 import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
 
 // Simple theme without styling for testing
