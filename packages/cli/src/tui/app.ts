@@ -348,6 +348,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				"  /login [provider]",
 				"  /model [name]",
 				"  /sessions",
+				"  /tree",
 				"  /theme [name]",
 				"  /skills",
 				"  /packages",

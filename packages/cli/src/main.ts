@@ -389,7 +389,7 @@ REPL slash commands:
   /branch [name]       Fork session into new branch
   /sessions            List sessions for this directory
   /tree                Show the current session tree
-  /login [provider]    OAuth login (anthropic, openai-codex, github-copilot)
+  /login [provider]    OAuth login (anthropic, openai-codex)
   /logout <provider>   OAuth logout
   /extensions          Show configured extension paths
   /packages            Show loaded resource packages

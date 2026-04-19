@@ -38,6 +38,14 @@ Default behavior when starting the CLI in a repo.
 
 This forks the current leaf into a new session file.
 
+### Tree
+
+```text
+/tree
+```
+
+This prints the current session tree so branch structure is inspectable from the CLI.
+
 ### Export
 
 ```text

@@ -25,6 +25,7 @@ node packages/cli/dist/main.js --tui
 - `/login [provider]`
 - `/model [name]`
 - `/sessions`
+- `/tree`
 - `/theme [name]`
 - `/skills`
 - `/packages`

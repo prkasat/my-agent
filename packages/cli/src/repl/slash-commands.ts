@@ -89,7 +89,7 @@ function getHelpText(templates?: Map<string, PromptTemplate>, skills?: Map<strin
   /branch [name]       Fork the current session into a new branch (alias: /fork)
   /sessions            List sessions for this working directory
   /tree                Show the current session tree
-  /login [provider]    Login via OAuth (anthropic, openai-codex, github-copilot)
+  /login [provider]    Login via OAuth (anthropic, openai-codex)
   /logout <provider>   Logout from a provider
   /extensions          Show configured extension paths
   /packages            Show loaded resource packages

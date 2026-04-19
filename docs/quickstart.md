@@ -70,6 +70,7 @@ Project-local resources live under `.my-agent/` inside your repo.
 - `/model [list|<name>]`
 - `/theme [name]`
 - `/sessions`
+- `/tree`
 - `/branch`
 - `/templates`
 - `/skills`

@@ -286,9 +286,10 @@ function escapeHtml(text: string): string {
 		.replace(/'/g, "&#39;");
 }
 
+const DEFAULT_ANTHROPIC_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const ANTHROPIC_REDIRECT_URI = "http://localhost:9876/callback";
 
-export function createAnthropicOAuthProvider(clientId: string): OAuthProvider {
+export function createAnthropicOAuthProvider(clientId: string = DEFAULT_ANTHROPIC_CLIENT_ID): OAuthProvider {
 	return {
 		id: "anthropic",
 		name: "Anthropic (Claude Pro/Max)",
@@ -615,14 +616,12 @@ export function registerBuiltinOAuthProviders(config?: {
 	githubCopilotClientId?: string;
 	openAICodexClientId?: string;
 }): void {
-	const anthropicClientId = config?.anthropicClientId || process.env.ANTHROPIC_OAUTH_CLIENT_ID;
+	const anthropicClientId =
+		config?.anthropicClientId || process.env.ANTHROPIC_OAUTH_CLIENT_ID || DEFAULT_ANTHROPIC_CLIENT_ID;
 	const githubClientId = config?.githubCopilotClientId || process.env.GITHUB_COPILOT_CLIENT_ID;
 	const openAICodexClientId = config?.openAICodexClientId || process.env.OPENAI_CODEX_OAUTH_CLIENT_ID;
 
-	if (anthropicClientId) {
-		registerOAuthProvider(createAnthropicOAuthProvider(anthropicClientId));
-	}
-
+	registerOAuthProvider(createAnthropicOAuthProvider(anthropicClientId));
 	registerOAuthProvider(createOpenAICodexOAuthProvider(openAICodexClientId || DEFAULT_OPENAI_CODEX_CLIENT_ID));
 
 	if (githubClientId) {
