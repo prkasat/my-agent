@@ -12,6 +12,8 @@ Build a **private-first**, **daily-driver-ready** agent with:
 
 This checklist is the final definition of done for a strong v1.
 
+> Status note (2026-04-19): the repo now implements the major product/runtime/platform/doc/CI work tracked here. The remaining gates that cannot be truthfully completed inside a single coding session are the explicitly real-world/time-based dogfooding proofs and subjective long-session comfort claims. Those require actual usage, not source edits.
+
 ---
 
 ## Product Definition of Done
