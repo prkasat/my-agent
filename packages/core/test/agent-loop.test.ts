@@ -142,6 +142,62 @@ describe("Agent Loop", () => {
 		expect(messages).toHaveLength(4);
 	});
 
+	it("beforeToolCall can modify validated tool arguments", async () => {
+		const llm = createFauxLLM([
+			{
+				role: "assistant",
+				content: [
+					{
+						type: "tool_call",
+						id: "tc1",
+						name: "greet",
+						arguments: JSON.stringify({ name: "World" }),
+					},
+				],
+				stopReason: "toolUse",
+				timestamp: Date.now(),
+			},
+			{
+				role: "assistant",
+				content: [{ type: "text", text: "done" }],
+				stopReason: "stop",
+				timestamp: Date.now(),
+			},
+		]);
+
+		let observedName = "";
+		const greetTool = {
+			name: "greet",
+			description: "Greet someone",
+			parameters: Type.Object({ name: Type.String() }),
+			execute: async (_id: string, params: { name: string }) => {
+				observedName = params.name;
+				return { content: [{ type: "text" as const, text: `Hello, ${params.name}!` }] };
+			},
+		};
+
+		const loop = agentLoop(
+			[{ role: "user", content: "Greet World" }],
+			{
+				systemPrompt: "",
+				messages: [],
+				tools: [greetTool],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+				beforeToolCall: async () => ({ action: "allow", modifiedArgs: { name: "Modified" } }),
+			},
+		);
+
+		for await (const _event of loop) {
+			// exhaust
+		}
+
+		expect(observedName).toBe("Modified");
+	});
+
 	it("should handle unknown tool gracefully", async () => {
 		const llm = createFauxLLM([
 			{

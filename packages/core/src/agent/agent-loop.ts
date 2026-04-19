@@ -583,6 +583,14 @@ async function executeSingleTool(
 			if (hookResult.action === "block") {
 				return createErrorResult(toolCall, `Blocked: ${hookResult.reason}`);
 			}
+			if ("modifiedArgs" in hookResult) {
+				args = hookResult.modifiedArgs;
+				if (!Value.Check(tool.parameters, args)) {
+					const errors = [...Value.Errors(tool.parameters, args)];
+					const details = errors.map((e) => `${e.path}: ${e.message}`).join(", ");
+					return createErrorResult(toolCall, `Invalid arguments after beforeToolCall hook: ${details}`);
+				}
+			}
 		} catch (hookErr) {
 			return createErrorResult(toolCall, `beforeToolCall hook failed: ${hookErr instanceof Error ? hookErr.message : hookErr}`);
 		}

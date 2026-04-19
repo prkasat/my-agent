@@ -166,7 +166,10 @@ export interface BeforeToolCallContext {
 	context: AgentContext;
 }
 
-export type BeforeToolCallResult = { action: "allow" } | { action: "block"; reason: string };
+export type BeforeToolCallResult =
+	| { action: "allow" }
+	| { action: "allow"; modifiedArgs: unknown }
+	| { action: "block"; reason: string };
 
 export interface AfterToolCallContext extends BeforeToolCallContext {
 	result: AgentToolResult;
