@@ -29,6 +29,7 @@ import { runRepl } from "./repl/repl.js";
 import { runAgent } from "./runtime/agent-runtime.js";
 import { listModelAvailability, resolveConfiguredModel } from "./runtime/model-registry.js";
 import { getTraceFilePath, initializeTracing, trace } from "./runtime/trace.js";
+import { runTuiApp } from "./tui/app.js";
 import { loadThemes } from "./ui/theme-loader.js";
 
 const require = createRequire(import.meta.url);
@@ -141,6 +142,25 @@ async function main(): Promise<void> {
 			skills: skills.skills,
 			resources,
 			disableExtensions: safeMode,
+		});
+		return;
+	}
+
+	if (argv.includes("--tui")) {
+		if (!process.stdin.isTTY || !process.stdout.isTTY) {
+			throw new Error("--tui requires an interactive TTY");
+		}
+		await runTuiApp({
+			cwd,
+			globalDir,
+			settings,
+			authStorage,
+			session: SessionManager.continueRecent(cwd),
+			templates,
+			skills: skills.skills,
+			resources,
+			themes,
+			safeMode,
 		});
 		return;
 	}
@@ -355,6 +375,7 @@ Usage:
   my-agent                Start interactive REPL
   my-agent "<prompt>"     One-shot prompt
   my-agent --rpc          JSONL RPC mode for host integrations
+  my-agent --tui          Start the full-screen TUI shell
   my-agent --doctor       Run startup diagnostics
   my-agent --list-models  List models visible with current auth state
   my-agent --safe-mode    Disable extension loading for this run

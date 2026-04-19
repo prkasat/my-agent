@@ -9,6 +9,7 @@
 - `skills.md`
 - `packages.md`
 - `themes.md`
+- `tui.md`
 - `rpc.md`
 - `tracing-replay.md`
 - `evals.md`

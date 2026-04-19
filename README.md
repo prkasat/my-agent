@@ -51,6 +51,7 @@ node packages/cli/dist/main.js --help
 node packages/cli/dist/main.js --doctor
 node packages/cli/dist/main.js --list-models
 node packages/cli/dist/main.js --safe-mode
+node packages/cli/dist/main.js --tui
 node packages/cli/dist/main.js --trace
 node packages/cli/dist/main.js --replay <file>
 node packages/cli/dist/main.js --rpc

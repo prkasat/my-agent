@@ -21,6 +21,7 @@ node packages/cli/dist/main.js --help
 node packages/cli/dist/main.js --doctor
 node packages/cli/dist/main.js --list-models
 node packages/cli/dist/main.js --safe-mode
+node packages/cli/dist/main.js --tui
 node packages/cli/dist/main.js --trace
 ```
 
@@ -75,6 +76,14 @@ Project-local resources live under `.my-agent/` inside your repo.
 - `/packages`
 - `/extensions`
 - `/export [path]`
+
+## TUI mode
+
+```bash
+node packages/cli/dist/main.js --tui
+```
+
+`--tui` requires an interactive TTY.
 
 ## Headless / integration mode
 
