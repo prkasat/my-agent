@@ -9,10 +9,16 @@
 
 import * as readline from "node:readline";
 import type { LoadResourcePackagesResult, PromptTemplate, SkillDefinition } from "@my-agent/core";
+import { Chalk } from "chalk";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import type { LoadThemesResult } from "../ui/theme-loader.js";
-import { type SlashContext, type SlashSessionManager, handleSlashCommand } from "./slash-commands.js";
+import {
+	type SlashContext,
+	type SlashSessionManager,
+	handleSlashCommand,
+	listSlashCommandSuggestions,
+} from "./slash-commands.js";
 
 export interface ReplDeps {
 	/**
@@ -58,34 +64,72 @@ export interface ReplDeps {
 	/** stdin / stdout for prompts (defaults to process). */
 	input?: NodeJS.ReadableStream;
 	output?: NodeJS.WritableStream;
+	/** Whether to print the default REPL intro line. Default: true. */
+	showIntro?: boolean;
 }
 
 export async function runRepl(deps: ReplDeps): Promise<void> {
 	const input = deps.input ?? process.stdin;
 	const output = deps.output ?? process.stdout;
+	const interactive = Boolean((input as NodeJS.ReadStream).isTTY && (output as NodeJS.WriteStream).isTTY);
+	const chalk = new Chalk({ level: interactive ? 3 : 0 });
+	const promptMarker = interactive ? chalk.bold.cyan("› ") : "";
+	const slashSuggestions = listSlashCommandSuggestions({ templates: deps.templates, skills: deps.skills });
+	const completer = (line: string): [string[], string] => {
+		if (!line.startsWith("/")) {
+			return [[], line];
+		}
+		const matches = slashSuggestions
+			.filter((entry) => entry.value.startsWith(line))
+			.map((entry) => entry.value)
+			.sort();
+		return [matches.length > 0 ? matches : slashSuggestions.map((entry) => entry.value), line];
+	};
 	const rl = readline.createInterface({
 		input,
 		output,
-		terminal: false,
+		terminal: interactive,
+		completer,
 	});
+	if (interactive) {
+		rl.setPrompt(promptMarker);
+	}
 
 	const writeLine = (line: string): void => {
 		output.write(`${line}\n`);
 	};
+	const writeBlock = (text: string): void => {
+		if (interactive) {
+			output.write(`\n${text}\n`);
+		} else {
+			writeLine(text);
+		}
+	};
 
 	const promptInput = async (message: string): Promise<string> => {
 		return await new Promise<string>((resolve) => {
-			rl.question(`${message} `, (answer) => resolve(answer));
+			rl.question(interactive ? `${chalk.dim("?")} ${message} ` : `${message} `, (answer) => resolve(answer));
 		});
 	};
 
 	const templateCount = deps.templates?.size || 0;
-	const templateNote = templateCount > 0 ? `, ${templateCount} templates` : "";
-	writeLine(`my-agent REPL — type /help for commands${templateNote}, /quit to exit`);
+	const templateNote = templateCount > 0 ? ` Templates: ${templateCount}.` : "";
+	const autocompleteNote = interactive ? " Tab completes slash commands." : "";
+	if (deps.showIntro !== false) {
+		writeLine(
+			`Type a prompt at the ${interactive ? "›" : "prompt"} marker. /help for commands, /quit to exit.${autocompleteNote}${templateNote}`,
+		);
+	}
+	if (interactive) {
+		rl.prompt();
+	}
 
 	for await (const raw of rl) {
 		const line = raw.trim();
-		if (!line) continue;
+		if (!line) {
+			if (interactive) rl.prompt();
+			continue;
+		}
 
 		if (line.startsWith("/")) {
 			const controller = new AbortController();
@@ -112,16 +156,17 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
 				if (result?.action === "switch-session") {
 					try {
 						await deps.switchSession(result.sessionPath);
-						if (result.output) writeLine(result.output);
+						if (result.output) writeBlock(result.output);
 					} catch (err) {
-						writeLine(`branch failed: ${(err as Error).message}`);
+						writeBlock(`branch failed: ${(err as Error).message}`);
 					}
+					if (interactive) rl.prompt();
 					continue;
 				}
 
 				if (result?.action === "prompt") {
 					// Template expansion — run the expanded prompt through the agent
-					if (result.output) writeLine(result.output);
+					if (result.output) writeBlock(result.output);
 					const promptController = new AbortController();
 					const onPromptSigint = () => promptController.abort();
 					process.off("SIGINT", onSigint);
@@ -129,16 +174,18 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
 					try {
 						await deps.runPrompt(result.prompt, promptController.signal, promptInput);
 					} catch (err) {
-						writeLine(`error: ${(err as Error).message}`);
+						writeBlock(`error: ${(err as Error).message}`);
 					} finally {
 						process.off("SIGINT", onPromptSigint);
 						process.on("SIGINT", onSigint);
 					}
+					if (interactive) rl.prompt();
 					continue;
 				}
 
-				if (result?.output) writeLine(result.output);
+				if (result?.output) writeBlock(result.output);
 				if (result?.action === "quit") break;
+				if (interactive) rl.prompt();
 				continue;
 			} finally {
 				process.off("SIGINT", onSigint);
@@ -151,10 +198,11 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
 		try {
 			await deps.runPrompt(line, controller.signal, promptInput);
 		} catch (err) {
-			writeLine(`error: ${(err as Error).message}`);
+			writeBlock(`error: ${(err as Error).message}`);
 		} finally {
 			process.off("SIGINT", onSigint);
 		}
+		if (interactive) rl.prompt();
 	}
 
 	rl.close();

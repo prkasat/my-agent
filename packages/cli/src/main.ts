@@ -21,6 +21,7 @@ import {
 	loadResourcePackages,
 	loadSkills,
 } from "@my-agent/core";
+import { Chalk } from "chalk";
 import { replayFile } from "./commands/replay.js";
 import { AuthStorage } from "./config/auth-storage.js";
 import { loadSettings, saveSettings } from "./config/settings.js";
@@ -34,6 +35,55 @@ import { loadThemes } from "./ui/theme-loader.js";
 
 const require = createRequire(import.meta.url);
 const { version: CLI_VERSION } = require("../package.json") as { version: string };
+const chalk = new Chalk({ level: process.stdout.isTTY ? 3 : 0 });
+
+function printReplStartup(options: {
+	resolvedModel?: { key: string; provider: string };
+	modelError?: unknown;
+	safeMode: boolean;
+	templateCount: number;
+	skillsCount: number;
+	packageCount: number;
+	themeCount: number;
+	traceFilePath?: string;
+	resourceWarnings: string[];
+}): void {
+	const lines: string[] = [];
+	lines.push(chalk.bold.cyan(`my-agent ${CLI_VERSION}`));
+
+	if (options.resolvedModel) {
+		lines.push(
+			`${chalk.green("Ready")} ${chalk.bold(options.resolvedModel.key)} via ${options.resolvedModel.provider}${options.safeMode ? chalk.dim(" · safe-mode") : ""}`,
+		);
+	} else {
+		const rawMessage =
+			options.modelError instanceof Error ? options.modelError.message : String(options.modelError ?? "");
+		const summary = rawMessage.split("\n")[0] || "No authenticated models are available.";
+		lines.push(`${chalk.yellow("Not connected")} ${summary}`);
+		lines.push("Connect a provider:");
+		lines.push(`  1. ${chalk.bold("export OPENROUTER_API_KEY=...")}`);
+		lines.push(`  2. ${chalk.bold("/login anthropic")}`);
+		lines.push(`  3. ${chalk.bold("/login openai-codex")}`);
+		lines.push(`  4. ${chalk.bold("/model")} to choose the model you want`);
+		lines.push(chalk.dim("Need details? Run my-agent --doctor or my-agent --list-models."));
+	}
+
+	lines.push(
+		`${chalk.dim("Resources")} prompts=${options.templateCount} skills=${options.skillsCount} packages=${options.packageCount} themes=${options.themeCount}${options.safeMode ? " · safe-mode" : ""}`,
+	);
+	lines.push(chalk.dim("Data lives in ~/.my-agent (auth, sessions, prompts, extensions, packages, themes)."));
+	lines.push(
+		chalk.dim("Type a task at the › prompt below. Tab completes slash commands. Use /help for a command index."),
+	);
+	if (options.traceFilePath) {
+		lines.push(`${chalk.dim("Trace")} ${options.traceFilePath}`);
+	}
+	for (const warning of options.resourceWarnings) {
+		lines.push(`${chalk.yellow("warning:")} ${warning}`);
+	}
+
+	process.stdout.write(`${lines.join("\n")}\n\n`);
+}
 
 async function main(): Promise<void> {
 	const cliStartedAt = Date.now();
@@ -250,31 +300,25 @@ async function main(): Promise<void> {
 	}
 
 	// Print startup info
-	const sessionDir = SessionManager.getDefaultSessionDir(cwd);
+	let replResolvedModel: { key: string; provider: string } | undefined;
+	let replModelError: unknown;
 	try {
 		const resolvedModel = await resolveConfiguredModel(settings, authStorage);
-		process.stdout.write(
-			`model: ${resolvedModel.key} | provider: ${resolvedModel.model.provider}${safeMode ? " | safe-mode" : ""}\n`,
-		);
+		replResolvedModel = { key: resolvedModel.key, provider: resolvedModel.model.provider };
 	} catch (error) {
-		process.stdout.write(`model: unavailable${safeMode ? " | safe-mode" : ""}\n`);
-		process.stdout.write(`${formatModelResolutionError(error)}\n`);
+		replModelError = error;
 	}
-	process.stdout.write(`sessions: ${sessionDir}\n`);
-	process.stdout.write(
-		`resources: prompts=${templates.size} skills=${skills.skills.size} packages=${resources.packages.length} themes=${themes.themes.size}\n`,
-	);
-	process.stdout.write(
-		"paths: auth=~/.my-agent/auth.json prompts=~/.my-agent/prompts extensions=~/.my-agent/extensions packages=~/.my-agent/packages themes=~/.my-agent/themes\n",
-	);
-	if (getTraceFilePath()) {
-		process.stdout.write(`trace: ${getTraceFilePath()}\n`);
-	}
-	if (resourceWarnings.length > 0) {
-		for (const warning of resourceWarnings) {
-			process.stdout.write(`warning: ${warning}\n`);
-		}
-	}
+	printReplStartup({
+		resolvedModel: replResolvedModel,
+		modelError: replModelError,
+		safeMode,
+		templateCount: templates.size,
+		skillsCount: skills.skills.size,
+		packageCount: resources.packages.length,
+		themeCount: themes.themes.size,
+		traceFilePath: getTraceFilePath() ?? undefined,
+		resourceWarnings,
+	});
 
 	trace("runtime", "cli.ready", { mode: "repl", durationMs: Date.now() - cliStartedAt });
 	await runRepl({
@@ -292,6 +336,14 @@ async function main(): Promise<void> {
 						return "deny";
 					}
 				: askPermission;
+			const interactiveRepl = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+			const toolOutput = interactiveRepl ? process.stdout : process.stderr;
+			let assistantStarted = false;
+			const beginAssistant = () => {
+				if (!interactiveRepl || assistantStarted) return;
+				assistantStarted = true;
+				process.stdout.write(`${chalk.bold.green("assistant")}\n`);
+			};
 			try {
 				const result = await runAgent(
 					prompt,
@@ -306,9 +358,25 @@ async function main(): Promise<void> {
 						resourceExtensionEntries: resources.packages.flatMap((pkg) => pkg.extensions),
 					},
 					{
-						onText: (text) => process.stdout.write(text),
-						onToolStart: (name) => process.stderr.write(`\n[${name}] `),
-						onToolEnd: (_name, isError) => process.stderr.write(isError ? "✗\n" : "✓\n"),
+						onText: (text) => {
+							beginAssistant();
+							process.stdout.write(text);
+						},
+						onToolStart: (name) => {
+							if (interactiveRepl) {
+								beginAssistant();
+								toolOutput.write(`\n${chalk.dim("tool")} ${chalk.cyan(name)} …`);
+							} else {
+								toolOutput.write(`\n[${name}] `);
+							}
+						},
+						onToolEnd: (_name, isError) => {
+							if (interactiveRepl) {
+								toolOutput.write(isError ? ` ${chalk.red("✗")}\n` : ` ${chalk.green("✓")}\n`);
+							} else {
+								toolOutput.write(isError ? "✗\n" : "✓\n");
+							}
+						},
 					},
 				);
 				if (result.aborted) {
@@ -333,6 +401,7 @@ async function main(): Promise<void> {
 		disableExtensions: safeMode,
 		persistSettings: (nextSettings, scope) => saveSettings(nextSettings, scope ?? "project", cwd),
 		themes,
+		showIntro: false,
 	});
 }
 

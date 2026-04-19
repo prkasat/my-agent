@@ -89,37 +89,131 @@ export interface SlashContext {
 /**
  * Built-in slash commands.
  */
+interface SlashCommandListing {
+	name: string;
+	usage: string;
+	description: string;
+	section: string;
+}
+
+const BUILTIN_SLASH_COMMANDS: SlashCommandListing[] = [
+	{ name: "help", usage: "/help", description: "Show command help and shortcuts", section: "Basics" },
+	{ name: "quit", usage: "/quit", description: "Exit the REPL", section: "Basics" },
+	{ name: "exit", usage: "/exit", description: "Exit the REPL", section: "Basics" },
+	{
+		name: "branch",
+		usage: "/branch [name]",
+		description: "Fork the current session into a new branch",
+		section: "Sessions",
+	},
+	{ name: "fork", usage: "/fork", description: "Alias for /branch", section: "Sessions" },
+	{
+		name: "sessions",
+		usage: "/sessions",
+		description: "List sessions for this working directory",
+		section: "Sessions",
+	},
+	{ name: "tree", usage: "/tree", description: "Show the current session tree", section: "Sessions" },
+	{
+		name: "tree switch",
+		usage: "/tree switch <id>",
+		description: "Set the active branch context for the next prompt",
+		section: "Sessions",
+	},
+	{ name: "login", usage: "/login [provider]", description: "Login via OAuth", section: "Auth" },
+	{ name: "logout", usage: "/logout <provider>", description: "Logout from a provider", section: "Auth" },
+	{
+		name: "model",
+		usage: "/model [name]",
+		description: "Show or set the current model",
+		section: "Configuration",
+	},
+	{
+		name: "theme",
+		usage: "/theme [name]",
+		description: "Show or set the current theme",
+		section: "Configuration",
+	},
+	{ name: "settings", usage: "/settings", description: "Show current settings", section: "Configuration" },
+	{
+		name: "extensions",
+		usage: "/extensions",
+		description: "Show configured extension paths",
+		section: "Resources",
+	},
+	{
+		name: "packages",
+		usage: "/packages",
+		description: "Show loaded resource packages",
+		section: "Resources",
+	},
+	{ name: "skills", usage: "/skills", description: "List loaded skills", section: "Resources" },
+	{ name: "templates", usage: "/templates", description: "List prompt templates", section: "Resources" },
+	{
+		name: "export",
+		usage: "/export [path]",
+		description: "Export session to standalone HTML",
+		section: "Resources",
+	},
+];
+
+export function listSlashCommandSuggestions(options?: {
+	templates?: Map<string, PromptTemplate>;
+	skills?: Map<string, SkillDefinition>;
+}): Array<{ value: string; description?: string }> {
+	const values = new Map<string, string | undefined>();
+	for (const command of BUILTIN_SLASH_COMMANDS) {
+		const key = `/${command.name}`;
+		values.set(key, command.description);
+	}
+	for (const [name, skill] of options?.skills ?? []) {
+		values.set(`/${name}`, skill.description || skill.name);
+	}
+	for (const [name, template] of options?.templates ?? []) {
+		values.set(`/${name}`, template.description || "Prompt template");
+	}
+	return [...values.entries()]
+		.sort(([a], [b]) => a.localeCompare(b))
+		.map(([value, description]) => ({ value, description }));
+}
+
 function getHelpText(templates?: Map<string, PromptTemplate>, skills?: Map<string, SkillDefinition>): string {
-	let text = `Available commands:
-  /help                Show this help
-  /branch [name]       Fork the current session into a new branch (alias: /fork)
-  /sessions            List sessions for this working directory
-  /tree                Show the current session tree
-  /tree switch <id>    Set the active branch context for the next prompt
-  /login [provider]    Login via OAuth (anthropic, openai-codex)
-  /logout <provider>   Logout from a provider
-  /extensions          Show configured extension paths
-  /packages            Show loaded resource packages
-  /skills              List loaded skills
-  /export [path]       Export session to standalone HTML file
-  /settings            Show current settings
-  /model               Show or set the current model
-  /theme               Show or set the current theme
-  /quit, /exit         Exit the REPL`;
+	const sections = new Map<string, SlashCommandListing[]>();
+	for (const command of BUILTIN_SLASH_COMMANDS) {
+		const section = sections.get(command.section) ?? [];
+		section.push(command);
+		sections.set(command.section, section);
+	}
+
+	let text = [
+		"Use the prompt for normal tasks. Slash commands manage auth, sessions, and resources.",
+		"",
+		"Quick start:",
+		"  - Connect a model: export OPENROUTER_API_KEY=... or /login anthropic or /login openai-codex",
+		"  - Pick a model: /model",
+		"  - Inspect the current session: /tree or /sessions",
+	].join("\n");
+
+	for (const [sectionName, commands] of sections) {
+		text += `\n\n${sectionName}:`;
+		for (const command of commands) {
+			text += `\n  ${command.usage.padEnd(20)} ${command.description}`;
+		}
+	}
 
 	if (skills && skills.size > 0) {
 		text += "\n\nSkills:";
 		for (const [name, skill] of skills) {
 			const desc = skill.description || skill.name;
-			text += `\n  /${name} - ${desc}`;
+			text += `\n  /${name.padEnd(18)} ${desc}`;
 		}
 	}
 
 	if (templates && templates.size > 0) {
 		text += "\n\nPrompt templates:";
 		for (const [name, template] of templates) {
-			const desc = template.description || "(no description)";
-			text += `\n  /${name} - ${desc}`;
+			const desc = template.description || "Prompt template";
+			text += `\n  /${name.padEnd(18)} ${desc}`;
 		}
 	}
 
