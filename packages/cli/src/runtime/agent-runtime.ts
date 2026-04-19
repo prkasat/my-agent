@@ -9,15 +9,19 @@
  * - Streaming output to stdout
  */
 
-import { stream } from "@my-agent/ai";
+import { stream, type Usage, getModel } from "@my-agent/ai";
 import {
 	type AgentContext,
 	type AgentLoopConfig,
 	type AgentMessage,
+	type AgentToolResult,
 	type AskDecision,
 	BASE_INSTRUCTIONS,
 	BUILTIN_READ_TOOL_NAMES,
+	CostTracker,
+	type ExtensionUI,
 	type PermissionAskContext,
+	type SessionCosts,
 	type SessionManager,
 	agentLoop,
 	buildSystemPrompt,
@@ -42,12 +46,49 @@ export interface RuntimeConfig {
 	askPermission?: (ctx: PermissionAskContext) => Promise<AskDecision>;
 	disableExtensions?: boolean;
 	resourceExtensionEntries?: string[];
+	extensionUI?: ExtensionUI;
+}
+
+export interface RuntimeToolProfile {
+	toolCallId: string;
+	toolName: string;
+	durationMs: number;
+	isError: boolean;
+	outputText?: string;
+	details?: unknown;
+}
+
+export interface RuntimeCompactionProfile {
+	tokensBefore: number;
+	tokensAfter: number;
+	cutIndex: number;
+	summaryLength: number;
+	durationMs?: number;
+}
+
+export interface RuntimeProfile {
+	totalDurationMs: number;
+	firstTokenLatencyMs?: number;
+	sessionLoadDurationMs: number;
+	projectContextDurationMs: number;
+	extensionLoadDurationMs: number;
+	turnCount: number;
+	costs: SessionCosts;
+	toolCalls: RuntimeToolProfile[];
+	compactions: RuntimeCompactionProfile[];
+	memory: {
+		rss: number;
+		heapUsed: number;
+		heapTotal: number;
+		external: number;
+	};
 }
 
 export interface RuntimeResult {
 	messages: AgentMessage[];
 	aborted: boolean;
 	error?: string;
+	profile: RuntimeProfile;
 }
 
 /**
@@ -58,15 +99,34 @@ export async function runAgent(
 	config: RuntimeConfig,
 	callbacks: {
 		onText?: (text: string) => void;
-		onToolStart?: (toolName: string, toolCallId: string) => void;
-		onToolEnd?: (toolName: string, isError: boolean) => void;
+		onToolStart?: (toolName: string, toolCallId: string, args: unknown) => void;
+		onToolEnd?: (
+			toolName: string,
+			isError: boolean,
+			info: { toolCallId: string; result: AgentToolResult | undefined; durationMs: number },
+		) => void;
 		onThinking?: (text: string) => void;
-		onTurnStart?: () => void;
-		onTurnEnd?: () => void;
+		onTurnStart?: (turnIndex: number) => void;
+		onTurnEnd?: (info: { turnIndex: number; usage?: Usage; costs: SessionCosts }) => void;
 	} = {},
 ): Promise<RuntimeResult> {
-	const { cwd, settings, authStorage, session, signal, askPermission, disableExtensions, resourceExtensionEntries } =
-		config;
+	const {
+		cwd,
+		settings,
+		authStorage,
+		session,
+		signal,
+		askPermission,
+		disableExtensions,
+		resourceExtensionEntries,
+		extensionUI,
+	} = config;
+	const runStartedAt = Date.now();
+	let firstTokenAt: number | undefined;
+	let completedTurnCount = 0;
+	const toolProfiles: RuntimeToolProfile[] = [];
+	const compactionProfiles: RuntimeCompactionProfile[] = [];
+	const costTracker = new CostTracker();
 
 	trace("runtime", "agent.start", {
 		cwd,
@@ -87,8 +147,11 @@ export async function runAgent(
 	// Support SYSTEM.md override and APPEND_SYSTEM.md
 	const homeDir = (typeof process !== "undefined" && process.env.HOME) || ".";
 	const globalDir = `${homeDir}/.my-agent`;
+	const projectContextStartedAt = Date.now();
 	const projectContext = await discoverProjectContext(cwd, globalDir);
+	const projectContextDurationMs = Date.now() - projectContextStartedAt;
 	trace("runtime", "project_context.discovered", {
+		durationMs: projectContextDurationMs,
 		hasSystemOverride: Boolean(projectContext.systemOverride),
 		hasSystemAppend: Boolean(projectContext.systemAppend),
 		projectContextFiles: projectContext.projectContext.length,
@@ -96,6 +159,7 @@ export async function runAgent(
 
 	// Load extensions for this run. Extensions are trusted local modules.
 	let currentContext: AgentContext | null = null;
+	const extensionLoadStartedAt = Date.now();
 	const extensionRuntime = disableExtensions
 		? undefined
 		: await loadExtensionsForRun({
@@ -105,10 +169,14 @@ export async function runAgent(
 				sessionId: session.getSessionId(),
 				getAgentContext: () => currentContext,
 				extraEntries: resourceExtensionEntries,
+				ui: extensionUI,
 			});
+	const extensionLoadDurationMs = Date.now() - extensionLoadStartedAt;
 	trace("extensions", "loaded", {
 		disabled: Boolean(disableExtensions),
 		loadedIds: extensionRuntime?.loadedIds ?? [],
+		warnings: extensionRuntime?.warnings ?? [],
+		durationMs: extensionLoadDurationMs,
 	});
 
 	const transformedPrompt = extensionRuntime ? await extensionRuntime.runner.dispatchUserInput(prompt) : prompt;
@@ -145,7 +213,14 @@ export async function runAgent(
 	});
 
 	// Build messages from session history + new prompt
+	const sessionLoadStartedAt = Date.now();
 	const sessionContext = session.buildSessionContext();
+	const sessionLoadDurationMs = Date.now() - sessionLoadStartedAt;
+	trace("runtime", "session.loaded", {
+		sessionId: session.getSessionId(),
+		messageCount: sessionContext.messages.length,
+		durationMs: sessionLoadDurationMs,
+	});
 	const userMessage: AgentMessage = {
 		role: "user",
 		content: transformedPrompt,
@@ -167,7 +242,8 @@ export async function runAgent(
 		settings.thinkingLevel !== "off" ? { thinkingLevel: settings.thinkingLevel as ThinkingLevel } : undefined;
 
 	// Create auto-compactor if enabled
-	const autoCompactor = settings.compaction.enabled
+	let pendingCompactionStartedAt: number | undefined;
+	const autoCompactorBase = settings.compaction.enabled
 		? createAutoCompactorWithPersistence({
 				settings: {
 					enabled: true,
@@ -178,7 +254,32 @@ export async function runAgent(
 				streamFn: (m, ctx, opts) => stream(m, ctx, opts),
 				getApiKey: async (provider: string) => authStorage.resolveApiKey(provider),
 				signal,
+				costTracker,
+				onCompaction: (result) => {
+					const profile: RuntimeCompactionProfile = {
+						tokensBefore: result.tokensBefore,
+						tokensAfter: result.tokensAfter,
+						cutIndex: result.cutIndex,
+						summaryLength: result.summary.length,
+						durationMs: pendingCompactionStartedAt ? Date.now() - pendingCompactionStartedAt : undefined,
+					};
+					compactionProfiles.push(profile);
+					trace("runtime", "compaction", profile);
+				},
 			})
+		: undefined;
+	const autoCompactor = autoCompactorBase
+		? Object.assign(
+				async (context: AgentContext, nextSignal?: AbortSignal) => {
+					pendingCompactionStartedAt = Date.now();
+					try {
+						return await autoCompactorBase(context, nextSignal);
+					} finally {
+						pendingCompactionStartedAt = undefined;
+					}
+				},
+				{ reset: () => autoCompactorBase.reset() },
+			)
 		: undefined;
 
 	const permissionMode = settings.permissionMode === "strict" ? "deny" : settings.permissionMode;
@@ -194,6 +295,14 @@ export async function runAgent(
 		convertToLlm: defaultConvertToLlm,
 		getApiKey: async (provider: string) => authStorage.resolveApiKey(provider),
 		transformContext: autoCompactor,
+		costTracker,
+		resolveModel: (id) => {
+			try {
+				return getModel(id);
+			} catch {
+				return undefined;
+			}
+		},
 		maxTurns: settings.maxTurns,
 		maxRetries: settings.retry.enabled ? settings.retry.maxRetries : 0,
 		beforeToolCall: async (ctx) => {
@@ -206,9 +315,19 @@ export async function runAgent(
 					nextArgs,
 				);
 				if (extDecision.action === "block") {
+					trace("extensions", "tool.intercept", {
+						toolName: ctx.toolCall.name,
+						action: "block",
+						reason: extDecision.reason,
+					});
 					return { action: "block", reason: extDecision.reason };
 				}
 				if ("modifiedArgs" in extDecision) {
+					trace("extensions", "tool.intercept", {
+						toolName: ctx.toolCall.name,
+						action: "modify",
+						args: extDecision.modifiedArgs,
+					});
 					nextArgs = extDecision.modifiedArgs;
 				}
 			}
@@ -226,13 +345,22 @@ export async function runAgent(
 		},
 		afterToolCall: async (ctx) => {
 			if (!extensionRuntime) return undefined;
-			return await extensionRuntime.runner.dispatchToolEnd(
+			const modification = await extensionRuntime.runner.dispatchToolEnd(
 				ctx.toolCall.id,
 				ctx.toolCall.name,
 				ctx.result,
 				ctx.isError,
 				0,
 			);
+			if (modification) {
+				trace("extensions", "tool.result_modified", {
+					toolName: ctx.toolCall.name,
+					hasContent: Boolean(modification.content),
+					hasDetails: Boolean(modification.details),
+					isError: modification.isError,
+				});
+			}
+			return modification;
 		},
 	};
 
@@ -264,24 +392,41 @@ export async function runAgent(
 
 			switch (event.type) {
 				case "turn_start":
-					callbacks.onTurnStart?.();
+					callbacks.onTurnStart?.(event.turnIndex);
 					await extensionRuntime?.runner.dispatch({ type: "turn_start", turnIndex: event.turnIndex } as any);
 					break;
 
-				case "turn_end":
-					callbacks.onTurnEnd?.();
+				case "turn_end": {
+					completedTurnCount += 1;
+					const costs = costTracker.getSummary();
+					callbacks.onTurnEnd?.({ turnIndex: event.turnIndex, usage: event.usage, costs });
+					trace("runtime", "turn.end", {
+						turnIndex: event.turnIndex,
+						usage: event.usage,
+						totalCost: costs.totalCost,
+						totalInputTokens: costs.totalInputTokens,
+						totalOutputTokens: costs.totalOutputTokens,
+					});
 					await extensionRuntime?.runner.dispatch({
 						type: "turn_end",
 						turnIndex: event.turnIndex,
 						usage: event.usage,
 					} as any);
 					break;
+				}
 
 				case "message_start":
 					await extensionRuntime?.runner.dispatch({ type: "message_start", message: event.message } as any);
 					break;
 
 				case "message_update":
+					if (
+						firstTokenAt === undefined &&
+						(event.event.type === "text_delta" || event.event.type === "thinking_delta")
+					) {
+						firstTokenAt = Date.now();
+						trace("runtime", "first_token", { latencyMs: firstTokenAt - runStartedAt });
+					}
 					if (event.event.type === "text_delta") {
 						callbacks.onText?.(event.event.text);
 					} else if (event.event.type === "thinking_delta") {
@@ -296,11 +441,23 @@ export async function runAgent(
 					await extensionRuntime?.runner.dispatch({ type: "message_end", message: event.message } as any);
 					break;
 
+				case "assistant_retry":
+					trace("runtime", "assistant.retry", {
+						attempt: event.attempt,
+						maxRetries: event.maxRetries,
+						delayMs: event.delayMs,
+					});
+					break;
+
 				case "tool_execution_start":
+					if (firstTokenAt === undefined) {
+						firstTokenAt = Date.now();
+						trace("runtime", "first_token", { latencyMs: firstTokenAt - runStartedAt, source: "tool" });
+					}
 					toolNames.set(event.toolCallId, event.toolName);
 					toolStartedAt.set(event.toolCallId, Date.now());
-					callbacks.onToolStart?.(event.toolName, event.toolCallId);
-					trace("runtime", "tool.start", { toolName: event.toolName, toolCallId: event.toolCallId });
+					callbacks.onToolStart?.(event.toolName, event.toolCallId, event.args);
+					trace("runtime", "tool.start", { toolName: event.toolName, toolCallId: event.toolCallId, args: event.args });
 					await extensionRuntime?.runner.dispatch({
 						type: "tool_execution_start",
 						toolCallId: event.toolCallId,
@@ -312,8 +469,30 @@ export async function runAgent(
 				case "tool_execution_end": {
 					const toolName = toolNames.get(event.toolCallId) ?? "unknown";
 					const durationMs = Date.now() - (toolStartedAt.get(event.toolCallId) ?? Date.now());
-					callbacks.onToolEnd?.(toolName, event.isError);
-					trace("runtime", "tool.end", { toolName, toolCallId: event.toolCallId, isError: event.isError });
+					const outputText = event.result?.content
+						.filter((block): block is { type: "text"; text: string } => block.type === "text")
+						.map((block) => block.text)
+						.join("\n");
+					toolProfiles.push({
+						toolCallId: event.toolCallId,
+						toolName,
+						durationMs,
+						isError: event.isError,
+						outputText: outputText || undefined,
+						details: event.result?.details,
+					});
+					callbacks.onToolEnd?.(toolName, event.isError, {
+						toolCallId: event.toolCallId,
+						result: event.result,
+						durationMs,
+					});
+					trace("runtime", "tool.end", {
+						toolName,
+						toolCallId: event.toolCallId,
+						isError: event.isError,
+						durationMs,
+						outputText,
+					});
 					// Persist tool result to session
 					if (event.result) {
 						session.appendMessage({
@@ -379,18 +558,47 @@ export async function runAgent(
 		session.flush();
 	}
 
+	const memory = process.memoryUsage();
+	const profile: RuntimeProfile = {
+		totalDurationMs: Date.now() - runStartedAt,
+		firstTokenLatencyMs: firstTokenAt ? firstTokenAt - runStartedAt : undefined,
+		sessionLoadDurationMs,
+		projectContextDurationMs,
+		extensionLoadDurationMs,
+		turnCount: completedTurnCount,
+		costs: costTracker.getSummary(),
+		toolCalls: toolProfiles,
+		compactions: compactionProfiles,
+		memory: {
+			rss: memory.rss,
+			heapUsed: memory.heapUsed,
+			heapTotal: memory.heapTotal,
+			external: memory.external,
+		},
+	};
+
 	trace("runtime", "agent.end", {
 		sessionId: session.getSessionId(),
 		aborted,
 		error,
 		messageCount: context.messages.length,
+		profile,
 	});
 
 	return {
 		messages: context.messages,
 		aborted,
 		error,
+		profile,
 	};
+}
+
+export function formatRuntimeProfile(profile: RuntimeProfile): string {
+	return [
+		`profile: total=${profile.totalDurationMs}ms first-token=${profile.firstTokenLatencyMs ?? "n/a"}ms session-load=${profile.sessionLoadDurationMs}ms project-context=${profile.projectContextDurationMs}ms extensions=${profile.extensionLoadDurationMs}ms`,
+		`usage: in=${profile.costs.totalInputTokens} out=${profile.costs.totalOutputTokens} cache-read=${profile.costs.totalCacheReadTokens} cache-write=${profile.costs.totalCacheWriteTokens} cost=$${profile.costs.totalCost.toFixed(4)}`,
+		`activity: turns=${profile.turnCount} tools=${profile.toolCalls.length} compactions=${profile.compactions.length} rss=${Math.round(profile.memory.rss / 1024 / 1024)}MiB heap=${Math.round(profile.memory.heapUsed / 1024 / 1024)}MiB`,
+	].join("\n");
 }
 
 /**

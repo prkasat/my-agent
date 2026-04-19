@@ -208,8 +208,10 @@ async function runLoop(
 				// Only retry if not aborted and we have retries left
 				if (signal.aborted || attempt === maxRetries) break;
 				// Exponential backoff: 1s, 2s — abortable so cancellation isn't delayed
+				const delayMs = 1000 * (attempt + 1);
+				stream.push({ type: "assistant_retry", attempt: attempt + 1, maxRetries, delayMs });
 				try {
-					await abortableSleep(1000 * (attempt + 1), signal);
+					await abortableSleep(delayMs, signal);
 				} catch {
 					break;
 				}

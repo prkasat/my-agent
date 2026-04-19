@@ -26,8 +26,8 @@ import { AuthStorage } from "./config/auth-storage.js";
 import { loadSettings, saveSettings } from "./config/settings.js";
 import { startRpcServer } from "./modes/rpc.js";
 import { runRepl } from "./repl/repl.js";
-import { runAgent } from "./runtime/agent-runtime.js";
-import { listModelAvailability, resolveConfiguredModel } from "./runtime/model-registry.js";
+import { formatRuntimeProfile, runAgent } from "./runtime/agent-runtime.js";
+import { formatModelResolutionError, listModelAvailability, resolveConfiguredModel } from "./runtime/model-registry.js";
 import { getTraceFilePath, initializeTracing, trace } from "./runtime/trace.js";
 import { runTuiApp } from "./tui/app.js";
 import { loadThemes } from "./ui/theme-loader.js";
@@ -36,6 +36,7 @@ const require = createRequire(import.meta.url);
 const { version: CLI_VERSION } = require("../package.json") as { version: string };
 
 async function main(): Promise<void> {
+	const cliStartedAt = Date.now();
 	const argv = process.argv.slice(2);
 	if (argv.includes("--help") || argv.includes("-h")) {
 		printUsage();
@@ -56,6 +57,12 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const optionValueIndexes = new Set<number>();
+	if (replayIndex >= 0 && argv[replayIndex + 1]) {
+		optionValueIndexes.add(replayIndex + 1);
+	}
+	const promptArgs = argv.filter((arg, index) => !arg.startsWith("-") && !optionValueIndexes.has(index));
+
 	const cwd = process.cwd();
 	const globalDir = path.join(process.env.HOME || ".", ".my-agent");
 	initializeTracing({
@@ -75,6 +82,7 @@ async function main(): Promise<void> {
 	await authStorage.load();
 
 	const safeMode = argv.includes("--safe-mode");
+	const profileMode = argv.includes("--profile");
 
 	const resources = safeMode
 		? { packages: [], warnings: [] }
@@ -110,6 +118,7 @@ async function main(): Promise<void> {
 	});
 
 	if (argv.includes("--doctor")) {
+		trace("runtime", "cli.ready", { mode: "doctor", durationMs: Date.now() - cliStartedAt });
 		await runDoctor({
 			cwd,
 			settings,
@@ -125,6 +134,7 @@ async function main(): Promise<void> {
 	}
 
 	if (argv.includes("--list-models")) {
+		trace("runtime", "cli.ready", { mode: "list-models", durationMs: Date.now() - cliStartedAt });
 		const availability = await listModelAvailability(authStorage);
 		for (const entry of availability) {
 			const status = entry.available ? "available" : `unavailable: ${entry.reason}`;
@@ -135,6 +145,7 @@ async function main(): Promise<void> {
 
 	// RPC mode (after initialization so settings/OAuth are available)
 	if (argv[0] === "--rpc") {
+		trace("runtime", "cli.ready", { mode: "rpc", durationMs: Date.now() - cliStartedAt });
 		startRpcServer({
 			settings,
 			authStorage,
@@ -147,6 +158,7 @@ async function main(): Promise<void> {
 	}
 
 	if (argv.includes("--tui")) {
+		trace("runtime", "cli.ready", { mode: "tui", durationMs: Date.now() - cliStartedAt });
 		if (!process.stdin.isTTY || !process.stdout.isTTY) {
 			throw new Error("--tui requires an interactive TTY");
 		}
@@ -188,9 +200,10 @@ async function main(): Promise<void> {
 	// For now, both REPL and one-shot modes share session bootstrap.
 	let session = SessionManager.continueRecent(cwd);
 
-	if (argv.length > 0 && !argv[0].startsWith("-")) {
+	if (promptArgs.length > 0) {
+		trace("runtime", "cli.ready", { mode: "one-shot", durationMs: Date.now() - cliStartedAt });
 		// One-shot prompt mode with abort support
-		const prompt = argv.join(" ");
+		const prompt = promptArgs.join(" ");
 		const controller = new AbortController();
 		const onSigint = () => controller.abort();
 		process.on("SIGINT", onSigint);
@@ -211,9 +224,13 @@ async function main(): Promise<void> {
 				{
 					onText: (text) => process.stdout.write(text),
 					onToolStart: (name) => process.stderr.write(`\n[${name}] `),
-					onToolEnd: (name, isError) => process.stderr.write(isError ? "✗\n" : "✓\n"),
+					onToolEnd: (_name, isError) => process.stderr.write(isError ? "✗\n" : "✓\n"),
 				},
 			);
+		} catch (error) {
+			process.stderr.write(`${formatModelResolutionError(error)}\n`);
+			process.exit(1);
+			return;
 		} finally {
 			process.off("SIGINT", onSigint);
 		}
@@ -226,6 +243,9 @@ async function main(): Promise<void> {
 			process.exit(1);
 		}
 		process.stdout.write("\n");
+		if (profileMode) {
+			process.stderr.write(`${formatRuntimeProfile(result.profile)}\n`);
+		}
 		return;
 	}
 
@@ -238,11 +258,14 @@ async function main(): Promise<void> {
 		);
 	} catch (error) {
 		process.stdout.write(`model: unavailable${safeMode ? " | safe-mode" : ""}\n`);
-		process.stdout.write(`${formatOnboarding(error)}\n`);
+		process.stdout.write(`${formatModelResolutionError(error)}\n`);
 	}
 	process.stdout.write(`sessions: ${sessionDir}\n`);
 	process.stdout.write(
 		`resources: prompts=${templates.size} skills=${skills.skills.size} packages=${resources.packages.length} themes=${themes.themes.size}\n`,
+	);
+	process.stdout.write(
+		"paths: auth=~/.my-agent/auth.json prompts=~/.my-agent/prompts extensions=~/.my-agent/extensions packages=~/.my-agent/packages themes=~/.my-agent/themes\n",
 	);
 	if (getTraceFilePath()) {
 		process.stdout.write(`trace: ${getTraceFilePath()}\n`);
@@ -253,6 +276,7 @@ async function main(): Promise<void> {
 		}
 	}
 
+	trace("runtime", "cli.ready", { mode: "repl", durationMs: Date.now() - cliStartedAt });
 	await runRepl({
 		getSession: () => session,
 		switchSession: async (sessionPath) => {
@@ -268,30 +292,37 @@ async function main(): Promise<void> {
 						return "deny";
 					}
 				: askPermission;
-			const result = await runAgent(
-				prompt,
-				{
-					cwd,
-					settings,
-					authStorage,
-					session,
-					signal: abortSignal,
-					askPermission: permissionPrompter,
-					disableExtensions: safeMode,
-					resourceExtensionEntries: resources.packages.flatMap((pkg) => pkg.extensions),
-				},
-				{
-					onText: (text) => process.stdout.write(text),
-					onToolStart: (name) => process.stderr.write(`\n[${name}] `),
-					onToolEnd: (name, isError) => process.stderr.write(isError ? "✗\n" : "✓\n"),
-				},
-			);
-			if (result.aborted) {
-				process.stderr.write("\naborted\n");
-			} else if (result.error) {
-				process.stderr.write(`error: ${result.error}\n`);
+			try {
+				const result = await runAgent(
+					prompt,
+					{
+						cwd,
+						settings,
+						authStorage,
+						session,
+						signal: abortSignal,
+						askPermission: permissionPrompter,
+						disableExtensions: safeMode,
+						resourceExtensionEntries: resources.packages.flatMap((pkg) => pkg.extensions),
+					},
+					{
+						onText: (text) => process.stdout.write(text),
+						onToolStart: (name) => process.stderr.write(`\n[${name}] `),
+						onToolEnd: (_name, isError) => process.stderr.write(isError ? "✗\n" : "✓\n"),
+					},
+				);
+				if (result.aborted) {
+					process.stderr.write("\naborted\n");
+				} else if (result.error) {
+					process.stderr.write(`error: ${result.error}\n`);
+				}
+				process.stdout.write("\n");
+				if (profileMode) {
+					process.stderr.write(`${formatRuntimeProfile(result.profile)}\n`);
+				}
+			} catch (error) {
+				process.stderr.write(`${formatModelResolutionError(error)}\n`);
 			}
-			process.stdout.write("\n");
 		},
 		authStorage,
 		templates,
@@ -356,18 +387,6 @@ async function runDoctor(options: {
 	process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-function formatOnboarding(error: unknown): string {
-	const message = error instanceof Error ? error.message : String(error);
-	return [
-		`No model is ready yet: ${message}`,
-		"Next steps:",
-		"  - OpenRouter: export OPENROUTER_API_KEY=...",
-		"  - Anthropic: /login anthropic",
-		"  - OpenAI Codex: /login openai-codex",
-		"  - Inspect availability: my-agent --list-models",
-	].join("\n");
-}
-
 function printUsage(): void {
 	process.stdout.write(`my-agent — interactive coding assistant
 
@@ -380,6 +399,7 @@ Usage:
   my-agent --list-models  List models visible with current auth state
   my-agent --safe-mode    Disable extension loading for this run
   my-agent --trace        Enable structured JSONL tracing
+  my-agent --profile      Print runtime timing and cost summary
   my-agent --replay FILE  Replay a session or trace timeline
   my-agent --version      Show CLI version
   my-agent --help         Show this help
@@ -389,6 +409,7 @@ REPL slash commands:
   /branch [name]       Fork session into new branch
   /sessions            List sessions for this directory
   /tree                Show the current session tree
+  /tree switch <id>    Set the active branch context
   /login [provider]    OAuth login (anthropic, openai-codex)
   /logout <provider>   OAuth logout
   /extensions          Show configured extension paths

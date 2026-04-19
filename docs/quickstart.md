@@ -6,15 +6,39 @@
 npm install
 npm run build
 npm test
+npm run lint
 ```
 
-## Start the agent
+## First run
 
 ```bash
 node packages/cli/dist/main.js
 ```
 
-Useful flags:
+If no authenticated model is available, startup explains exactly what to do next.
+
+## Happy paths
+
+### OpenRouter bootstrap
+
+```bash
+export OPENROUTER_API_KEY=...
+node packages/cli/dist/main.js
+```
+
+### Anthropic OAuth
+
+```text
+/login anthropic
+```
+
+### OpenAI Codex OAuth
+
+```text
+/login openai-codex
+```
+
+## Useful flags
 
 ```bash
 node packages/cli/dist/main.js --help
@@ -23,50 +47,25 @@ node packages/cli/dist/main.js --list-models
 node packages/cli/dist/main.js --safe-mode
 node packages/cli/dist/main.js --tui
 node packages/cli/dist/main.js --trace
+node packages/cli/dist/main.js --profile "say hello"
 ```
 
-## Authenticate
+## Important paths
 
-### OpenRouter
-
-```bash
-export OPENROUTER_API_KEY=...
-```
-
-### Anthropic
-
-Start the REPL and run:
-
-```text
-/login anthropic
-```
-
-### OpenAI Codex / ChatGPT subscription
-
-Start the REPL and run:
-
-```text
-/login openai-codex
-```
-
-## First-run paths
-
-- sessions: `~/.my-agent/sessions/<encoded-cwd>/`
 - auth: `~/.my-agent/auth.json`
 - user settings: `~/.my-agent/settings.json`
+- project settings: `<project>/.my-agent/settings.json`
+- sessions: `~/.my-agent/sessions/<encoded-cwd>/`
 - user prompts: `~/.my-agent/prompts/`
 - user skills: `~/.my-agent/skills/`
 - user extensions: `~/.my-agent/extensions/`
 - user packages: `~/.my-agent/packages/`
 - user themes: `~/.my-agent/themes/`
+- traces: `~/.my-agent/traces/`
 
-Project-local resources live under `.my-agent/` inside your repo.
-
-## Core REPL commands
+## Everyday commands
 
 - `/help`
-- `/login <provider>`
-- `/logout <provider>`
 - `/model [list|<name>]`
 - `/theme [name]`
 - `/sessions`
@@ -76,7 +75,7 @@ Project-local resources live under `.my-agent/` inside your repo.
 - `/skills`
 - `/packages`
 - `/extensions`
-- `/export [path]`
+- `/quit`
 
 ## TUI mode
 
@@ -86,10 +85,14 @@ node packages/cli/dist/main.js --tui
 
 `--tui` requires an interactive TTY.
 
+## Exit codes
+
+- `0` successful completion
+- `1` fatal or user-facing runtime error
+- `130` interrupted / aborted by Ctrl+C
+
 ## Headless / integration mode
 
 ```bash
 node packages/cli/dist/main.js --rpc
 ```
-
-See `docs/rpc.md`.

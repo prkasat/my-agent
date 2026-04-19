@@ -22,7 +22,7 @@ import { exportFromSessionManager, getExportFilename } from "../commands/export.
 import { handleLogin, handleLogout } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
-import { runExtensionCommand } from "../runtime/extensions.js";
+import { inspectExtensions, runExtensionCommand } from "../runtime/extensions.js";
 import { getModelProviderForKey, listModelAvailability } from "../runtime/model-registry.js";
 import type { LoadThemesResult } from "../ui/theme-loader.js";
 
@@ -57,6 +57,10 @@ export interface SlashSessionManager {
 	listSessionsForCwd?(): Promise<SessionInfo[]>;
 	/** Get the current session tree. */
 	getTree?(): SessionTreeNode[];
+	/** Get the current leaf id. */
+	getLeafId?(): string | null;
+	/** Point the current branch context at a different entry. */
+	branch?(entryId: string): void;
 	/** Get entries for export. */
 	getEntries?(): SessionManager["getEntries"] extends () => infer R ? R : never;
 	/** Get header for export. */
@@ -89,6 +93,7 @@ function getHelpText(templates?: Map<string, PromptTemplate>, skills?: Map<strin
   /branch [name]       Fork the current session into a new branch (alias: /fork)
   /sessions            List sessions for this working directory
   /tree                Show the current session tree
+  /tree switch <id>    Set the active branch context for the next prompt
   /login [provider]    Login via OAuth (anthropic, openai-codex)
   /logout <provider>   Logout from a provider
   /extensions          Show configured extension paths
@@ -247,19 +252,42 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 		}
 
 		case "tree": {
+			if (args[0] === "switch") {
+				const entryId = args[1];
+				if (!entryId) {
+					return { action: "continue", output: "usage: /tree switch <entry-id>" };
+				}
+				if (!session.branch) {
+					return { action: "continue", output: "tree switch: not available in this build" };
+				}
+				try {
+					session.branch(entryId);
+					return { action: "continue", output: `branch context set to ${entryId}` };
+				} catch (err) {
+					return { action: "continue", output: `tree switch failed: ${(err as Error).message}` };
+				}
+			}
 			if (!session.getTree) {
 				return { action: "continue", output: "tree: not available in this build" };
 			}
 			const lines: string[] = [];
+			const currentLeafId = session.getLeafId?.();
 			const walk = (nodes: SessionTreeNode[], prefix = ""): void => {
 				for (const [index, node] of nodes.entries()) {
 					const isLast = index === nodes.length - 1;
-					lines.push(`${prefix}${isLast ? "└─" : "├─"} ${node.entry.id} (${node.entry.type})`);
+					const marker = node.entry.id === currentLeafId ? " <- current" : "";
+					lines.push(`${prefix}${isLast ? "└─" : "├─"} ${node.entry.id} (${node.entry.type})${marker}`);
 					walk(node.children, `${prefix}${isLast ? "  " : "│ "}`);
 				}
 			};
 			walk(session.getTree());
-			return { action: "continue", output: lines.length > 0 ? lines.join("\n") : "tree: empty session" };
+			return {
+				action: "continue",
+				output:
+					lines.length > 0
+						? `${lines.join("\n")}\n\nUse /tree switch <entry-id> to change branch context.`
+						: "tree: empty session",
+			};
 		}
 
 		case "login": {
@@ -298,9 +326,32 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 			];
 			const configured =
 				configuredEntries.length > 0 ? configuredEntries.map((entry) => `  ${entry}`).join("\n") : "  (none)";
+			if (!globalDir || disableExtensions) {
+				return {
+					action: "continue",
+					output: `configured extensions:\n${configured}`,
+				};
+			}
+			const inspection = await inspectExtensions({
+				cwd: session.getCwd(),
+				globalDir,
+				settings,
+				sessionId: session.getSessionId(),
+				extraEntries: (resources?.packages ?? []).flatMap((pkg) => pkg.extensions),
+			});
+			const commandLines =
+				inspection.commands.length > 0
+					? inspection.commands.map((command) => `  /${command.name} (${command.extensionId})`).join("\n")
+					: "  (none)";
+			const toolLines =
+				inspection.tools.length > 0 ? inspection.tools.map((tool) => `  ${tool}`).join("\n") : "  (none)";
+			const warningLines =
+				inspection.warnings.length > 0
+					? `\nwarnings:\n${inspection.warnings.map((warning) => `  ${warning}`).join("\n")}`
+					: "";
 			return {
 				action: "continue",
-				output: `configured extensions:\n${configured}`,
+				output: `configured extensions:\n${configured}\n\nloaded extension commands:\n${commandLines}\n\nloaded extension tools:\n${toolLines}${warningLines}`,
 			};
 		}
 

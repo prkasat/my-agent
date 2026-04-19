@@ -5,6 +5,7 @@ import {
 	type PermissionAskContext,
 	type PromptTemplate,
 	SessionManager,
+	type SessionTreeNode,
 	type SkillDefinition,
 } from "@my-agent/core";
 import { handleLogin } from "../commands/login.js";
@@ -13,11 +14,17 @@ import type { Settings } from "../config/settings.js";
 import { saveSettings } from "../config/settings.js";
 import { handleSlashCommand } from "../repl/slash-commands.js";
 import { runAgent } from "../runtime/agent-runtime.js";
-import { getModelProviderForKey, listModelAvailability } from "../runtime/model-registry.js";
+import {
+	formatModelResolutionError,
+	getModelProviderForKey,
+	listModelAvailability,
+} from "../runtime/model-registry.js";
+import { trace } from "../runtime/trace.js";
 import {
 	Box,
 	Editor,
 	Footer,
+	MultiDiffViewer,
 	ProcessTerminal,
 	SelectList,
 	Spacer,
@@ -29,6 +36,7 @@ import {
 	createModelSelector,
 	createSessionSelector,
 	defaultAgentTheme,
+	parseMultiDiff,
 } from "../ui/index.js";
 import { type LoadThemesResult, loadThemes, resolveThemeSelection } from "../ui/theme-loader.js";
 
@@ -178,7 +186,32 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		});
 	};
 
+	const extractDiff = (details: unknown): string | undefined => {
+		if (!details || typeof details !== "object") return undefined;
+		const maybeDiff = (details as { diff?: unknown }).diff;
+		return typeof maybeDiff === "string" && maybeDiff.length > 0 ? maybeDiff : undefined;
+	};
+
+	const flattenTree = (
+		nodes: SessionTreeNode[],
+		prefix = "",
+	): Array<{ value: string; label: string; description: string }> => {
+		const items: Array<{ value: string; label: string; description: string }> = [];
+		for (const [index, node] of nodes.entries()) {
+			const isLast = index === nodes.length - 1;
+			const branchPrefix = `${prefix}${isLast ? "└─" : "├─"}`;
+			items.push({
+				value: node.entry.id,
+				label: `${branchPrefix} ${node.entry.id}`,
+				description: node.entry.type,
+			});
+			items.push(...flattenTree(node.children, `${prefix}${isLast ? "  " : "│ "}`));
+		}
+		return items;
+	};
+
 	const runPrompt = async (prompt: string): Promise<void> => {
+		trace("runtime", "tui.prompt.start", { promptLength: prompt.length });
 		appendUser(prompt);
 		const assistant = new StreamingMessage({
 			markdownTheme: theme.markdown,
@@ -203,6 +236,58 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 					askPermission,
 					disableExtensions: options.safeMode,
 					resourceExtensionEntries: options.resources?.packages.flatMap((pkg) => pkg.extensions) ?? [],
+					extensionUI: {
+						select: async (items, uiOptions) => {
+							return await new Promise<string | null>((resolve) => {
+								const list = new SelectList(items, items.length, theme.selectList);
+								list.onSelect = (item) => {
+									handle.hide();
+									tui.setFocus(editor);
+									resolve(item.value);
+								};
+								list.onCancel = () => {
+									handle.hide();
+									tui.setFocus(editor);
+									resolve(null);
+								};
+								const handle = tui.showOverlay(list, {
+									anchor: "center",
+									width: "70%",
+									maxHeight: Math.max(8, items.length + (uiOptions?.title ? 2 : 0)),
+								});
+							});
+						},
+						confirm: async (message, uiOptions) => {
+							return await new Promise<boolean>((resolve) => {
+								const list = new SelectList(
+									[
+										{ value: "yes", label: "Yes", description: message },
+										{ value: "no", label: "No", description: message },
+									],
+									2,
+									theme.selectList,
+								);
+								list.onSelect = (item) => {
+									handle.hide();
+									tui.setFocus(editor);
+									resolve(item.value === "yes");
+								};
+								list.onCancel = () => {
+									handle.hide();
+									tui.setFocus(editor);
+									resolve(uiOptions?.defaultValue ?? false);
+								};
+								const handle = tui.showOverlay(list, { anchor: "center", width: "60%", maxHeight: 8 });
+							});
+						},
+						input: async (message, uiOptions) => {
+							const value = await promptInput(
+								message + (uiOptions?.defaultValue ? ` (${uiOptions.defaultValue})` : ""),
+							);
+							return value || uiOptions?.defaultValue || null;
+						},
+						notify: (message) => appendSystem(message),
+					},
 				},
 				{
 					onText: (text) => {
@@ -212,10 +297,14 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 					onThinking: () => {
 						footer.setThinking(true);
 					},
-					onToolStart: (toolName, toolCallId) => {
+					onTurnEnd: ({ costs }) => {
+						footer.setTokens(costs.totalInputTokens, costs.totalOutputTokens);
+						footer.setCost(costs.totalCost);
+					},
+					onToolStart: (toolName, toolCallId, args) => {
 						const toolView = new ToolExecution(
 							toolName,
-							{},
+							typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {},
 							{ theme: theme.toolExecution, onInvalidate: () => tui.requestRender() },
 						);
 						toolView.setRunning();
@@ -223,14 +312,31 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 						messages.addChild(toolView);
 						tui.requestRender();
 					},
-					onToolEnd: (toolName, isError) => {
-						const entry = [...pendingToolViews.entries()].find(([, view]) => view.getName() === toolName);
-						if (!entry) return;
-						const [, toolView] = entry;
+					onToolEnd: (_toolName, isError, info) => {
+						const toolView = pendingToolViews.get(info.toolCallId);
+						if (!toolView) return;
+						const outputText =
+							info.result?.content
+								?.filter((block): block is { type: "text"; text: string } => block.type === "text")
+								.map((block) => block.text)
+								.join("\n") || (isError ? "Tool failed" : "Tool completed");
 						if (isError) {
-							toolView.setError("Tool failed");
+							toolView.setError(outputText, info.durationMs);
 						} else {
-							toolView.setSuccess("Tool completed", 0);
+							toolView.setSuccess(outputText, info.durationMs);
+						}
+						const diffText = extractDiff(info.result?.details);
+						if (diffText) {
+							const diffs = parseMultiDiff(diffText, toolView.getName());
+							if (diffs.length > 0) {
+								messages.addChild(
+									new MultiDiffViewer(diffs, {
+										theme: theme.diffViewer,
+										maxLinesPerHunk: 12,
+										onInvalidate: () => tui.requestRender(),
+									}),
+								);
+							}
 						}
 						tui.requestRender();
 					},
@@ -238,13 +344,19 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			);
 
 			assistant.finalize();
+			footer.setTokens(result.profile.costs.totalInputTokens, result.profile.costs.totalOutputTokens);
+			footer.setCost(result.profile.costs.totalCost);
 			if (result.error) {
 				appendSystem(`error: ${result.error}`);
 			}
 			if (result.aborted) {
 				appendSystem("aborted");
 			}
+		} catch (error) {
+			trace("runtime", "tui.prompt.error", { error: error instanceof Error ? error.message : String(error) });
+			appendSystem(formatModelResolutionError(error));
 		} finally {
+			trace("runtime", "tui.prompt.end", { activeToolViews: pendingToolViews.size });
 			footer.setThinking(false);
 			activeController = null;
 			tui.requestRender();
@@ -252,6 +364,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	};
 
 	const openModelSelector = async (): Promise<void> => {
+		trace("runtime", "tui.overlay.open", { overlay: "model-selector" });
 		const availability = await listModelAvailability(options.authStorage);
 		const available = availability.filter((entry) => entry.available);
 		if (available.length === 0) {
@@ -271,6 +384,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			{
 				theme: theme.selectList,
 				onSelect: async (model) => {
+					trace("runtime", "tui.model.select", { model: model.id });
 					options.settings.model = model.id;
 					options.settings.provider = getModelProviderForKey(model.id) ?? options.settings.provider;
 					await saveSettings({ model: model.id }, "project", options.cwd);
@@ -282,6 +396,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	};
 
 	const openSessionSelector = async (): Promise<void> => {
+		trace("runtime", "tui.overlay.open", { overlay: "session-selector" });
 		const sessions = await session.listSessionsForCwd();
 		createSessionSelector(
 			tui,
@@ -298,10 +413,12 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				theme: theme.selectList,
 				onSelect: async (result) => {
 					if (result.kind === "new") {
+						trace("runtime", "tui.session.new", {});
 						session = SessionManager.create(options.cwd);
 						appendSystem(`new session ${session.getSessionId()}`);
 						return;
 					}
+					trace("runtime", "tui.session.switch", { sessionPath: result.session.id });
 					session = SessionManager.open(result.session.id);
 					appendSystem(`switched session -> ${result.session.id}`);
 				},
@@ -309,7 +426,42 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		);
 	};
 
+	const openTreeSelector = (): void => {
+		trace("runtime", "tui.overlay.open", { overlay: "tree-selector" });
+		const items = flattenTree(session.getTree());
+		if (items.length === 0) {
+			appendSystem("tree: empty session");
+			return;
+		}
+		const currentLeafId = session.getLeafId();
+		const list = new SelectList(
+			items.map((item) => ({
+				...item,
+				label: item.value === currentLeafId ? `${item.label} (current)` : item.label,
+			})),
+			items.length,
+			theme.selectList,
+		);
+		list.onSelect = (item) => {
+			handle.hide();
+			try {
+				trace("runtime", "tui.tree.switch", { entryId: item.value });
+				session.branch(item.value);
+				appendSystem(`branch context set to ${item.value}`);
+			} catch (error) {
+				appendSystem(`tree switch failed: ${error instanceof Error ? error.message : String(error)}`);
+			}
+			tui.setFocus(editor);
+		};
+		list.onCancel = () => {
+			handle.hide();
+			tui.setFocus(editor);
+		};
+		const handle = tui.showOverlay(list, { anchor: "center", width: "70%", maxHeight: 18 });
+	};
+
 	const openProviderSelector = (): void => {
+		trace("runtime", "tui.overlay.open", { overlay: "provider-selector" });
 		const providers = options.authStorage.getOAuthProviders().map((provider) => ({
 			value: provider.id,
 			label: provider.name,
@@ -319,6 +471,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		list.onSelect = async (item) => {
 			handle.hide();
 			tui.setFocus(editor);
+			trace("runtime", "tui.login.start", { providerId: item.value });
 			await login(item.value);
 		};
 		list.onCancel = () => {
@@ -339,6 +492,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	};
 
 	const showHelpOverlay = (): void => {
+		trace("runtime", "tui.overlay.open", { overlay: "help" });
 		const overlay = new DismissibleOverlay(
 			[
 				"my-agent TUI",
@@ -378,6 +532,10 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		}
 		if (trimmed === "/sessions") {
 			await openSessionSelector();
+			return;
+		}
+		if (trimmed === "/tree") {
+			openTreeSelector();
 			return;
 		}
 		if (trimmed === "/login") {

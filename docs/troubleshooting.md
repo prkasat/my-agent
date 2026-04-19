@@ -55,3 +55,11 @@ Use `--replay` to inspect what is still recoverable.
 ## External helper tools
 
 If helper binaries are missing or offline mode is enabled, tool discovery may fall back to system binaries or fail with a clear error.
+
+## Debugging loop
+
+```bash
+node packages/cli/dist/main.js --doctor
+node packages/cli/dist/main.js --trace "say hello"
+node packages/cli/dist/main.js --profile "say hello"
+```

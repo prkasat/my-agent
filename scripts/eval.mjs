@@ -69,13 +69,22 @@ async function main() {
 			.filter((block) => block.type === "text")
 			.map((block) => block.text)
 			.join(" ");
-		const passed = task.expectedContains.every((snippet) => assistantText.includes(snippet));
+		const missingSnippets = task.expectedContains.filter((snippet) => !assistantText.includes(snippet));
+		const passed = missingSnippets.length === 0;
 		results.push({
 			id: task.id,
 			type: task.type,
+			difficulty: task.difficulty ?? "unspecified",
 			passed,
 			durationMs,
+			firstTokenLatencyMs: result.profile.firstTokenLatencyMs,
 			expectedContains: task.expectedContains,
+			inputTokens: result.profile.costs.totalInputTokens,
+			outputTokens: result.profile.costs.totalOutputTokens,
+			cost: result.profile.costs.totalCost,
+			toolCalls: result.profile.toolCalls.length,
+			compactions: result.profile.compactions.length,
+			failureNotes: missingSnippets,
 			outputPreview: assistantText.slice(0, 160),
 		});
 	}

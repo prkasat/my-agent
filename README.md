@@ -13,7 +13,7 @@ Private-first terminal agent for coding and task-specific workflows.
 - runtime permission checks for risky tools
 - trusted local extensions with tools, commands, and middleware
 - prompt templates, skills, packages, and themes
-- structured tracing and mock eval harness
+- structured tracing, replay, profiling, and mock eval harness
 - reusable TUI component/theme layer built on `@mariozechner/pi-tui`
 
 ## Quick start
@@ -53,6 +53,7 @@ node packages/cli/dist/main.js --list-models
 node packages/cli/dist/main.js --safe-mode
 node packages/cli/dist/main.js --tui
 node packages/cli/dist/main.js --trace
+node packages/cli/dist/main.js --profile "say hello"
 node packages/cli/dist/main.js --replay <file>
 node packages/cli/dist/main.js --rpc
 npm run eval:mock
@@ -66,6 +67,16 @@ npm run eval:mock
 
 `openai-codex` is intentionally distinct from generic OpenAI Platform API usage.
 
+## What “parity with pi-mono where it matters” means here
+
+For this repo, parity means:
+
+- practical daily-driver terminal UX
+- coherent login and model switching
+- reliable session/tree/export/replay flows
+- strong interactive safety and debugging
+- an extension/resource platform that can grow beyond coding-only use
+
 ## Resource model
 
 - prompts → lightweight reusable prompt files
@@ -78,6 +89,7 @@ Examples:
 
 - `examples/packages/research-bundle/`
 - `examples/extensions/`
+- `examples/extensions/starter.mjs`
 - `examples/prompts/generate-extension.md`
 
 ## Docs
@@ -89,13 +101,21 @@ Key docs:
 - `docs/quickstart.md`
 - `docs/providers.md`
 - `docs/settings.md`
+- `docs/migrations.md`
 - `docs/sessions.md`
 - `docs/extensions.md`
+- `docs/extensions-api-reference.md`
 - `docs/skills.md`
 - `docs/packages.md`
 - `docs/themes.md`
+- `docs/tui.md`
+- `docs/ui-state.md`
+- `docs/prompt-behavior.md`
 - `docs/rpc.md`
 - `docs/tracing-replay.md`
+- `docs/performance.md`
+- `docs/evals.md`
+- `docs/failure-injection.md`
 - `docs/security.md`
 - `docs/architecture.md`
 

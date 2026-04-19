@@ -26,9 +26,16 @@ Risky tools are protected by the runtime permission checker.
 
 ### Logging and tracing
 
-Structured traces and audit-style records are intended to redact sensitive values before persistence.
+Structured traces and audit-style records redact sensitive values before persistence where possible.
 Still treat local logs as sensitive.
+
+Audit logging can be enabled in embedded/private automation contexts through the exported core audit logger helpers.
 
 ## Safe mode
 
 Use `--safe-mode` to bypass package extension entries and extension loading when debugging startup issues.
+
+## Helper binaries
+
+Downloaded helper binaries use pinned versions and checksum verification where checksums are known.
+Offline mode is respected through `MY_AGENT_OFFLINE=1`.

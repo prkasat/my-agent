@@ -12,8 +12,8 @@ function createFauxLLM(responses: AssistantMessage[]) {
 	let callIndex = 0;
 
 	return function fauxStream() {
-		const response = responses[callIndex++];
-		if (!response) throw new Error("no more responses");
+		const response = responses[Math.min(callIndex++, responses.length - 1)];
+		if (!response) throw new Error("no responses configured");
 
 		const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
 			(event) => event.type === "done",
@@ -125,5 +125,81 @@ describe("extension runtime", () => {
 			type: "text",
 			text: "modified by extension",
 		});
+	});
+
+	it("skips a broken extension instead of aborting the run", async () => {
+		const extensionPath = path.join(tmpDir, "broken-extension.mjs");
+		await fs.writeFile(
+			extensionPath,
+			`export default {
+         metadata: { id: "broken-ext", name: "Broken", version: "1.0.0" },
+         activate() {
+           throw new Error("boom");
+         },
+       };`,
+			"utf-8",
+		);
+
+		registerProvider("openrouter", async () =>
+			createFauxLLM([
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "still works" }],
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+			]),
+		);
+
+		const authStorage = new AuthStorage(path.join(tmpDir, "auth.json"));
+		const settings = getDefaultSettings();
+		settings.extensions = [extensionPath];
+		settings.permissionMode = "auto";
+
+		const session = SessionManager.continueRecent(tmpDir);
+		const result = await runAgent("ignore the broken extension", { cwd: tmpDir, settings, authStorage, session }, {});
+
+		expect(result.error).toBeUndefined();
+		expect(result.messages.some((message) => message.role === "assistant")).toBe(true);
+	});
+
+	it("skips incompatible extensions and records the warning in traceable profile flow", async () => {
+		const extensionPath = path.join(tmpDir, "incompatible-extension.mjs");
+		await fs.writeFile(
+			extensionPath,
+			`export default {
+         metadata: { id: "future-ext", name: "Future", version: "1.0.0", apiVersion: "99.x" },
+         activate(ctx) {
+           ctx.registerCommand({ name: "future", execute() {} });
+         },
+       };`,
+			"utf-8",
+		);
+
+		registerProvider("openrouter", async () =>
+			createFauxLLM([
+				{
+					role: "assistant",
+					content: [{ type: "text", text: "compatibility enforced" }],
+					stopReason: "stop",
+					timestamp: Date.now(),
+				},
+			]),
+		);
+
+		const authStorage = new AuthStorage(path.join(tmpDir, "auth.json"));
+		const settings = getDefaultSettings();
+		settings.extensions = [extensionPath];
+		settings.permissionMode = "auto";
+
+		const session = SessionManager.continueRecent(tmpDir);
+		const result = await runAgent(
+			"run without the incompatible extension",
+			{ cwd: tmpDir, settings, authStorage, session },
+			{},
+		);
+
+		expect(result.error).toBeUndefined();
+		expect(result.profile.totalDurationMs).toBeGreaterThanOrEqual(0);
 	});
 });

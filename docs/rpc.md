@@ -10,8 +10,6 @@ node packages/cli/dist/main.js --rpc
 
 ## Ready event
 
-The server emits:
-
 ```json
 {"event":"ready","data":{"protocolVersion":"1.0","methods":["prompt","abort","getState","listModels"]}}
 ```
@@ -24,13 +22,13 @@ The server emits:
 {"id":"1","method":"prompt","params":{"prompt":"summarize this repo"}}
 ```
 
-Response:
+Initial response:
 
 ```json
 {"id":"1","result":{"status":"started","requestId":"1"}}
 ```
 
-Events:
+Prompt events:
 
 - `prompt.started`
 - `prompt.text`
@@ -47,11 +45,30 @@ Events:
 
 ### `getState`
 
-Returns cwd, session info, configured/resolved model, active prompts, and resource counts.
+Returns:
+
+- cwd
+- session id/path
+- configured/resolved model
+- active prompt ids
+- resource counts
+- safe-mode flag
+- protocol version
 
 ### `listModels`
 
 Returns auth-aware model availability.
+
+## Profiling data
+
+`prompt.completed` includes runtime profile data:
+
+- total duration
+- first-token latency
+- cost/token totals
+- tool durations
+- compaction counts
+- memory snapshot
 
 ## Permission behavior
 
@@ -63,3 +80,4 @@ Use `permissionMode: "auto"` only in trusted local automation contexts.
 - protocol is explicit via `protocolVersion`
 - additive fields are preferred
 - breaking changes should bump the protocol version
+- host integrations should ignore unknown fields to stay forward-compatible

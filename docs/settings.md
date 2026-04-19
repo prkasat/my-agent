@@ -6,7 +6,7 @@ Settings are merged in this order:
 2. `~/.my-agent/settings.json`
 3. `<project>/.my-agent/settings.json`
 
-## Current settings shape
+## Current shape
 
 ```json
 {
@@ -34,16 +34,58 @@ Settings are merged in this order:
 }
 ```
 
-## Notes
+## Field guide
 
-- `provider` is normalized from `model` when the model is known.
-- `extensions`, `packages`, and `skills` accept local paths.
-- `theme` is a theme name from the loaded theme registry or a path resolved explicitly.
-- `permissionMode` values:
-  - `ask`
-  - `auto`
-  - `strict`
+| Field | Meaning |
+|---|---|
+| `model` | configured model key |
+| `provider` | normalized from model when possible |
+| `thinkingLevel` | reasoning intensity hint for supported providers |
+| `compaction.*` | context-management policy |
+| `retry.*` | transient-provider retry policy |
+| `extensions` | local extension entries |
+| `packages` | local package entries |
+| `skills` | extra skill files/directories |
+| `theme` | TUI theme name or explicit path |
+| `enabledModels` | allowlist for visible models |
+| `maxTurns` | runaway-loop guardrail |
+| `permissionMode` | `ask`, `auto`, or `strict` |
 
-## Persisting changes from the REPL
+## Important normalization behavior
 
-`/model <name>` and `/theme <name>` persist to the project settings file.
+The loader repairs provider/model coherence when the model is known:
+
+```ts
+function normalizeSettings(settings: Settings): Settings {
+  try {
+    const model = getModel(settings.model);
+    return { ...settings, provider: model.provider };
+  } catch {
+    return settings;
+  }
+}
+```
+
+That means persisted settings can keep their provider/model story aligned even if the provider field was stale.
+
+## Persisting changes from the app
+
+- `/model <name>` persists to project settings
+- `/theme <name>` persists to project settings
+
+## Corruption recovery
+
+If a settings file contains invalid JSON:
+
+- it is backed up to `settings.json.corrupt-<timestamp>`
+- defaults continue to load
+
+## Migration policy summary
+
+Settings are currently additive-first:
+
+- unknown keys are tolerated
+- defaults fill missing fields
+- future breaking structural changes should introduce an explicit settings version
+
+See `migrations.md` for the full policy.

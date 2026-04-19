@@ -2,10 +2,64 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Chalk } from "chalk";
-import { type AgentTheme, createTheme, defaultAgentTheme } from "./theme.js";
+import {
+	type AgentTheme,
+	createTheme,
+	defaultAgentTheme,
+	defaultAssistantMessageTheme,
+	defaultDiffViewerTheme,
+	defaultFooterTheme,
+	defaultUserMessageTheme,
+} from "./theme.js";
 
 const chalk = new Chalk({ level: 3 });
 const SUPPORTED_THEME_FILES = /\.(json|mjs|cjs|js)$/i;
+
+const BUILTIN_THEMES: Array<{ name: string; description: string; theme: AgentTheme }> = [
+	{
+		name: "default",
+		description: "Built-in default theme",
+		theme: defaultAgentTheme,
+	},
+	{
+		name: "dark",
+		description: "Built-in dark theme",
+		theme: createTheme({
+			footer: {
+				...defaultFooterTheme,
+				background: (text: string) => chalk.bgBlackBright.white(text),
+				model: (text: string) => chalk.bold.white(text),
+				mode: (text: string) => chalk.cyanBright(text),
+			},
+			assistantMessage: {
+				...defaultAssistantMessageTheme,
+				label: (text: string) => chalk.bold.greenBright(text),
+			},
+			userMessage: {
+				...defaultUserMessageTheme,
+				label: (text: string) => chalk.bold.blueBright(text),
+			},
+		}),
+	},
+	{
+		name: "light",
+		description: "Built-in light theme",
+		theme: createTheme({
+			footer: {
+				...defaultFooterTheme,
+				background: (text: string) => chalk.bgWhite.black(text),
+				model: (text: string) => chalk.bold.black(text),
+				mode: (text: string) => chalk.blue(text),
+				separator: (text: string) => chalk.gray(text),
+			},
+			diffViewer: {
+				...defaultDiffViewerTheme,
+				header: (text: string) => chalk.bold.blue(text),
+				hunkHeader: (text: string) => chalk.blue(text),
+			},
+		}),
+	},
+];
 
 export interface LoadedTheme {
 	name: string;
@@ -30,12 +84,14 @@ export async function loadThemes(config: LoadThemesConfig): Promise<LoadThemesRe
 	const themes = new Map<string, LoadedTheme>();
 	const warnings: string[] = [];
 
-	themes.set("default", {
-		name: "default",
-		description: "Built-in default theme",
-		source: "builtin",
-		theme: defaultAgentTheme,
-	});
+	for (const builtin of BUILTIN_THEMES) {
+		themes.set(builtin.name, {
+			name: builtin.name,
+			description: builtin.description,
+			source: "builtin",
+			theme: builtin.theme,
+		});
+	}
 
 	for (const dir of [path.join(config.cwd, ".my-agent", "themes")]) {
 		await loadThemeEntry(dir, "project", themes, warnings);

@@ -188,6 +188,7 @@ export type AgentEvent =
 	| { type: "message_start"; message: Partial<AssistantMessage> }
 	| { type: "message_update"; event: AssistantMessageEvent }
 	| { type: "message_end"; message: AssistantMessage }
+	| { type: "assistant_retry"; attempt: number; maxRetries: number; delayMs: number }
 	| { type: "tool_execution_start"; toolCallId: string; toolName: string; args: unknown }
 	| { type: "tool_execution_update"; toolCallId: string; update: Partial<AgentToolResult> }
 	| { type: "tool_execution_end"; toolCallId: string; result: AgentToolResult; isError: boolean }

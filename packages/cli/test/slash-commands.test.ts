@@ -8,6 +8,8 @@ function makeSession(overrides: Partial<SlashSessionManager> = {}): SlashSession
 		getCwd: () => "/test/cwd",
 		forkSession: () => "/sessions/new.jsonl",
 		getSessionFile: () => "/sessions/current.jsonl",
+		getLeafId: () => null,
+		branch: () => {},
 		listSessionsForCwd: async () => [],
 		...overrides,
 	};
@@ -137,6 +139,7 @@ describe("handleSlashCommand", () => {
 	it("/tree shows the current session tree when available", async () => {
 		const result = await handleSlashCommand("/tree", {
 			...makeContext({
+				getLeafId: () => "child",
 				getTree: () => [
 					{
 						entry: {
@@ -164,6 +167,51 @@ describe("handleSlashCommand", () => {
 		});
 		expect(result?.output).toMatch(/root/);
 		expect(result?.output).toMatch(/child/);
+		expect(result?.output).toMatch(/current/);
+	});
+
+	it("/tree switch moves branch context when supported", async () => {
+		let selectedEntryId = "";
+		const result = await handleSlashCommand("/tree switch branch-tip", {
+			...makeContext({
+				branch: (entryId) => {
+					selectedEntryId = entryId;
+				},
+			}),
+		});
+		expect(selectedEntryId).toBe("branch-tip");
+		expect(result?.output).toMatch(/branch-tip/);
+	});
+
+	it("/login lists available providers", async () => {
+		const result = await handleSlashCommand("/login", {
+			...makeContext(),
+			authStorage: {
+				getOAuthProviders: () => [
+					{ id: "anthropic", name: "Anthropic" },
+					{ id: "openai-codex", name: "OpenAI Codex" },
+				],
+				get: async () => undefined,
+				login: async () => {},
+			} as any,
+		});
+		expect(result?.output).toMatch(/anthropic/);
+		expect(result?.output).toMatch(/openai-codex/);
+	});
+
+	it("/logout handles provider logout", async () => {
+		let loggedOut = false;
+		const result = await handleSlashCommand("/logout anthropic", {
+			...makeContext(),
+			authStorage: {
+				get: async () => ({ type: "oauth" }),
+				logout: async () => {
+					loggedOut = true;
+				},
+			} as any,
+		});
+		expect(loggedOut).toBe(true);
+		expect(result?.output).toMatch(/Logged out/i);
 	});
 
 	it("/extensions reports configured extension paths", async () => {

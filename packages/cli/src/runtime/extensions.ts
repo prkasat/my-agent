@@ -3,10 +3,12 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
 	type AgentContext,
+	EXTENSION_API_VERSION,
 	type ExtensionActions,
 	type ExtensionDefinition,
 	ExtensionRunner,
 	type ExtensionUI,
+	isExtensionApiCompatible,
 	noopActions,
 	noopUI,
 } from "@my-agent/core";
@@ -16,6 +18,7 @@ export interface LoadedExtensions {
 	runner: ExtensionRunner;
 	loadedIds: string[];
 	entries: string[];
+	warnings: string[];
 	dispose: () => Promise<void>;
 }
 
@@ -56,16 +59,31 @@ export async function loadExtensionsForRun(options: {
 	});
 
 	const loadedIds: string[] = [];
+	const warnings: string[] = [];
 	for (const entry of entries) {
-		const definition = await importExtensionDefinition(entry);
-		await runner.load(definition);
-		loadedIds.push(definition.metadata.id);
+		try {
+			const definition = await importExtensionDefinition(entry);
+			const declaredApiVersion = definition.metadata.apiVersion;
+			if (declaredApiVersion && !isExtensionApiCompatible(declaredApiVersion, EXTENSION_API_VERSION)) {
+				const warning = `Skipping extension ${definition.metadata.id}: apiVersion ${declaredApiVersion} is incompatible with host ${EXTENSION_API_VERSION}`;
+				warnings.push(warning);
+				(options.log ?? console).warn(warning, { entry });
+				continue;
+			}
+			await runner.load(definition);
+			loadedIds.push(definition.metadata.id);
+		} catch (error) {
+			const warning = `Skipping extension ${entry}: ${error instanceof Error ? error.message : String(error)}`;
+			warnings.push(warning);
+			(options.log ?? console).warn(warning);
+		}
 	}
 
 	return {
 		runner,
 		loadedIds,
 		entries,
+		warnings,
 		dispose: async () => {
 			for (const id of [...loadedIds].reverse()) {
 				await runner.unload(id);
@@ -140,6 +158,50 @@ export async function importExtensionDefinition(entry: string): Promise<Extensio
 	return definition;
 }
 
+export async function inspectExtensions(options: {
+	cwd: string;
+	globalDir: string;
+	settings: Settings;
+	sessionId: string;
+	extraEntries?: string[];
+}): Promise<{
+	entries: string[];
+	loadedIds: string[];
+	warnings: string[];
+	commands: Array<{ name: string; extensionId: string }>;
+	tools: string[];
+}> {
+	const runtime = await loadExtensionsForRun({
+		cwd: options.cwd,
+		globalDir: options.globalDir,
+		settings: options.settings,
+		sessionId: options.sessionId,
+		extraEntries: options.extraEntries,
+		getAgentContext: () => null,
+		ui: noopUI,
+		actions: noopActions,
+	});
+
+	if (!runtime) {
+		return { entries: [], loadedIds: [], warnings: [], commands: [], tools: [] };
+	}
+
+	try {
+		return {
+			entries: runtime.entries,
+			loadedIds: runtime.loadedIds,
+			warnings: runtime.warnings,
+			commands: runtime.runner.getAllCommands().map((command) => ({
+				name: command.name,
+				extensionId: command.extensionId,
+			})),
+			tools: runtime.runner.getAllTools().map((tool) => tool.name),
+		};
+	} finally {
+		await runtime.dispose();
+	}
+}
+
 export async function runExtensionCommand(options: {
 	cwd: string;
 	globalDir: string;
@@ -182,6 +244,10 @@ export async function runExtensionCommand(options: {
 
 	if (!runtime) {
 		return { matched: false, output, prompts };
+	}
+
+	if (runtime.warnings.length > 0) {
+		output.push(...runtime.warnings);
 	}
 
 	try {

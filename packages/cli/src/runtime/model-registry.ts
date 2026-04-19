@@ -85,6 +85,21 @@ export async function resolveConfiguredModel(
 	);
 }
 
+export function formatModelResolutionError(error: unknown): string {
+	const message = error instanceof Error ? error.message : String(error);
+	if (!message.includes("No authenticated models are available")) {
+		return message;
+	}
+	return [
+		`No model is ready yet: ${message}`,
+		"Next steps:",
+		"  - OpenRouter: export OPENROUTER_API_KEY=...",
+		"  - Anthropic: /login anthropic",
+		"  - OpenAI Codex: /login openai-codex",
+		"  - Choose a model after auth: /model or my-agent --list-models",
+	].join("\n");
+}
+
 export function getModelProviderForKey(key: string): string | undefined {
 	try {
 		return getModel(key).provider;

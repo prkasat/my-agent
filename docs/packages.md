@@ -2,12 +2,16 @@
 
 Packages bundle reusable resources together.
 
-A package can provide:
+## Mental model
 
-- prompts
-- skills
-- extensions
-- themes
+```mermaid
+flowchart TD
+    Package[my-agent.package.json]
+    Package --> Prompts[prompts]
+    Package --> Skills[skills]
+    Package --> Extensions[extensions]
+    Package --> Themes[themes]
+```
 
 ## Manifest
 
@@ -32,14 +36,15 @@ Packages are discovered from:
 - `.my-agent/packages/`
 - `~/.my-agent/packages/`
 
-## REPL commands
-
-- `/packages`
-
 ## Failure handling
 
 Package load failures are downgraded into warnings where possible.
 Broken packages should not prevent the whole CLI from starting.
+
+## REPL / TUI visibility
+
+- `/packages`
+- package-provided extensions participate in runtime loading unless `--safe-mode` is enabled
 
 ## Example
 

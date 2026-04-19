@@ -9,7 +9,7 @@ import type {
 import { SessionManager } from "@my-agent/core";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
-import { type RuntimeResult, runAgent } from "../runtime/agent-runtime.js";
+import { type RuntimeResult, formatRuntimeProfile, runAgent } from "../runtime/agent-runtime.js";
 import { listModelAvailability, resolveConfiguredModel } from "../runtime/model-registry.js";
 import { trace } from "../runtime/trace.js";
 
@@ -159,11 +159,21 @@ export function createRpcServer(send: (message: RpcResponse | RpcEvent) => void,
 					onThinking: (text) => {
 						send({ event: "prompt.thinking", data: { requestId: command.id, text } });
 					},
-					onToolStart: (toolName, toolCallId) => {
-						send({ event: "tool.start", data: { requestId: command.id, toolName, toolCallId } });
+					onToolStart: (toolName, toolCallId, args) => {
+						send({ event: "tool.start", data: { requestId: command.id, toolName, toolCallId, args } });
 					},
-					onToolEnd: (toolName, isError) => {
-						send({ event: "tool.end", data: { requestId: command.id, toolName, isError } });
+					onToolEnd: (toolName, isError, info) => {
+						send({
+							event: "tool.end",
+							data: {
+								requestId: command.id,
+								toolName,
+								isError,
+								toolCallId: info.toolCallId,
+								durationMs: info.durationMs,
+								result: info.result,
+							},
+						});
 					},
 				},
 			);
@@ -175,7 +185,12 @@ export function createRpcServer(send: (message: RpcResponse | RpcEvent) => void,
 			return;
 		}
 
-		trace("rpc", "prompt.completed", { requestId: command.id, aborted: result.aborted, error: result.error });
+		trace("rpc", "prompt.completed", {
+			requestId: command.id,
+			aborted: result.aborted,
+			error: result.error,
+			profile: result.profile,
+		});
 		send({
 			event: "prompt.completed",
 			data: {
@@ -186,6 +201,8 @@ export function createRpcServer(send: (message: RpcResponse | RpcEvent) => void,
 				messageCount: result.messages.length,
 				sessionId: session.getSessionId(),
 				sessionPath: session.getSessionFile?.(),
+				profile: result.profile,
+				profileSummary: formatRuntimeProfile(result.profile),
 			},
 		});
 		activePrompts.delete(command.id);

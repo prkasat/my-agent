@@ -2,14 +2,15 @@
 
 An extension exports a default `ExtensionDefinition`.
 
-## Minimal shape
+## Minimal extension
 
 ```js
 export default {
   metadata: {
     id: "my-extension",
     name: "My Extension",
-    version: "1.0.0"
+    version: "1.0.0",
+    apiVersion: "^1.0.0"
   },
   activate(ctx) {
     // register handlers, commands, tools, middleware
@@ -17,9 +18,46 @@ export default {
 }
 ```
 
-## What `ctx` exposes
+## Component view
 
-### Registration
+```mermaid
+flowchart TD
+    Definition[extension definition]
+    Runner[ExtensionRunner]
+    Context[ExtensionContext]
+    Storage[storage]
+    UI[ui adapter]
+    Actions[actions adapter]
+    Agent[agent context snapshot]
+
+    Definition --> Runner
+    Runner --> Context
+    Context --> Storage
+    Context --> UI
+    Context --> Actions
+    Context --> Agent
+```
+
+## `metadata`
+
+Common fields:
+
+```js
+metadata: {
+  id: "git-tools",
+  name: "Git Tools",
+  version: "1.0.0",
+  apiVersion: "^1.0.0",
+  description: "Helpful git workflows",
+  requires: ["other-extension"],
+  hotReloadable: true,
+  failureMode: "continue"
+}
+```
+
+## `ctx` surface
+
+### Registration APIs
 
 - `ctx.on(event, handler)`
 - `ctx.onAny(handler)`
@@ -53,7 +91,7 @@ export default {
 
 ## Tool interception
 
-Return one of:
+For `tool_execution_start`, return one of:
 
 ```js
 { action: "allow" }
@@ -61,10 +99,85 @@ Return one of:
 { action: "block", reason: "..." }
 ```
 
+Example:
+
+```js
+ctx.on("tool_execution_start", (event) => {
+  if (event.toolName === "bash") {
+    return { action: "block", reason: "bash disabled in this workflow" };
+  }
+});
+```
+
 ## Command pattern
 
-Use `ctx.actions.sendMessage(...)` when a slash command should turn into an agent prompt.
+When a slash command should become an agent prompt, use `ctx.actions.sendMessage(...)`.
 
-## Starter prompt
+```js
+ctx.registerCommand({
+  name: "research",
+  async execute(args, ctx) {
+    ctx.actions.sendMessage(`Research this topic deeply: ${args}`);
+  }
+});
+```
 
-See `examples/prompts/generate-extension.md`.
+## Tool pattern
+
+```js
+import { Type } from "@sinclair/typebox";
+
+ctx.registerTool({
+  name: "echo_ext",
+  description: "Echo a value",
+  parameters: Type.Object({ value: Type.String() }),
+  async execute(_id, params) {
+    return { content: [{ type: "text", text: params.value }] };
+  }
+});
+```
+
+## Middleware pattern
+
+```js
+ctx.use(async (toolCtx, next) => {
+  ctx.log.info(`tool -> ${toolCtx.tool.name}`);
+  return await next(toolCtx.args);
+});
+```
+
+## Config schema pattern
+
+```js
+import { Type } from "@sinclair/typebox";
+
+export default {
+  metadata: { id: "demo", name: "Demo", version: "1.0.0", apiVersion: "^1.0.0" },
+  config: {
+    schema: Type.Object({ label: Type.String() }),
+    defaults: { label: "demo" }
+  },
+  activate(ctx) {
+    ctx.log.info(ctx.config.label);
+  }
+};
+```
+
+## Error handling
+
+- incompatible API versions are skipped before activation
+- activation failures are downgraded into warnings by the CLI runtime path
+- event/middleware failures obey the extension's `failureMode`
+
+## Best practices
+
+- keep `activate()` small
+- start command-only, then add tools, then middleware
+- prefer explicit `apiVersion`
+- use tracing while authoring
+- document any required local dependencies clearly
+
+## Starter prompt + template
+
+- `examples/prompts/generate-extension.md`
+- `examples/extensions/starter.mjs`

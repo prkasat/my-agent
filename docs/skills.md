@@ -4,18 +4,25 @@ Skills are lightweight task-specific prompt resources.
 
 They are intentionally simpler than extensions.
 
-## What a skill is
+## Mental model
 
-A skill is a local file that defines:
+```mermaid
+flowchart LR
+    User[/skill args/] --> Skill[skill definition]
+    Skill --> Expansion[prompt expansion]
+    Expansion --> Runtime[normal agent runtime]
+```
 
-- a command name
-- a description
-- a prompt body
+## What a skill defines
+
+- command name
+- description
+- prompt body
 - optional aliases
 
 ## Discovery
 
-Skills are loaded from:
+Skills load from:
 
 - `.my-agent/skills/`
 - `~/.my-agent/skills/`
@@ -58,7 +65,7 @@ Supported substitutions:
 - `${@:N}`
 - `${@:N:L}`
 
-## REPL commands
+## REPL / TUI usage
 
 - `/skills`
 - `/<skill-name> ...`

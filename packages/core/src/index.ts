@@ -218,6 +218,7 @@ export {
 	createMockActions,
 	activateForTest,
 } from "./extensions/index.js";
+export { EXTENSION_API_VERSION, isExtensionApiCompatible } from "./extensions/version.js";
 
 export type {
 	ExtensionEvent,
