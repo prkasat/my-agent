@@ -131,9 +131,15 @@ export const COMMON_MODELS: ModelInfo[] = [
 		description: "Most capable Claude subscription model",
 	},
 	{
-		id: "gpt-5.1-codex",
-		name: "GPT-5.1 Codex",
+		id: "gpt-5.4",
+		name: "GPT-5.4",
 		provider: "openai-codex",
-		description: "ChatGPT subscription model for coding tasks",
+		description: "Latest ChatGPT subscription model for coding tasks",
+	},
+	{
+		id: "gpt-5.4-mini",
+		name: "GPT-5.4 Mini",
+		provider: "openai-codex",
+		description: "Smaller ChatGPT subscription model with the current pi-mono catalog",
 	},
 ];

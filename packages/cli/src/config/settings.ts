@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { getModel } from "@my-agent/ai";
+import { getModel, normalizeModelKey } from "@my-agent/ai";
 import { trace } from "../runtime/trace.js";
 
 /**
@@ -148,9 +148,11 @@ export async function saveSettings(
 
 function normalizeSettings(settings: Settings): Settings {
 	try {
-		const model = getModel(settings.model);
+		const modelKey = normalizeModelKey(settings.model);
+		const model = getModel(modelKey);
 		return {
 			...settings,
+			model: modelKey,
 			provider: model.provider,
 		};
 	} catch {

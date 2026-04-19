@@ -61,6 +61,52 @@ describe("model registry", () => {
 		expect(resolved.key).toBe("claude-sonnet-4");
 	});
 
+	it("lists the newer pi-mono openai-codex catalog after OAuth login", async () => {
+		const authStorage = new AuthStorage(path.join(tmpDir, "auth.json"));
+		await authStorage.set("openai-codex", {
+			type: "oauth",
+			accessToken: "openai-token",
+			refreshToken: "openai-refresh",
+			expiresAt: Date.now() + 60_000,
+		});
+
+		const availability = await listModelAvailability(authStorage);
+		const openaiCodexKeys = availability
+			.filter((entry) => entry.model.provider === "openai-codex" && entry.available)
+			.map((entry) => entry.key);
+
+		expect(openaiCodexKeys).toEqual(
+			expect.arrayContaining([
+				"gpt-5.1",
+				"gpt-5.1-codex-max",
+				"gpt-5.1-codex-mini",
+				"gpt-5.2",
+				"gpt-5.2-codex",
+				"gpt-5.3-codex",
+				"gpt-5.3-codex-spark",
+				"gpt-5.4",
+				"gpt-5.4-mini",
+			]),
+		);
+	});
+
+	it("prefers gpt-5.4 as the openai-codex fallback like pi-mono", async () => {
+		const authStorage = new AuthStorage(path.join(tmpDir, "auth.json"));
+		await authStorage.set("openai-codex", {
+			type: "oauth",
+			accessToken: "openai-token",
+			refreshToken: "openai-refresh",
+			expiresAt: Date.now() + 60_000,
+		});
+
+		const settings = getDefaultSettings();
+		settings.model = "openrouter-auto";
+
+		const resolved = await resolveConfiguredModel(settings, authStorage);
+		expect(resolved.model.provider).toBe("openai-codex");
+		expect(resolved.key).toBe("gpt-5.4");
+	});
+
 	it("throws a helpful error when no authenticated models are available", async () => {
 		const authStorage = new AuthStorage(path.join(tmpDir, "auth.json"));
 		const settings = getDefaultSettings();

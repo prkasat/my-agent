@@ -81,6 +81,16 @@ describe("Settings", () => {
 			const files = await fs.readdir(userDir);
 			expect(files.some((file) => file.startsWith("settings.json.corrupt-"))).toBe(true);
 		});
+
+		it("normalizes legacy model aliases to the canonical pi-mono catalog key", async () => {
+			const userDir = path.join(tmpDir, ".my-agent");
+			await fs.mkdir(userDir, { recursive: true });
+			await fs.writeFile(path.join(userDir, "settings.json"), JSON.stringify({ model: "gpt-5.1-codex" }));
+
+			const settings = await loadSettings(tmpDir);
+			expect(settings.model).toBe("gpt-5.1");
+			expect(settings.provider).toBe("openai-codex");
+		});
 	});
 
 	describe("saveSettings", () => {

@@ -1,4 +1,4 @@
-import { type Model, getModel, models } from "@my-agent/ai";
+import { type Model, getModel, models, normalizeModelKey } from "@my-agent/ai";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 
@@ -18,7 +18,17 @@ const PROVIDER_AUTH_MODE: Record<string, ProviderAuthMode> = {
 	"openai-codex": "oauth",
 };
 
-const FALLBACK_MODEL_ORDER = ["openrouter-auto", "qwen3.6-plus", "claude-sonnet-4", "gpt-5.1-codex", "trinity-large"];
+const FALLBACK_MODEL_ORDER = [
+	"openrouter-auto",
+	"qwen3.6-plus",
+	"claude-sonnet-4",
+	"gpt-5.4",
+	"gpt-5.4-mini",
+	"gpt-5.3-codex",
+	"gpt-5.2-codex",
+	"gpt-5.1",
+	"trinity-large",
+];
 
 export function getProviderAuthMode(provider: string): ProviderAuthMode {
 	return PROVIDER_AUTH_MODE[provider] ?? "unknown";
@@ -67,7 +77,8 @@ export async function resolveConfiguredModel(
 	authStorage: AuthStorage,
 ): Promise<{ key: string; model: Model; availableModels: ModelAvailability[] }> {
 	const availableModels = await listModelAvailability(authStorage);
-	const configured = availableModels.find((entry) => entry.key === settings.model);
+	const configuredKey = normalizeModelKey(settings.model);
+	const configured = availableModels.find((entry) => entry.key === configuredKey);
 	if (configured?.available) {
 		return { key: configured.key, model: configured.model, availableModels };
 	}

@@ -10,8 +10,15 @@
 | `claude-sonnet-4` | anthropic | oauth | yes | yes | yes | yes | 200k | subscription-bound | balanced Claude option |
 | `claude-opus-4` | anthropic | oauth | yes | yes | yes | yes | 200k | tighter + expensive | highest-cost Claude option |
 | `claude-haiku-3.5` | anthropic | oauth | yes | yes | yes | no | 200k | looser | lower-cost Claude option |
-| `gpt-5.1-codex` | openai-codex | oauth | yes | yes | provider-dependent | yes | 200k | subscription-bound | ChatGPT/Codex path |
-| `gpt-5.1-codex-mini` | openai-codex | oauth | yes | yes | provider-dependent | yes | 200k | subscription-bound | smaller Codex option |
+| `gpt-5.1` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | pi-mono canonical Codex catalog entry |
+| `gpt-5.1-codex-max` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | higher-end 5.1 Codex variant |
+| `gpt-5.1-codex-mini` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | smaller 5.1 Codex option |
+| `gpt-5.2` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | newer general GPT-5.x subscription model |
+| `gpt-5.2-codex` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | 5.2 Codex variant |
+| `gpt-5.3-codex` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | 5.3 Codex variant |
+| `gpt-5.3-codex-spark` | openai-codex | oauth | yes | yes | provider-dependent | yes | 128k | subscription-bound | text-first Spark variant |
+| `gpt-5.4` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | current pi-mono default for openai-codex |
+| `gpt-5.4-mini` | openai-codex | oauth | yes | yes | provider-dependent | yes | 272k | subscription-bound | smaller current-generation option |
 
 ## Fallback policy
 

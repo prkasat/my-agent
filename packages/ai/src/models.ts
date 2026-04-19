@@ -4,8 +4,12 @@ import type { Model } from "./types.js";
  * Model definitions.
  *
  * Explicit model registry — easy to audit, customize, and reason about.
- * All models below are free-tier on OpenRouter (zero cost).
+ * OpenRouter entries below are the free-tier bootstrap options.
  */
+
+const MODEL_KEY_ALIASES: Record<string, string> = {
+	"gpt-5.1-codex": "gpt-5.1",
+};
 
 export const models: Record<string, Model> = {
 	// OpenRouter free models
@@ -79,32 +83,114 @@ export const models: Record<string, Model> = {
 	},
 
 	// ChatGPT subscription (Codex) models
-	"gpt-5.1-codex": {
-		id: "gpt-5.1-codex",
-		name: "GPT-5.1 Codex",
+	"gpt-5.1": {
+		id: "gpt-5.1",
+		name: "GPT-5.1",
 		provider: "openai-codex",
-		contextWindow: 200_000,
-		maxOutputTokens: 16_384,
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
 		supportsTools: true,
 		supportsStreaming: true,
 		supportsThinking: true,
-		cost: { inputPerMillion: 0, outputPerMillion: 0 },
+		cost: { inputPerMillion: 1.25, outputPerMillion: 10 },
+	},
+	"gpt-5.1-codex-max": {
+		id: "gpt-5.1-codex-max",
+		name: "GPT-5.1 Codex Max",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 1.25, outputPerMillion: 10 },
 	},
 	"gpt-5.1-codex-mini": {
 		id: "gpt-5.1-codex-mini",
 		name: "GPT-5.1 Codex Mini",
 		provider: "openai-codex",
-		contextWindow: 200_000,
-		maxOutputTokens: 16_384,
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 0.25, outputPerMillion: 2 },
+	},
+	"gpt-5.2": {
+		id: "gpt-5.2",
+		name: "GPT-5.2",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 1.75, outputPerMillion: 14 },
+	},
+	"gpt-5.2-codex": {
+		id: "gpt-5.2-codex",
+		name: "GPT-5.2 Codex",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 1.75, outputPerMillion: 14 },
+	},
+	"gpt-5.3-codex": {
+		id: "gpt-5.3-codex",
+		name: "GPT-5.3 Codex",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 1.75, outputPerMillion: 14 },
+	},
+	"gpt-5.3-codex-spark": {
+		id: "gpt-5.3-codex-spark",
+		name: "GPT-5.3 Codex Spark",
+		provider: "openai-codex",
+		contextWindow: 128_000,
+		maxOutputTokens: 128_000,
 		supportsTools: true,
 		supportsStreaming: true,
 		supportsThinking: true,
 		cost: { inputPerMillion: 0, outputPerMillion: 0 },
 	},
+	"gpt-5.4": {
+		id: "gpt-5.4",
+		name: "GPT-5.4",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 2.5, outputPerMillion: 15 },
+	},
+	"gpt-5.4-mini": {
+		id: "gpt-5.4-mini",
+		name: "GPT-5.4 Mini",
+		provider: "openai-codex",
+		contextWindow: 272_000,
+		maxOutputTokens: 128_000,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 0.75, outputPerMillion: 4.5 },
+	},
 };
 
+export function normalizeModelKey(id: string): string {
+	return MODEL_KEY_ALIASES[id] ?? id;
+}
+
 export function getModel(id: string): Model {
-	const model = models[id];
+	const normalizedId = normalizeModelKey(id);
+	const model = models[normalizedId];
 	if (!model) {
 		throw new Error(`Unknown model: "${id}". Available: ${Object.keys(models).join(", ")}`);
 	}

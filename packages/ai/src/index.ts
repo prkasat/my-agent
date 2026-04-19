@@ -28,7 +28,7 @@ export type {
 // Core
 export { EventStream } from "./utils/event-stream.js";
 export { stream, complete, registerProvider, getProvider } from "./providers/registry.js";
-export { models, getModel, getModelsByProvider, calculateCost } from "./models.js";
+export { models, normalizeModelKey, getModel, getModelsByProvider, calculateCost } from "./models.js";
 
 // Mock provider (for testing)
 export { createMockStream } from "./providers/mock.js";

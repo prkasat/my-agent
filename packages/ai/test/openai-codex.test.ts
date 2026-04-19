@@ -3,8 +3,8 @@ import { createOpenAICodexStream } from "../src/providers/openai-codex.js";
 import type { Context, Model } from "../src/types.js";
 
 const model: Model = {
-	id: "gpt-5.1-codex",
-	name: "GPT-5.1 Codex",
+	id: "gpt-5.4",
+	name: "GPT-5.4",
 	provider: "openai-codex",
 	contextWindow: 200_000,
 	maxOutputTokens: 16_384,
