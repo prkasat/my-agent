@@ -37,7 +37,8 @@ export type { MockProviderConfig } from "./providers/mock.js";
 // Anthropic provider factory (for custom registration / configuration)
 export { createAnthropicStream } from "./providers/anthropic.js";
 
-// OpenAI-compatible provider factory (for custom registration)
+// OpenAI-compatible provider factories (for custom registration)
+export { createOpenAICodexStream } from "./providers/openai-codex.js";
 export { createOpenAICompatibleStream } from "./providers/openai-compatible.js";
 
 // Retry utilities

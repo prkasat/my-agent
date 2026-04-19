@@ -11,20 +11,25 @@
 
 import {
   agentLoop,
+  BASE_INSTRUCTIONS,
+  BUILTIN_READ_TOOL_NAMES,
   buildSystemPrompt,
   createAllTools,
+  createPermissionChecker,
+  createAutoCompactorWithPersistence,
   defaultConvertToLlm,
   discoverProjectContext,
-  createAutoCompactorWithPersistence,
   SessionManager,
-  BASE_INSTRUCTIONS,
   type AgentContext,
   type AgentLoopConfig,
   type AgentMessage,
+  type AskDecision,
+  type PermissionAskContext,
 } from "@my-agent/core";
-import { stream, getModel } from "@my-agent/ai";
+import { stream } from "@my-agent/ai";
 import type { Settings } from "../config/settings.js";
 import type { AuthStorage } from "../config/auth-storage.js";
+import { resolveConfiguredModel } from "./model-registry.js";
 
 export interface RuntimeConfig {
   cwd: string;
@@ -32,6 +37,7 @@ export interface RuntimeConfig {
   authStorage: AuthStorage;
   session: SessionManager;
   signal?: AbortSignal;
+  askPermission?: (ctx: PermissionAskContext) => Promise<AskDecision>;
 }
 
 export interface RuntimeResult {
@@ -55,10 +61,10 @@ export async function runAgent(
     onTurnEnd?: () => void;
   } = {},
 ): Promise<RuntimeResult> {
-  const { cwd, settings, authStorage, session, signal } = config;
+  const { cwd, settings, authStorage, session, signal, askPermission } = config;
 
-  // Resolve model from settings
-  const model = getModel(settings.model);
+  // Resolve the configured model against current auth state.
+  const { model } = await resolveConfiguredModel(settings, authStorage);
 
   // Create tools
   const toolsRecord = createAllTools(cwd);
@@ -122,6 +128,12 @@ export async function runAgent(
       })
     : undefined;
 
+  const permissionMode = settings.permissionMode === "strict" ? "deny" : settings.permissionMode;
+  const permissionChecker = createPermissionChecker(permissionMode, {
+    knownReadOnly: new Set(BUILTIN_READ_TOOL_NAMES),
+    onAsk: askPermission,
+  });
+
   // Build config
   const loopConfig: AgentLoopConfig = {
     streamFn: (m, ctx, opts) => stream(m, ctx, opts),
@@ -131,6 +143,7 @@ export async function runAgent(
     transformContext: autoCompactor,
     maxTurns: settings.maxTurns,
     maxRetries: settings.retry.enabled ? settings.retry.maxRetries : 0,
+    beforeToolCall: async (ctx) => permissionChecker.check(ctx),
   };
 
   // Append user message to session

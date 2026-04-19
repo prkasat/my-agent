@@ -31,7 +31,7 @@ export interface ReplDeps {
    * agent's output to stdout itself; the REPL just awaits completion.
    * The optional signal allows cancellation via Ctrl+C.
    */
-  runPrompt: (prompt: string, signal?: AbortSignal) => Promise<void>;
+  runPrompt: (prompt: string, signal?: AbortSignal, promptInput?: (message: string) => Promise<string>) => Promise<void>;
   /** Credential storage for /login and /logout. */
   authStorage?: AuthStorage;
   /** Loaded prompt templates for template expansion. */
@@ -97,7 +97,7 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
         const onSigint = () => controller.abort();
         process.on("SIGINT", onSigint);
         try {
-          await deps.runPrompt(result.prompt, controller.signal);
+          await deps.runPrompt(result.prompt, controller.signal, promptInput);
         } catch (err) {
           writeLine(`error: ${(err as Error).message}`);
         } finally {
@@ -115,7 +115,7 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
     const onSigint = () => controller.abort();
     process.on("SIGINT", onSigint);
     try {
-      await deps.runPrompt(line, controller.signal);
+      await deps.runPrompt(line, controller.signal, promptInput);
     } catch (err) {
       writeLine(`error: ${(err as Error).message}`);
     } finally {

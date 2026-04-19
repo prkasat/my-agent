@@ -116,33 +116,33 @@ function formatModelLabel(model: ModelInfo): string {
  */
 export const COMMON_MODELS: ModelInfo[] = [
 	{
-		id: "claude-sonnet-4-20250514",
+		id: "openrouter-auto",
+		name: "OpenRouter Auto (Free)",
+		provider: "openrouter",
+		description: "Default free model routing via OpenRouter",
+	},
+	{
+		id: "qwen3.6-plus",
+		name: "Qwen 3.6 Plus",
+		provider: "openrouter",
+		description: "Large-context free OpenRouter model",
+	},
+	{
+		id: "claude-sonnet-4",
 		name: "Claude Sonnet 4",
 		provider: "anthropic",
-		description: "Latest Claude Sonnet - fast and capable",
+		description: "Balanced Claude subscription model",
 	},
 	{
-		id: "claude-opus-4-20250514",
+		id: "claude-opus-4",
 		name: "Claude Opus 4",
 		provider: "anthropic",
-		description: "Most capable Claude model",
+		description: "Most capable Claude subscription model",
 	},
 	{
-		id: "claude-haiku-3-5-20241022",
-		name: "Claude Haiku 3.5",
-		provider: "anthropic",
-		description: "Fast and efficient",
-	},
-	{
-		id: "gpt-4o",
-		name: "GPT-4o",
-		provider: "openai",
-		description: "OpenAI's flagship model",
-	},
-	{
-		id: "gpt-4o-mini",
-		name: "GPT-4o Mini",
-		provider: "openai",
-		description: "Smaller, faster GPT-4o",
+		id: "gpt-5.1-codex",
+		name: "GPT-5.1 Codex",
+		provider: "openai-codex",
+		description: "ChatGPT subscription model for coding tasks",
 	},
 ];

@@ -1,5 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { getModel } from "@my-agent/ai";
 
 /**
  * User settings.
@@ -38,8 +39,8 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  model: "claude-sonnet-4-20250514",
-  provider: "anthropic",
+  model: "openrouter-auto",
+  provider: "openrouter",
   thinkingLevel: "medium",
   compaction: {
     enabled: true,
@@ -66,11 +67,13 @@ export async function loadSettings(cwd: string): Promise<Settings> {
   const userSettings = await loadJsonFile(path.join(userDir, "settings.json"));
   const projectSettings = await loadJsonFile(path.join(projectDir, "settings.json"));
 
-  return deepMerge(
-    DEFAULTS as unknown as Record<string, unknown>,
-    userSettings,
-    projectSettings,
-  ) as unknown as Settings;
+  return normalizeSettings(
+    deepMerge(
+      DEFAULTS as unknown as Record<string, unknown>,
+      userSettings,
+      projectSettings,
+    ) as unknown as Settings,
+  );
 }
 
 async function loadJsonFile(filePath: string): Promise<Record<string, unknown>> {
@@ -116,8 +119,22 @@ export async function saveSettings(
     // New file
   }
 
-  const merged = deepMerge(existing, settings as Record<string, unknown>);
+  const merged = normalizeSettings(
+    deepMerge(existing, settings as Record<string, unknown>) as unknown as Settings,
+  );
   await fs.writeFile(filePath, JSON.stringify(merged, null, 2), "utf-8");
+}
+
+function normalizeSettings(settings: Settings): Settings {
+  try {
+    const model = getModel(settings.model);
+    return {
+      ...settings,
+      provider: model.provider,
+    };
+  } catch {
+    return settings;
+  }
 }
 
 export function getDefaultSettings(): Settings {

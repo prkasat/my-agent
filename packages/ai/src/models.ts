@@ -42,6 +42,65 @@ export const models: Record<string, Model> = {
 		supportsThinking: true,
 		cost: { inputPerMillion: 0, outputPerMillion: 0 },
 	},
+
+	// Anthropic subscription models
+	"claude-sonnet-4": {
+		id: "claude-sonnet-4-20250514",
+		name: "Claude Sonnet 4",
+		provider: "anthropic",
+		contextWindow: 200_000,
+		maxOutputTokens: 16_384,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 3, outputPerMillion: 15 },
+	},
+	"claude-opus-4": {
+		id: "claude-opus-4-20250514",
+		name: "Claude Opus 4",
+		provider: "anthropic",
+		contextWindow: 200_000,
+		maxOutputTokens: 16_384,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 15, outputPerMillion: 75 },
+	},
+	"claude-haiku-3.5": {
+		id: "claude-haiku-3-5-20241022",
+		name: "Claude Haiku 3.5",
+		provider: "anthropic",
+		contextWindow: 200_000,
+		maxOutputTokens: 8_192,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: false,
+		cost: { inputPerMillion: 0.8, outputPerMillion: 4 },
+	},
+
+	// ChatGPT subscription (Codex) models
+	"gpt-5.1-codex": {
+		id: "gpt-5.1-codex",
+		name: "GPT-5.1 Codex",
+		provider: "openai-codex",
+		contextWindow: 200_000,
+		maxOutputTokens: 16_384,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 0, outputPerMillion: 0 },
+	},
+	"gpt-5.1-codex-mini": {
+		id: "gpt-5.1-codex-mini",
+		name: "GPT-5.1 Codex Mini",
+		provider: "openai-codex",
+		contextWindow: 200_000,
+		maxOutputTokens: 16_384,
+		supportsTools: true,
+		supportsStreaming: true,
+		supportsThinking: true,
+		cost: { inputPerMillion: 0, outputPerMillion: 0 },
+	},
 };
 
 export function getModel(id: string): Model {

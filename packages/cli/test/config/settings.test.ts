@@ -22,8 +22,8 @@ describe("Settings", () => {
   describe("getDefaultSettings", () => {
     it("returns default values", () => {
       const defaults = getDefaultSettings();
-      expect(defaults.model).toBe("claude-sonnet-4-20250514");
-      expect(defaults.provider).toBe("anthropic");
+      expect(defaults.model).toBe("openrouter-auto");
+      expect(defaults.provider).toBe("openrouter");
       expect(defaults.compaction.enabled).toBe(true);
       expect(defaults.retry.maxRetries).toBe(3);
     });
@@ -32,19 +32,20 @@ describe("Settings", () => {
   describe("loadSettings", () => {
     it("returns defaults when no config files exist", async () => {
       const settings = await loadSettings(tmpDir);
-      expect(settings.model).toBe("claude-sonnet-4-20250514");
+      expect(settings.model).toBe("openrouter-auto");
+      expect(settings.provider).toBe("openrouter");
     });
 
-    it("merges user settings over defaults", async () => {
+    it("merges user settings over defaults and normalizes provider from model", async () => {
       const userDir = path.join(tmpDir, ".my-agent");
       await fs.mkdir(userDir, { recursive: true });
       await fs.writeFile(
         path.join(userDir, "settings.json"),
-        JSON.stringify({ model: "claude-opus-4-20250514" }),
+        JSON.stringify({ model: "claude-opus-4" }),
       );
 
       const settings = await loadSettings(tmpDir);
-      expect(settings.model).toBe("claude-opus-4-20250514");
+      expect(settings.model).toBe("claude-opus-4");
       expect(settings.provider).toBe("anthropic");
     });
 
@@ -56,15 +57,16 @@ describe("Settings", () => {
 
       await fs.writeFile(
         path.join(userDir, "settings.json"),
-        JSON.stringify({ model: "claude-opus-4-20250514" }),
+        JSON.stringify({ model: "claude-opus-4" }),
       );
       await fs.writeFile(
         path.join(projectDir, "settings.json"),
-        JSON.stringify({ model: "gpt-4o" }),
+        JSON.stringify({ model: "qwen3.6-plus" }),
       );
 
       const settings = await loadSettings(path.join(tmpDir, "project"));
-      expect(settings.model).toBe("gpt-4o");
+      expect(settings.model).toBe("qwen3.6-plus");
+      expect(settings.provider).toBe("openrouter");
     });
 
     it("deep merges nested objects", async () => {
@@ -83,45 +85,49 @@ describe("Settings", () => {
 
   describe("saveSettings", () => {
     it("saves user settings", async () => {
-      await saveSettings({ model: "gpt-4o" }, "user");
+      await saveSettings({ model: "qwen3.6-plus" }, "user");
 
       const content = await fs.readFile(
         path.join(tmpDir, ".my-agent", "settings.json"),
         "utf-8",
       );
-      expect(JSON.parse(content).model).toBe("gpt-4o");
+      const saved = JSON.parse(content);
+      expect(saved.model).toBe("qwen3.6-plus");
+      expect(saved.provider).toBe("openrouter");
     });
 
     it("saves project settings", async () => {
       const projectDir = path.join(tmpDir, "project");
       await fs.mkdir(projectDir, { recursive: true });
 
-      await saveSettings({ model: "gpt-4o" }, "project", projectDir);
+      await saveSettings({ model: "claude-sonnet-4" }, "project", projectDir);
 
       const content = await fs.readFile(
         path.join(projectDir, ".my-agent", "settings.json"),
         "utf-8",
       );
-      expect(JSON.parse(content).model).toBe("gpt-4o");
+      const saved = JSON.parse(content);
+      expect(saved.model).toBe("claude-sonnet-4");
+      expect(saved.provider).toBe("anthropic");
     });
 
-    it("merges with existing settings", async () => {
+    it("merges with existing settings and normalizes provider", async () => {
       const userDir = path.join(tmpDir, ".my-agent");
       await fs.mkdir(userDir, { recursive: true });
       await fs.writeFile(
         path.join(userDir, "settings.json"),
-        JSON.stringify({ model: "gpt-4o", provider: "openai" }),
+        JSON.stringify({ model: "openrouter-auto", provider: "anthropic" }),
       );
 
-      await saveSettings({ model: "claude-opus-4-20250514" }, "user");
+      await saveSettings({ model: "claude-opus-4" }, "user");
 
       const content = await fs.readFile(
         path.join(userDir, "settings.json"),
         "utf-8",
       );
       const saved = JSON.parse(content);
-      expect(saved.model).toBe("claude-opus-4-20250514");
-      expect(saved.provider).toBe("openai");
+      expect(saved.model).toBe("claude-opus-4");
+      expect(saved.provider).toBe("anthropic");
     });
   });
 });

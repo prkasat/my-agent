@@ -16,6 +16,7 @@ import { handleLogin, handleLogout } from "../commands/login.js";
 import { exportFromSessionManager, getExportFilename } from "../commands/export.js";
 import { expandTemplate, getTemplateHelp } from "@my-agent/core";
 import * as path from "node:path";
+import { getModelProviderForKey } from "../runtime/model-registry.js";
 
 /**
  * What the REPL should do after a slash command runs.
@@ -263,7 +264,7 @@ export async function handleSlashCommand(
       }
       const lines = [
         `model: ${settings.model}`,
-        `provider: ${settings.provider}`,
+        `provider: ${getModelProviderForKey(settings.model) || settings.provider}`,
         `thinkingLevel: ${settings.thinkingLevel}`,
         `permissionMode: ${settings.permissionMode}`,
         `maxTurns: ${settings.maxTurns}`,
@@ -278,7 +279,10 @@ export async function handleSlashCommand(
       if (!settings) {
         return { action: "continue", output: "model: settings not loaded" };
       }
-      return { action: "continue", output: `current model: ${settings.model} (provider: ${settings.provider})` };
+      return {
+        action: "continue",
+        output: `current model: ${settings.model} (provider: ${getModelProviderForKey(settings.model) || settings.provider})`,
+      };
     }
 
     case "templates": {

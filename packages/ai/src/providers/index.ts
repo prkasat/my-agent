@@ -1,6 +1,7 @@
-import { registerProvider } from "./registry.js";
-import { createOpenAICompatibleStream } from "./openai-compatible.js";
 import { createAnthropicStream } from "./anthropic.js";
+import { createOpenAICodexStream } from "./openai-codex.js";
+import { createOpenAICompatibleStream } from "./openai-compatible.js";
+import { registerProvider } from "./registry.js";
 
 /**
  * Register built-in providers.
@@ -24,6 +25,7 @@ export function registerBuiltinProviders(): void {
 			}),
 	);
 	registerProvider("anthropic", async () => createAnthropicStream());
+	registerProvider("openai-codex", async () => createOpenAICodexStream());
 }
 
 // Auto-register on import
