@@ -74,6 +74,7 @@ function getHelpText(templates?: Map<string, PromptTemplate>): string {
   /sessions            List sessions for this working directory
   /login [provider]    Login via OAuth (anthropic, openai-codex, github-copilot)
   /logout <provider>   Logout from a provider
+  /extensions          Show configured extension paths
   /export [path]       Export session to standalone HTML file
   /settings            Show current settings
   /model               Show current model
@@ -234,6 +235,19 @@ export async function handleSlashCommand(
         output.push(`logout failed: ${(err as Error).message}`);
       }
       return { action: "continue", output: output.join("\n") };
+    }
+
+    case "extensions": {
+      if (!settings) {
+        return { action: "continue", output: "extensions: settings not loaded" };
+      }
+      const configured = settings.extensions.length > 0
+        ? settings.extensions.map((entry) => `  ${entry}`).join("\n")
+        : "  (none)";
+      return {
+        action: "continue",
+        output: `configured extensions:\n${configured}`,
+      };
     }
 
     case "export": {

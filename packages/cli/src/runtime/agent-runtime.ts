@@ -39,6 +39,7 @@ export interface RuntimeConfig {
   session: SessionManager;
   signal?: AbortSignal;
   askPermission?: (ctx: PermissionAskContext) => Promise<AskDecision>;
+  disableExtensions?: boolean;
 }
 
 export interface RuntimeResult {
@@ -62,7 +63,7 @@ export async function runAgent(
     onTurnEnd?: () => void;
   } = {},
 ): Promise<RuntimeResult> {
-  const { cwd, settings, authStorage, session, signal, askPermission } = config;
+  const { cwd, settings, authStorage, session, signal, askPermission, disableExtensions } = config;
 
   // Resolve the configured model against current auth state.
   const { model } = await resolveConfiguredModel(settings, authStorage);
@@ -76,13 +77,15 @@ export async function runAgent(
 
   // Load extensions for this run. Extensions are trusted local modules.
   let currentContext: AgentContext | null = null;
-  const extensionRuntime = await loadExtensionsForRun({
-    cwd,
-    globalDir,
-    settings,
-    sessionId: session.getSessionId(),
-    getAgentContext: () => currentContext,
-  });
+  const extensionRuntime = disableExtensions
+    ? undefined
+    : await loadExtensionsForRun({
+        cwd,
+        globalDir,
+        settings,
+        sessionId: session.getSessionId(),
+        getAgentContext: () => currentContext,
+      });
 
   const transformedPrompt = extensionRuntime
     ? await extensionRuntime.runner.dispatchUserInput(prompt)

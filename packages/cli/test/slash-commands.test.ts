@@ -141,6 +141,25 @@ describe("handleSlashCommand", () => {
     expect(result?.output).toMatch(/not available/);
   });
 
+  it("/extensions reports configured extension paths", async () => {
+    const result = await handleSlashCommand("/extensions", {
+      ...makeContext(),
+      settings: {
+        model: "openrouter-auto",
+        provider: "openrouter",
+        thinkingLevel: "medium",
+        compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+        retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxDelayMs: 60000 },
+        extensions: ["./extensions/demo.mjs"],
+        packages: [],
+        enabledModels: ["*"],
+        maxTurns: 50,
+        permissionMode: "ask",
+      },
+    });
+    expect(result?.output).toMatch(/demo\.mjs/);
+  });
+
   it("unknown commands return a continue action with a help hint", async () => {
     const result = await handleSlashCommand("/wat", makeContext());
     expect(result?.action).toBe("continue");

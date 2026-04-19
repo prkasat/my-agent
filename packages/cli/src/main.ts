@@ -9,6 +9,7 @@
  *   - --rpc: stay attached and speak JSONL on stdin/stdout (host process driver)
  */
 
+import { createRequire } from "node:module";
 import { runRepl } from "./repl/repl.js";
 import { startRpcServer } from "./modes/rpc.js";
 import { runAgent } from "./runtime/agent-runtime.js";
@@ -21,14 +22,21 @@ import {
 import { loadSettings } from "./config/settings.js";
 import { AuthStorage } from "./config/auth-storage.js";
 import { registerBuiltinOAuthProviders } from "@my-agent/ai";
-import { resolveConfiguredModel } from "./runtime/model-registry.js";
+import { listModelAvailability, resolveConfiguredModel } from "./runtime/model-registry.js";
 import * as path from "node:path";
 import * as readline from "node:readline";
+
+const require = createRequire(import.meta.url);
+const { version: CLI_VERSION } = require("../package.json") as { version: string };
 
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes("--help") || argv.includes("-h")) {
     printUsage();
+    return;
+  }
+  if (argv.includes("--version") || argv.includes("-v")) {
+    process.stdout.write(`${CLI_VERSION}\n`);
     return;
   }
 
@@ -50,6 +58,22 @@ async function main(): Promise<void> {
   // Initialize credential storage.
   const authStorage = new AuthStorage();
   await authStorage.load();
+
+  const safeMode = argv.includes("--safe-mode");
+
+  if (argv.includes("--doctor")) {
+    await runDoctor({ cwd, settings, authStorage, safeMode });
+    return;
+  }
+
+  if (argv.includes("--list-models")) {
+    const availability = await listModelAvailability(authStorage);
+    for (const entry of availability) {
+      const status = entry.available ? "available" : `unavailable: ${entry.reason}`;
+      process.stdout.write(`${entry.key} (${entry.model.provider}) - ${status}\n`);
+    }
+    return;
+  }
 
   // RPC mode (after initialization so settings/OAuth are available)
   if (argv[0] === "--rpc") {
@@ -92,7 +116,7 @@ async function main(): Promise<void> {
     try {
       result = await runAgent(
         prompt,
-        { cwd, settings, authStorage, session, signal: controller.signal, askPermission },
+        { cwd, settings, authStorage, session, signal: controller.signal, askPermission, disableExtensions: safeMode },
         {
           onText: (text) => process.stdout.write(text),
           onToolStart: (name) => process.stderr.write(`\n[${name}] `),
@@ -116,7 +140,7 @@ async function main(): Promise<void> {
 
   // Print startup info
   const resolvedModel = await resolveConfiguredModel(settings, authStorage);
-  process.stdout.write(`model: ${resolvedModel.key} | provider: ${resolvedModel.model.provider}\n`);
+  process.stdout.write(`model: ${resolvedModel.key} | provider: ${resolvedModel.model.provider}${safeMode ? " | safe-mode" : ""}\n`);
   if (templates.size > 0) {
     process.stdout.write(`loaded ${templates.size} template(s)\n`);
   }
@@ -138,7 +162,15 @@ async function main(): Promise<void> {
         : askPermission;
       const result = await runAgent(
         prompt,
-        { cwd, settings, authStorage, session, signal: abortSignal, askPermission: permissionPrompter },
+        {
+          cwd,
+          settings,
+          authStorage,
+          session,
+          signal: abortSignal,
+          askPermission: permissionPrompter,
+          disableExtensions: safeMode,
+        },
         {
           onText: (text) => process.stdout.write(text),
           onToolStart: (name) => process.stderr.write(`\n[${name}] `),
@@ -158,6 +190,40 @@ async function main(): Promise<void> {
   });
 }
 
+async function runDoctor(options: {
+  cwd: string;
+  settings: Awaited<ReturnType<typeof loadSettings>>;
+  authStorage: AuthStorage;
+  safeMode: boolean;
+}): Promise<void> {
+  const availability = await listModelAvailability(options.authStorage);
+  const lines = [
+    `my-agent doctor ${CLI_VERSION}`,
+    `cwd: ${options.cwd}`,
+    `safeMode: ${options.safeMode ? "on" : "off"}`,
+    `configuredModel: ${options.settings.model}`,
+    `configuredProvider: ${options.settings.provider}`,
+    `openrouterAuth: ${await options.authStorage.hasAuth("openrouter")}`,
+    `anthropicAuth: ${await options.authStorage.hasAuth("anthropic")}`,
+    `openaiCodexAuth: ${await options.authStorage.hasAuth("openai-codex")}`,
+    `extensionPaths: ${options.settings.extensions.length || 0}`,
+  ];
+
+  try {
+    const resolved = await resolveConfiguredModel(options.settings, options.authStorage);
+    lines.push(`resolvedModel: ${resolved.key} (${resolved.model.provider})`);
+  } catch (error) {
+    lines.push(`resolvedModel: error - ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  lines.push("availableModels:");
+  for (const entry of availability) {
+    lines.push(`  - ${entry.key} (${entry.model.provider}): ${entry.available ? "ok" : entry.reason}`);
+  }
+
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
 function printUsage(): void {
   process.stdout.write(`my-agent — interactive coding assistant
 
@@ -165,6 +231,10 @@ Usage:
   my-agent                Start interactive REPL
   my-agent "<prompt>"     One-shot prompt
   my-agent --rpc          JSONL RPC mode for host integrations
+  my-agent --doctor       Run startup diagnostics
+  my-agent --list-models  List models visible with current auth state
+  my-agent --safe-mode    Disable extension loading for this run
+  my-agent --version      Show CLI version
   my-agent --help         Show this help
 
 REPL slash commands:
@@ -173,6 +243,7 @@ REPL slash commands:
   /sessions            List sessions for this directory
   /login [provider]    OAuth login (anthropic, openai-codex, github-copilot)
   /logout <provider>   OAuth logout
+  /extensions          Show configured extension paths
   /export [path]       Export session to HTML
   /settings            Show current settings
   /model               Show current model
