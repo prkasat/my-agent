@@ -1,12 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
 import { Type as T } from "@sinclair/typebox";
-import { ExtensionRunner } from "../../src/extensions/runner.js";
-import type {
-	ExtensionDefinition,
-	ToolInterceptResult,
-	ToolResultModification,
-} from "../../src/extensions/types.js";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentToolResult } from "../../src/agent/types.js";
+import { ExtensionRunner } from "../../src/extensions/runner.js";
+import type { ExtensionDefinition, ToolInterceptResult, ToolResultModification } from "../../src/extensions/types.js";
 
 function makeDefinition(
 	overrides: Partial<ExtensionDefinition> & Pick<ExtensionDefinition, "metadata" | "activate">,
@@ -301,21 +297,12 @@ describe("ExtensionRunner — middleware", () => {
 			}),
 		);
 
-		const final = await runner.runToolMiddleware(
-			{ toolCallId: "c1", toolName: "bash", args: {} },
-			async () => {
-				log.push("execute");
-				return { content: [{ type: "text", text: "ok" }] };
-			},
-		);
+		const final = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => {
+			log.push("execute");
+			return { content: [{ type: "text", text: "ok" }] };
+		});
 
-		expect(log).toEqual([
-			"A:before",
-			"B:before",
-			"execute",
-			"B:after",
-			"A:after",
-		]);
+		expect(log).toEqual(["A:before", "B:before", "execute", "B:after", "A:after"]);
 		expect(final.result?.content[0]).toEqual({ type: "text", text: "ok" });
 		expect(typeof final.durationMs).toBe("number");
 	});
@@ -334,13 +321,10 @@ describe("ExtensionRunner — middleware", () => {
 				},
 			}),
 		);
-		const out = await runner.runToolMiddleware(
-			{ toolCallId: "c1", toolName: "bash", args: {} },
-			async () => {
-				executed = true;
-				return { content: [{ type: "text", text: "ok" }] };
-			},
-		);
+		const out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => {
+			executed = true;
+			return { content: [{ type: "text", text: "ok" }] };
+		});
 		expect(executed).toBe(false);
 		expect(out.blocked).toBe(true);
 	});
@@ -494,7 +478,10 @@ describe("ExtensionRunner — commands & tools", () => {
 				},
 			}),
 		);
-		const names = runner.getAllTools().map((t) => t.name).sort();
+		const names = runner
+			.getAllTools()
+			.map((t) => t.name)
+			.sort();
 		expect(names).toEqual(["t1", "t2"]);
 	});
 });

@@ -3,10 +3,10 @@
  * Each test documents the specific bug it guards against.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExtensionRunner } from "../../src/extensions/runner.js";
 import { FileExtensionStorage } from "../../src/extensions/storage.js";
 import type { ExtensionDefinition } from "../../src/extensions/types.js";
@@ -52,10 +52,9 @@ describe("regressions — middleware goes through runGuarded", () => {
 			}),
 		);
 		// No throw — continue mode swallows the error.
-		const out = await runner.runToolMiddleware(
-			{ toolCallId: "c1", toolName: "bash", args: {} },
-			async () => ({ content: [{ type: "text", text: "ok" }] }),
-		);
+		const out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
+			content: [{ type: "text", text: "ok" }],
+		}));
 		expect(out.error).toBeInstanceOf(Error);
 		expect(runner.getMetrics("bad")?.errors).toBe(1);
 	});
@@ -78,10 +77,9 @@ describe("regressions — middleware goes through runGuarded", () => {
 			}),
 		);
 		await expect(
-			runner.runToolMiddleware(
-				{ toolCallId: "c1", toolName: "bash", args: {} },
-				async () => ({ content: [{ type: "text", text: "ok" }] }),
-			),
+			runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
+				content: [{ type: "text", text: "ok" }],
+			})),
 		).rejects.toThrow(/mw boom/);
 	});
 
@@ -98,10 +96,9 @@ describe("regressions — middleware goes through runGuarded", () => {
 				},
 			}),
 		);
-		const out = await runner.runToolMiddleware(
-			{ toolCallId: "c1", toolName: "bash", args: {} },
-			async () => ({ content: [{ type: "text", text: "ok" }] }),
-		);
+		const out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
+			content: [{ type: "text", text: "ok" }],
+		}));
 		// After double-next, the middleware threw on the second call; the
 		// runner counts that as a middleware error.
 		expect(runner.getMetrics("double")?.errors).toBe(1);
@@ -247,10 +244,7 @@ describe("regressions — loader id mismatch", () => {
 		const tmp = mk(join(tmpdir(), "ext-idcheck-"));
 		try {
 			const p = join(tmp, "ext.mjs");
-			writeFileSync(
-				p,
-				`export default { metadata: { id: "real", name: "R", version: "1.0.0" }, activate(){} };`,
-			);
+			writeFileSync(p, `export default { metadata: { id: "real", name: "R", version: "1.0.0" }, activate(){} };`);
 			const runner = new ExtensionRunner({ log: silentLog });
 			const loader = new ExtensionLoader({ runner, log: silentLog });
 			await expect(
@@ -312,10 +306,9 @@ describe("regressions — middleware errors after next() are surfaced", () => {
 				},
 			}),
 		);
-		const out = await runner.runToolMiddleware(
-			{ toolCallId: "c1", toolName: "bash", args: {} },
-			async () => ({ content: [{ type: "text", text: "ok" }] }),
-		);
+		const out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
+			content: [{ type: "text", text: "ok" }],
+		}));
 		expect(out.error).toBeInstanceOf(Error);
 		expect(out.error?.message).toMatch(/post-next boom/);
 		expect(out.result).toBeDefined(); // tool DID execute

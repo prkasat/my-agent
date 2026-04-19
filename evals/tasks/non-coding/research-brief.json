@@ -1,0 +1,6 @@
+{
+	"id": "noncoding-research-brief",
+	"prompt": "Research whether a new workflow should use prompts, skills, or extensions.",
+	"mockAssistantText": "Use prompts for light guidance, skills for repeatable task flows, and extensions for deep integration.",
+	"expectedContains": ["prompts", "skills", "extensions"]
+}

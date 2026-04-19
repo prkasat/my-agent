@@ -2,7 +2,7 @@
  * Tests for UserMessage component
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { UserMessage } from "../../../src/ui/components/user-message.js";
 import type { UserMessageTheme } from "../../../src/ui/theme.js";
 

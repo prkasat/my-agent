@@ -11,7 +11,7 @@
  * the public API.
  */
 
-import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionStorage, StorageScope } from "./types.js";
 
@@ -68,9 +68,7 @@ export class FileExtensionStorage implements ExtensionStorage {
 			return join(this.root, "global", extFile);
 		}
 		if (!this.sessionId) {
-			throw new Error(
-				`Extension storage: session scope requires a sessionId (extension=${this.extensionId})`,
-			);
+			throw new Error(`Extension storage: session scope requires a sessionId (extension=${this.extensionId})`);
 		}
 		return join(this.root, "sessions", this.sessionId, extFile);
 	}

@@ -95,7 +95,9 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 		while (true) {
 			// Drain queued events first
 			while (this.queue.length > 0) {
-				yield this.queue.shift()!;
+				const next = this.queue.shift();
+				if (next === undefined) continue;
+				yield next;
 			}
 
 			// If done and queue empty, stop

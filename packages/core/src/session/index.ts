@@ -10,23 +10,23 @@
 
 // Types
 export type {
-  SessionHeader,
-  SessionEntryBase,
-  MessageEntry,
-  SettingsChangeEntry,
-  CompactionEntry,
-  BranchSummaryEntry,
-  SessionInfoEntry,
-  ExtensionEntry,
-  SessionEntry,
-  FileEntry,
-  CompactionDetails,
-  CompactionEvaluation,
-  BranchSummaryDetails,
-  SessionTreeNode,
-  SessionContext,
-  SessionInfo,
-  CompactionSettings,
+	SessionHeader,
+	SessionEntryBase,
+	MessageEntry,
+	SettingsChangeEntry,
+	CompactionEntry,
+	BranchSummaryEntry,
+	SessionInfoEntry,
+	ExtensionEntry,
+	SessionEntry,
+	FileEntry,
+	CompactionDetails,
+	CompactionEvaluation,
+	BranchSummaryDetails,
+	SessionTreeNode,
+	SessionContext,
+	SessionInfo,
+	CompactionSettings,
 } from "./types.js";
 
 export { CURRENT_SESSION_VERSION, DEFAULT_COMPACTION_SETTINGS } from "./types.js";
@@ -36,45 +36,45 @@ export { SessionManager, buildSessionContext } from "./session-manager.js";
 
 // Compaction
 export {
-  estimateTokens,
-  estimateContextTokens,
-  measureContextTokens,
-  calculateContextTokens,
-  findCutPoint,
-  extractFileOperations,
-  generateCompactionSummary,
-  evaluateCompaction,
-  compact,
-  shouldCompact,
+	estimateTokens,
+	estimateContextTokens,
+	measureContextTokens,
+	calculateContextTokens,
+	findCutPoint,
+	extractFileOperations,
+	generateCompactionSummary,
+	evaluateCompaction,
+	compact,
+	shouldCompact,
 } from "./compaction.js";
 export type {
-  CompactionResult,
-  CompactOptions,
-  ContextTokenMeasurement,
+	CompactionResult,
+	CompactOptions,
+	ContextTokenMeasurement,
 } from "./compaction.js";
 
 // Auto-Compaction
 export {
-  createAutoCompactor,
-  createAutoCompactorWithPersistence,
+	createAutoCompactor,
+	createAutoCompactorWithPersistence,
 } from "./auto-compact.js";
 export type {
-  AutoCompactorOptions,
-  AutoCompactorTransform,
-  CompactionCallback,
-  CompactionCallbackResult,
-  PersistenceSessionManager,
+	AutoCompactorOptions,
+	AutoCompactorTransform,
+	CompactionCallback,
+	CompactionCallbackResult,
+	PersistenceSessionManager,
 } from "./auto-compact.js";
 
 // Branch Summarization
 export {
-  generateBranchSummary,
-  shouldGenerateBranchSummary,
-  collectEntriesForBranchSummary,
+	generateBranchSummary,
+	shouldGenerateBranchSummary,
+	collectEntriesForBranchSummary,
 } from "./branch-summary.js";
 export type {
-  BranchSummaryResult,
-  GenerateBranchSummaryOptions,
-  CollectEntriesResult,
-  BranchTreeReader,
+	BranchSummaryResult,
+	GenerateBranchSummaryOptions,
+	CollectEntriesResult,
+	BranchTreeReader,
 } from "./branch-summary.js";

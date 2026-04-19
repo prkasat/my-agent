@@ -1,0 +1,22 @@
+# Docs Index
+
+- `quickstart.md`
+- `providers.md`
+- `settings.md`
+- `sessions.md`
+- `extensions.md`
+- `extensions-api-reference.md`
+- `skills.md`
+- `packages.md`
+- `themes.md`
+- `rpc.md`
+- `tracing-replay.md`
+- `evals.md`
+- `troubleshooting.md`
+- `security.md`
+- `architecture.md`
+- `lifecycle.md`
+- `capability-matrix.md`
+- `playbooks.md`
+- `release.md`
+- `adr/`

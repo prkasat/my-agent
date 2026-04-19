@@ -2,7 +2,7 @@
  * Tests for ToolExecution component
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ToolExecution } from "../../../src/ui/components/tool-execution.js";
 import type { ToolExecutionTheme } from "../../../src/ui/theme.js";
 
@@ -234,10 +234,14 @@ describe("ToolExecution", () => {
 	});
 
 	it("clamps negative maxExpandedLines to 0 (fixed validation)", () => {
-		const tool = new ToolExecution("test-tool", {}, {
-			theme: testTheme,
-			maxExpandedLines: -5,
-		});
+		const tool = new ToolExecution(
+			"test-tool",
+			{},
+			{
+				theme: testTheme,
+				maxExpandedLines: -5,
+			},
+		);
 		tool.setRunning();
 		tool.setSuccess("line1\nline2\nline3", 100);
 		tool.setExpanded(true);

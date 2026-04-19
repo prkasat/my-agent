@@ -7,9 +7,10 @@
  */
 
 import type { AgentContext } from "../agent/types.js";
-import { MetricsTracker } from "./metrics.js";
-import { MemoryExtensionStorage } from "./storage.js";
 import { noopActions, noopUI } from "./context.js";
+import { MetricsTracker } from "./metrics.js";
+import { ExtensionRunner } from "./runner.js";
+import { MemoryExtensionStorage } from "./storage.js";
 import type {
 	ExtensionActions,
 	ExtensionContext,
@@ -24,7 +25,6 @@ import type {
 	MetricsRecorder,
 	ToolMiddleware,
 } from "./types.js";
-import { ExtensionRunner } from "./runner.js";
 
 export interface MockUI extends ExtensionUI {
 	readonly notifications: Array<{ message: string; level: "info" | "warn" | "error" }>;
@@ -63,18 +63,20 @@ export function createMockUI(): MockUI {
 			inputQueue.push(v);
 		},
 		async select(items) {
-			const resolved = selectQueue.length > 0 ? selectQueue.shift()! : null;
+			const next = selectQueue.shift();
+			const resolved = next !== undefined ? next : null;
 			selectCalls.push({ items, resolved });
 			return resolved;
 		},
 		async confirm(message, opts) {
-			const resolved = confirmQueue.length > 0 ? confirmQueue.shift()! : (opts?.defaultValue ?? false);
+			const next = confirmQueue.shift();
+			const resolved = next !== undefined ? next : (opts?.defaultValue ?? false);
 			confirmCalls.push({ message, resolved });
 			return resolved;
 		},
 		async input(message, opts) {
-			const resolved =
-				inputQueue.length > 0 ? inputQueue.shift()! : (opts?.defaultValue ?? null);
+			const next = inputQueue.shift();
+			const resolved = next !== undefined ? next : (opts?.defaultValue ?? null);
 			inputCalls.push({ message, resolved });
 			return resolved;
 		},
@@ -183,7 +185,7 @@ export function createMockContext(options: MockContextOptions = {}): MockContext
 			}
 			set.add(handler as unknown as ExtensionEventHandler);
 			return () => {
-				set!.delete(handler as unknown as ExtensionEventHandler);
+				set?.delete(handler as unknown as ExtensionEventHandler);
 			};
 		},
 		onAny(handler) {

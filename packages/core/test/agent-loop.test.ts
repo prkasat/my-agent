@@ -1,7 +1,7 @@
-import { describe, it, expect } from "vitest";
 import { EventStream } from "@my-agent/ai";
 import type { AssistantMessage, AssistantMessageEvent } from "@my-agent/ai";
 import { Type } from "@sinclair/typebox";
+import { describe, expect, it } from "vitest";
 import { agentLoop } from "../src/agent/agent-loop.js";
 import { defaultConvertToLlm } from "../src/agent/convert.js";
 import type { AgentEvent } from "../src/agent/types.js";
@@ -530,10 +530,7 @@ describe("Agent Loop", () => {
 		const messages = await loop.result();
 		// Find the assistant message with two tool_calls
 		const assistantWithTools = messages.find(
-			(m) =>
-				"role" in m &&
-				m.role === "assistant" &&
-				m.content.some((c) => c.type === "tool_call"),
+			(m) => "role" in m && m.role === "assistant" && m.content.some((c) => c.type === "tool_call"),
 		);
 		expect(assistantWithTools).toBeDefined();
 
@@ -696,11 +693,7 @@ describe("Agent Loop", () => {
 
 		const events: AgentEvent[] = [];
 		const loop = agentLoop(
-			[
-				{ role: "user", content: "earlier prompt" },
-				priorAssistant,
-				{ role: "user", content: "follow-up" },
-			],
+			[{ role: "user", content: "earlier prompt" }, priorAssistant, { role: "user", content: "follow-up" }],
 			{
 				systemPrompt: "You are helpful.",
 				messages: [],
@@ -994,9 +987,7 @@ describe("Agent Loop", () => {
 		expect(tracker.getSummary().turnCosts).toHaveLength(1);
 
 		// Loop ended as "error" because of the stopReason — that's correct.
-		const end = events.find((e) => e.type === "agent_end") as
-			| { type: "agent_end"; reason: string }
-			| undefined;
+		const end = events.find((e) => e.type === "agent_end") as { type: "agent_end"; reason: string } | undefined;
 		expect(end?.reason).toBe("error");
 	});
 

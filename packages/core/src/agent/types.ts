@@ -1,15 +1,15 @@
-import type { TSchema, Static } from "@sinclair/typebox";
 import type {
-	Message,
 	AssistantMessage,
+	AssistantMessageEvent,
+	ImageContent,
+	Message,
 	Model,
 	StreamFunctionLike,
 	StreamOptions,
-	AssistantMessageEvent,
 	TextContent,
-	ImageContent,
 	Usage,
 } from "@my-agent/ai";
+import type { Static, TSchema } from "@sinclair/typebox";
 
 // === Agent Messages ===
 // Extends the base Message type with custom message types.
@@ -104,10 +104,7 @@ export interface AgentLoopConfig {
 	 * Receives the loop's AbortSignal so long-running transforms (e.g., LLM-powered
 	 * compaction) can be cancelled when the caller aborts the agent.
 	 */
-	transformContext?: (
-		context: AgentContext,
-		signal?: AbortSignal,
-	) => AgentContext | Promise<AgentContext>;
+	transformContext?: (context: AgentContext, signal?: AbortSignal) => AgentContext | Promise<AgentContext>;
 	/** Dynamic API key resolution. Called before each LLM call. */
 	getApiKey?: (provider: string) => Promise<string | undefined>;
 	/** Get steering messages to inject between turns (inner loop driver) */

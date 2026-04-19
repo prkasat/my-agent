@@ -15,11 +15,7 @@ const MODEL: Model = {
 };
 
 function sse(chunks: Array<{ event: string; data: Record<string, unknown> }>): string {
-	return (
-		chunks
-			.map((c) => `event: ${c.event}\ndata: ${JSON.stringify(c.data)}\n`)
-			.join("\n") + "\n"
-	);
+	return `${chunks.map((c) => `event: ${c.event}\ndata: ${JSON.stringify(c.data)}\n`).join("\n")}\n`;
 }
 
 function mockResponse(body: string, status = 200): Response {
@@ -42,7 +38,7 @@ beforeEach(() => {
 });
 afterEach(() => {
 	globalThis.fetch = realFetch;
-	delete process.env.ANTHROPIC_API_KEY;
+	process.env.ANTHROPIC_API_KEY = undefined;
 });
 
 describe("anthropic provider", () => {
@@ -195,9 +191,7 @@ describe("anthropic provider", () => {
 		const msg = await stream.result();
 
 		expect(msg.stopReason).toBe("toolUse");
-		expect(msg.content).toEqual([
-			{ type: "tool_call", id: "toolu_1", name: "read", arguments: '{"path":"/tmp/x"}' },
-		]);
+		expect(msg.content).toEqual([{ type: "tool_call", id: "toolu_1", name: "read", arguments: '{"path":"/tmp/x"}' }]);
 		expect(events).toContain("tool_call_start");
 		expect(events).toContain("tool_call_delta");
 		expect(events).toContain("tool_call_end");
@@ -207,7 +201,10 @@ describe("anthropic provider", () => {
 		const body = sse([
 			{
 				event: "message_start",
-				data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } },
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
 			},
 			{
 				event: "content_block_start",
@@ -218,7 +215,10 @@ describe("anthropic provider", () => {
 				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
 			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -251,11 +251,26 @@ describe("anthropic provider", () => {
 
 	it("emits cache_control on system, tools, and last user block when caching enabled", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -269,9 +284,7 @@ describe("anthropic provider", () => {
 		await createAnthropicStream()(MODEL, ctx).result();
 
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
-		expect(sentBody.system).toEqual([
-			{ type: "text", text: "you are helpful", cache_control: { type: "ephemeral" } },
-		]);
+		expect(sentBody.system).toEqual([{ type: "text", text: "you are helpful", cache_control: { type: "ephemeral" } }]);
 		expect(sentBody.tools[0].cache_control).toEqual({ type: "ephemeral" });
 		const lastUser = sentBody.messages[sentBody.messages.length - 1];
 		expect(lastUser.content[lastUser.content.length - 1].cache_control).toEqual({ type: "ephemeral" });
@@ -279,11 +292,26 @@ describe("anthropic provider", () => {
 
 	it("omits cache_control when caching is disabled", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -302,17 +330,36 @@ describe("anthropic provider", () => {
 
 	it("propagates thinking budget when caller maxTokens already exceeds it", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
 		globalThis.fetch = fetchSpy;
 
-		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "hi" }] }, { thinkingLevel: "high", maxTokens: 32000 }).result();
+		await createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "hi" }] },
+			{ thinkingLevel: "high", maxTokens: 32000 },
+		).result();
 
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
 		expect(sentBody.thinking).toEqual({ type: "enabled", budget_tokens: 16384 });
@@ -322,8 +369,17 @@ describe("anthropic provider", () => {
 
 	it("maps tool_use stop_reason to toolUse", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 0 } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 0 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -333,9 +389,7 @@ describe("anthropic provider", () => {
 	});
 
 	it("emits an error event on non-OK HTTP response", async () => {
-		const fetchSpy = vi.fn().mockResolvedValue(
-			new Response("Bad Request", { status: 400 }),
-		);
+		const fetchSpy = vi.fn().mockResolvedValue(new Response("Bad Request", { status: 400 }));
 		globalThis.fetch = fetchSpy;
 
 		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
@@ -355,7 +409,11 @@ describe("anthropic provider", () => {
 		});
 
 		const ctrl = new AbortController();
-		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, { signal: ctrl.signal });
+		const stream = createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "x" }] },
+			{ signal: ctrl.signal },
+		);
 		// Pre-attach a catcher to result() — when the stream ends via
 		// abort there's no terminal event, so result() rejects with
 		// "Stream ended without result". That's expected behavior; the
@@ -372,18 +430,33 @@ describe("anthropic provider", () => {
 	});
 
 	it("returns an error when ANTHROPIC_API_KEY is unset and no apiKey override", async () => {
-		delete process.env.ANTHROPIC_API_KEY;
+		process.env.ANTHROPIC_API_KEY = "";
 		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] });
 		await expect(stream.result()).rejects.toThrow(/ANTHROPIC_API_KEY/);
 	});
 
 	it("converts assistant tool_call blocks back to tool_use input", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -417,11 +490,26 @@ describe("anthropic provider", () => {
 
 	it("falls back to {} input when assistant tool_call arguments are malformed JSON", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -456,11 +544,26 @@ describe("anthropic provider", () => {
 		// would forward the proxy's foreign signature back to Anthropic
 		// on replay — reopening the exact bug pass-3 closed.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -474,11 +577,26 @@ describe("anthropic provider", () => {
 
 	it("Tier-3 pass-4 regression: default baseUrl tags as anthropic", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -489,11 +607,26 @@ describe("anthropic provider", () => {
 
 	it("Tier-3 pass-4 regression: explicit providerName overrides the auto-default", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -511,11 +644,26 @@ describe("anthropic provider", () => {
 		// message tagged "anthropic-compatible". Replaying through the
 		// real default endpoint must NOT forward the signature.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -547,11 +695,26 @@ describe("anthropic provider", () => {
 		// assistant message came from a different provider. Anthropic
 		// would reject the foreign signature with a 400.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -581,11 +744,26 @@ describe("anthropic provider", () => {
 	it("Tier-3 pass-3 regression: thinking with no provider tag is dropped on replay", async () => {
 		// Defensive: undefined provider means we don't know — don't trust.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -617,11 +795,26 @@ describe("anthropic provider", () => {
 		// 64 chars and containing `|`, which Anthropic rejects. The pair
 		// must be normalized AND remapped so they still match.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -648,7 +841,10 @@ describe("anthropic provider", () => {
 
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0] as [string, RequestInit])[1].body as string);
 		const assistantMsg = sentBody.messages.find((m: { role: string }) => m.role === "assistant");
-		const userMsg = sentBody.messages.find((m: { role: string; content: Array<{ type: string }> }) => m.role === "user" && m.content.some((c) => c.type === "tool_result"));
+		const userMsg = sentBody.messages.find(
+			(m: { role: string; content: Array<{ type: string }> }) =>
+				m.role === "user" && m.content.some((c) => c.type === "tool_result"),
+		);
 
 		const usedId = assistantMsg.content[0].id;
 		expect(usedId).not.toBe(foreignId);
@@ -659,11 +855,26 @@ describe("anthropic provider", () => {
 
 	it("Tier-3 pass-3 regression: anthropic-safe tool IDs are passed through unchanged", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -675,7 +886,7 @@ describe("anthropic provider", () => {
 				{
 					role: "assistant",
 					provider: "anthropic",
-					content: [{ type: "tool_call", id: "toolu_01ABC", name: "read", arguments: '{}' }],
+					content: [{ type: "tool_call", id: "toolu_01ABC", name: "read", arguments: "{}" }],
 				},
 				{
 					role: "toolResult",
@@ -697,11 +908,26 @@ describe("anthropic provider", () => {
 		// signature to be replayed verbatim — sending an empty one
 		// breaks the conversation on the next request.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -737,11 +963,26 @@ describe("anthropic provider", () => {
 		// Sending `signature: ""` makes the API 400 — drop the block
 		// instead so the conversation continues.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
@@ -773,11 +1014,26 @@ describe("anthropic provider", () => {
 		// emitting `[]`, `null`, or a scalar would 400 the next request
 		// when the assistant message + tool_result was replayed.
 		const events = [
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		];
 		// Fresh Response per call — ReadableStream can only be consumed once.
@@ -814,7 +1070,13 @@ describe("anthropic provider", () => {
 		// the start event and never send partial_json deltas. The
 		// parser must not silently drop the args.
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
 			{
 				event: "content_block_start",
 				data: {
@@ -824,7 +1086,10 @@ describe("anthropic provider", () => {
 				},
 			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -840,7 +1105,13 @@ describe("anthropic provider", () => {
 		// partial_json deltas, we should use the streamed deltas (which
 		// is what the spec actually does).
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
 			{
 				event: "content_block_start",
 				data: {
@@ -851,10 +1122,17 @@ describe("anthropic provider", () => {
 			},
 			{
 				event: "content_block_delta",
-				data: { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/streamed"}' } },
+				data: {
+					type: "content_block_delta",
+					index: 0,
+					delta: { type: "input_json_delta", partial_json: '{"path":"/tmp/streamed"}' },
+				},
 			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -869,16 +1147,29 @@ describe("anthropic provider", () => {
 		// Build the same event stream but with CRLF line endings (the
 		// SSE spec allows either; some intermediaries normalize to CRLF).
 		const events = [
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello CRLF" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello CRLF" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		];
-		const crlfBody = events
-			.map((e) => `event: ${e.event}\r\ndata: ${JSON.stringify(e.data)}\r\n`)
-			.join("\r\n") + "\r\n";
+		const crlfBody = `${events.map((e) => `event: ${e.event}\r\ndata: ${JSON.stringify(e.data)}\r\n`).join("\r\n")}\r\n`;
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(crlfBody));
 
 		const msg = await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }).result();
@@ -893,18 +1184,31 @@ describe("anthropic provider", () => {
 		// trailing buffer or it would silently drop message_stop /
 		// message_delta and emit empty content.
 		const events = [
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "tail-buffered" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "tail-buffered" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		];
 		// Use single \n separators (instead of \n\n) so the LAST event
 		// gets stuck in the trailing buffer when EOF hits.
-		const drainBody = events
-			.map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}`)
-			.join("\n\n");
+		const drainBody = events.map((e) => `event: ${e.event}\ndata: ${JSON.stringify(e.data)}`).join("\n\n");
 		// Note: NO trailing "\n\n" — final event has no blank line
 		// after it, so it must come from the EOF drain path.
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(drainBody));
@@ -925,14 +1229,28 @@ describe("anthropic provider", () => {
 						id: "m",
 						role: "assistant",
 						model: "claude-test",
-						usage: { input_tokens: 100, output_tokens: 0, cache_read_input_tokens: 50, cache_creation_input_tokens: 25 },
+						usage: {
+							input_tokens: 100,
+							output_tokens: 0,
+							cache_read_input_tokens: 50,
+							cache_creation_input_tokens: 25,
+						},
 					},
 				},
 			},
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 5 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -984,10 +1302,14 @@ describe("anthropic provider", () => {
 		const fetchSpy = vi.fn();
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-		const stream = createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
-			maxTokens: 1000,
-			thinkingLevel: "high", // budget 16384
-		});
+		const stream = createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "x" }] },
+			{
+				maxTokens: 1000,
+				thinkingLevel: "high", // budget 16384
+			},
+		);
 		await expect(stream.result()).rejects.toThrow(/maxTokens.*must exceed thinking budget|exceed.*budget/i);
 		expect(fetchSpy).not.toHaveBeenCalled();
 	});
@@ -1004,18 +1326,31 @@ describe("anthropic provider", () => {
 					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
 				},
 			},
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
-			thinkingLevel: "high",
-		}).result();
+		await createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "x" }] },
+			{
+				thinkingLevel: "high",
+			},
+		).result();
 
 		expect(fetchSpy).toHaveBeenCalledOnce();
 		const sentBody = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
@@ -1036,8 +1371,14 @@ describe("anthropic provider", () => {
 					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
 				},
 			},
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
 			// No message_delta with stop_reason. No message_stop.
 		]);
@@ -1078,7 +1419,10 @@ describe("anthropic provider", () => {
 				data: { type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "answer" } },
 			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 1 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 3 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -1092,22 +1436,42 @@ describe("anthropic provider", () => {
 
 		// Round-trip: send the same assistant message back as history
 		// and verify the provider replays redacted_thinking on the wire.
-		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m2", role: "assistant", model: "claude-test", usage: { input_tokens: 5, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
-			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
-			{ event: "message_stop", data: { type: "message_stop" } },
-		])));
+		const fetchSpy = vi.fn().mockResolvedValue(
+			mockResponse(
+				sse([
+					{
+						event: "message_start",
+						data: {
+							type: "message_start",
+							message: {
+								id: "m2",
+								role: "assistant",
+								model: "claude-test",
+								usage: { input_tokens: 5, output_tokens: 0 },
+							},
+						},
+					},
+					{
+						event: "content_block_start",
+						data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+					},
+					{
+						event: "content_block_delta",
+						data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+					},
+					{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+					{
+						event: "message_delta",
+						data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+					},
+					{ event: "message_stop", data: { type: "message_stop" } },
+				]),
+			),
+		);
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
 		await createAnthropicStream()(MODEL, {
-			messages: [
-				{ role: "user", content: "first" },
-				msg,
-				{ role: "user", content: "second" },
-			],
+			messages: [{ role: "user", content: "first" }, msg, { role: "user", content: "second" }],
 		}).result();
 		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
 		const assistantTurn = sent.messages.find((m: { role: string }) => m.role === "assistant");
@@ -1122,14 +1486,38 @@ describe("anthropic provider", () => {
 		// (or one with no provenance tag) is opaque-to-us and would
 		// 400 if forwarded to api.anthropic.com — same trust gate as
 		// signed thinking.
-		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
-			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
-			{ event: "message_stop", data: { type: "message_stop" } },
-		])));
+		const fetchSpy = vi.fn().mockResolvedValue(
+			mockResponse(
+				sse([
+					{
+						event: "message_start",
+						data: {
+							type: "message_start",
+							message: {
+								id: "m",
+								role: "assistant",
+								model: "claude-test",
+								usage: { input_tokens: 1, output_tokens: 0 },
+							},
+						},
+					},
+					{
+						event: "content_block_start",
+						data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+					},
+					{
+						event: "content_block_delta",
+						data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+					},
+					{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+					{
+						event: "message_delta",
+						data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+					},
+					{ event: "message_stop", data: { type: "message_stop" } },
+				]),
+			),
+		);
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
 		await createAnthropicStream()(MODEL, {
@@ -1156,8 +1544,17 @@ describe("anthropic provider", () => {
 
 	it("surfaces refusal stop_reason as a stream error, not a blank turn", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -1168,8 +1565,21 @@ describe("anthropic provider", () => {
 
 	it("surfaces unknown stop_reason as an error rather than silent stop", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "some_future_failure_mode" }, usage: { output_tokens: 0 } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "message_delta",
+				data: {
+					type: "message_delta",
+					delta: { stop_reason: "some_future_failure_mode" },
+					usage: { output_tokens: 0 },
+				},
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -1185,11 +1595,26 @@ describe("anthropic provider", () => {
 	// caller sees the truncation rather than a fake successful end.
 	it("surfaces pause_turn as an error with continuation hint", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "pause_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "pause_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -1203,20 +1628,39 @@ describe("anthropic provider", () => {
 	// 400 deterministically.
 	it("drops temperature when thinking is enabled", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
-			temperature: 0.7,
-			thinkingLevel: "low",
-		}).result();
+		await createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "x" }] },
+			{
+				temperature: 0.7,
+				thinkingLevel: "low",
+			},
+		).result();
 
 		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
 		expect(sent.thinking).toEqual({ type: "enabled", budget_tokens: 4096 });
@@ -1230,11 +1674,26 @@ describe("anthropic provider", () => {
 	// loop returns it as the final non-retryable outcome.
 	it("error event for unrecoverable stop carries a terminal message", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 3, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 3, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "partial" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		globalThis.fetch = vi.fn().mockResolvedValue(mockResponse(body));
@@ -1243,7 +1702,11 @@ describe("anthropic provider", () => {
 		// about reading the error frame off the iterator below.
 		stream.result().catch(() => undefined);
 
-		let errorEvent: { type: string; error?: string; message?: { stopReason?: string; errorMessage?: string; content?: unknown } } | null = null;
+		let errorEvent: {
+			type: string;
+			error?: string;
+			message?: { stopReason?: string; errorMessage?: string; content?: unknown };
+		} | null = null;
 		for await (const event of stream) {
 			if (event.type === "error") {
 				errorEvent = event as typeof errorEvent;
@@ -1262,14 +1725,38 @@ describe("anthropic provider", () => {
 	// assistant content; we must skip such turns rather than serialize
 	// them.
 	it("skips assistant turns whose content collapses to empty after replay filtering", async () => {
-		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
-			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
-			{ event: "message_stop", data: { type: "message_stop" } },
-		])));
+		const fetchSpy = vi.fn().mockResolvedValue(
+			mockResponse(
+				sse([
+					{
+						event: "message_start",
+						data: {
+							type: "message_start",
+							message: {
+								id: "m",
+								role: "assistant",
+								model: "claude-test",
+								usage: { input_tokens: 1, output_tokens: 0 },
+							},
+						},
+					},
+					{
+						event: "content_block_start",
+						data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+					},
+					{
+						event: "content_block_delta",
+						data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+					},
+					{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+					{
+						event: "message_delta",
+						data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+					},
+					{ event: "message_stop", data: { type: "message_stop" } },
+				]),
+			),
+		);
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
 		await createAnthropicStream()(MODEL, {
@@ -1278,9 +1765,7 @@ describe("anthropic provider", () => {
 				{
 					role: "assistant",
 					provider: "openai", // foreign — thinking will be dropped
-					content: [
-						{ type: "thinking", text: "hidden", signature: "sig-from-elsewhere" },
-					],
+					content: [{ type: "thinking", text: "hidden", signature: "sig-from-elsewhere" }],
 				},
 				{ role: "user", content: "second" },
 			],
@@ -1295,19 +1780,38 @@ describe("anthropic provider", () => {
 
 	it("forwards temperature when thinking is disabled", async () => {
 		const body = sse([
-			{ event: "message_start", data: { type: "message_start", message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } } } },
-			{ event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
-			{ event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } } },
+			{
+				event: "message_start",
+				data: {
+					type: "message_start",
+					message: { id: "m", role: "assistant", model: "claude-test", usage: { input_tokens: 1, output_tokens: 0 } },
+				},
+			},
+			{
+				event: "content_block_start",
+				data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+			},
+			{
+				event: "content_block_delta",
+				data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+			},
 			{ event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
-			{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } } },
+			{
+				event: "message_delta",
+				data: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 1 } },
+			},
 			{ event: "message_stop", data: { type: "message_stop" } },
 		]);
 		const fetchSpy = vi.fn().mockResolvedValue(mockResponse(body));
 		globalThis.fetch = fetchSpy as unknown as typeof fetch;
 
-		await createAnthropicStream()(MODEL, { messages: [{ role: "user", content: "x" }] }, {
-			temperature: 0.42,
-		}).result();
+		await createAnthropicStream()(
+			MODEL,
+			{ messages: [{ role: "user", content: "x" }] },
+			{
+				temperature: 0.42,
+			},
+		).result();
 
 		const sent = JSON.parse((fetchSpy.mock.calls[0]?.[1] as { body: string }).body);
 		expect(sent.temperature).toBe(0.42);

@@ -1,11 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	FileExtensionStorage,
-	MemoryExtensionStorage,
-} from "../../src/extensions/storage.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { FileExtensionStorage, MemoryExtensionStorage } from "../../src/extensions/storage.js";
 
 describe("MemoryExtensionStorage", () => {
 	it("get/set/delete within a scope", () => {

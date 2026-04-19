@@ -2,9 +2,13 @@
  * Tests for ModelSelector component
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { createModelSelector, type ModelInfo, COMMON_MODELS } from "../../../../src/ui/components/selectors/model-selector.js";
 import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import {
+	COMMON_MODELS,
+	type ModelInfo,
+	createModelSelector,
+} from "../../../../src/ui/components/selectors/model-selector.js";
 
 // Simple theme without styling for testing
 const testTheme: SelectListTheme = {
@@ -59,7 +63,7 @@ describe("createModelSelector", () => {
 		expect(() =>
 			createModelSelector(tui, [], {
 				theme: testTheme,
-			})
+			}),
 		).toThrow("ModelSelector requires at least one model");
 	});
 

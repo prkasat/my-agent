@@ -231,9 +231,7 @@ function applyExifOrientation(
 	const orientation = getExifOrientation(originalBytes);
 	if (orientation === 1) return image;
 
-	const rotate90 = (
-		dstIndex: (x: number, y: number, w: number, h: number) => number,
-	): PhotonImage => {
+	const rotate90 = (dstIndex: (x: number, y: number, w: number, h: number) => number): PhotonImage => {
 		const w = image.get_width();
 		const h = image.get_height();
 		const src = image.get_raw_pixels();
@@ -305,12 +303,13 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 	if (!photon) {
 		return null;
 	}
+	const photonLib = photon;
 
 	let image: PhotonImage | undefined;
 	try {
 		const inputBytes = new Uint8Array(inputBuffer);
-		const rawImage = photon.PhotonImage.new_from_byteslice(inputBytes);
-		image = applyExifOrientation(photon, rawImage, inputBytes);
+		const rawImage = photonLib.PhotonImage.new_from_byteslice(inputBytes);
+		image = applyExifOrientation(photonLib, rawImage, inputBytes);
 		const exifApplied = image !== rawImage;
 		if (exifApplied) rawImage.free();
 
@@ -351,7 +350,10 @@ export async function resizeImage(img: ImageContent, options?: ImageResizeOption
 		}
 
 		function tryEncodings(width: number, height: number, jpegQualities: number[]): EncodedCandidate[] {
-			const resized = photon!.resize(image!, width, height, photon!.SamplingFilter.Lanczos3);
+			if (!image) {
+				return [];
+			}
+			const resized = photonLib.resize(image, width, height, photonLib.SamplingFilter.Lanczos3);
 
 			try {
 				const candidates: EncodedCandidate[] = [encodeCandidate(resized.get_bytes(), "image/png")];

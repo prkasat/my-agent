@@ -2,7 +2,7 @@
  * Footer - Status bar displaying model, mode, tokens, and cost
  */
 
-import { type Component, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { FooterTheme } from "../theme.js";
 
 export type AgentMode = "normal" | "plan" | "auto";
@@ -42,7 +42,7 @@ export class Footer implements Component {
 	// Cache
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private dirty: boolean = true;
+	private dirty = true;
 
 	constructor(initialData: FooterData, options: FooterOptions) {
 		this.data = { ...initialData };
@@ -138,7 +138,7 @@ export class Footer implements Component {
 		const modelText = theme.model(this.data.model);
 		const modeText = theme.mode(this.data.mode);
 
-		let leftParts = [modelText, separator, modeText];
+		const leftParts = [modelText, separator, modeText];
 
 		if (this.data.thinking) {
 			leftParts.push(separator, theme.thinking("thinking..."));
@@ -146,7 +146,7 @@ export class Footer implements Component {
 			leftParts.push(separator, this.data.statusText);
 		}
 
-		const left = " " + leftParts.join("");
+		const left = ` ${leftParts.join("")}`;
 		const leftWidth = visibleWidth(left);
 
 		// Build right side with progressive compaction for narrow terminals
@@ -188,19 +188,14 @@ export class Footer implements Component {
 	 * Build the right side of the footer with progressive compaction for narrow terminals.
 	 * Returns the most compact format that fits.
 	 */
-	private buildRightSide(
-		totalWidth: number,
-		leftWidth: number,
-		theme: FooterTheme,
-		separator: string
-	): string {
+	private buildRightSide(totalWidth: number, leftWidth: number, theme: FooterTheme, separator: string): string {
 		const minLeftWidth = 10; // Minimum space for left side
 		const availableForRight = Math.max(1, totalWidth - minLeftWidth);
 
 		// Full format: $0.0012 | ↑1.2k ↓345
 		const costText = theme.cost(this.formatCost());
 		const tokensText = theme.tokens(this.formatTokens());
-		const fullRight = costText + separator + tokensText + " ";
+		const fullRight = `${costText + separator + tokensText} `;
 
 		if (visibleWidth(fullRight) <= availableForRight) {
 			return fullRight;
@@ -209,14 +204,14 @@ export class Footer implements Component {
 		// Compact format: $0.00 | 1k/345
 		const compactCost = theme.cost(this.formatCostCompact());
 		const compactTokens = theme.tokens(this.formatTokensCompact());
-		const compactRight = compactCost + separator + compactTokens + " ";
+		const compactRight = `${compactCost + separator + compactTokens} `;
 
 		if (visibleWidth(compactRight) <= availableForRight) {
 			return compactRight;
 		}
 
 		// Minimal format: just tokens
-		const minimalRight = theme.tokens(this.formatTokensCompact()) + " ";
+		const minimalRight = `${theme.tokens(this.formatTokensCompact())} `;
 
 		if (visibleWidth(minimalRight) <= availableForRight) {
 			return minimalRight;

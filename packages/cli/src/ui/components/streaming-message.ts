@@ -5,7 +5,16 @@
  * After finalization, switches to full markdown parsing.
  */
 
-import { type Component, Markdown, Text, type MarkdownTheme, type DefaultTextStyle, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@mariozechner/pi-tui";
+import {
+	type Component,
+	type DefaultTextStyle,
+	Markdown,
+	type MarkdownTheme,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@mariozechner/pi-tui";
 import type { AssistantMessageTheme } from "../theme.js";
 
 export interface StreamingMessageOptions {
@@ -30,15 +39,16 @@ export interface StreamingMessageOptions {
  * switching to full Markdown rendering only when the stream is complete.
  */
 export class StreamingMessage implements Component {
-	private rawText: string = "";
-	private isStreaming: boolean = true;
+	private rawText = "";
+	private isStreaming = true;
 	private markdown: Markdown;
-	private options: Required<Omit<StreamingMessageOptions, "onInvalidate" | "label">> & Pick<StreamingMessageOptions, "onInvalidate" | "label">;
+	private options: Required<Omit<StreamingMessageOptions, "onInvalidate" | "label">> &
+		Pick<StreamingMessageOptions, "onInvalidate" | "label">;
 
 	// Cache management
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private dirty: boolean = true;
+	private dirty = true;
 
 	// Incremental wrapping optimization removed - the complexity of tracking
 	// proper character offsets (not visible widths) with ANSI/CJK/emoji is
@@ -200,7 +210,7 @@ export class StreamingMessage implements Component {
 		prefix: string,
 		content: string,
 		width: number,
-		bgFn?: (text: string) => string
+		bgFn?: (text: string) => string,
 	): string {
 		const composed = `${padding}${prefix}${content}`;
 		// Truncate to ensure we don't exceed width, pad to fill

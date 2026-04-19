@@ -97,8 +97,7 @@ export function createGrepToolDefinition(
 							settle(() =>
 								reject(
 									new Error(
-										`ripgrep (rg) is not available.${reason}\n` +
-											"Install manually: https://github.com/BurntSushi/ripgrep#installation",
+										`ripgrep (rg) is not available.${reason}\nInstall manually: https://github.com/BurntSushi/ripgrep#installation`,
 									),
 								),
 							);
@@ -151,7 +150,10 @@ export function createGrepToolDefinition(
 						args.push("-e", pattern, "--", searchPath);
 
 						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
-						const rl = createInterface({ input: child.stdout! });
+						if (!child.stdout) {
+							throw new Error("ripgrep stdout pipe unavailable");
+						}
+						const rl = createInterface({ input: child.stdout });
 						let stderr = "";
 						let matchCount = 0;
 						let matchLimitReached = false;

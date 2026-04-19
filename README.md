@@ -2,23 +2,32 @@
 
 Private-first terminal agent for coding and task-specific workflows.
 
-## Current shape
+## Features
 
-- OpenRouter API-key support
-- Anthropic OAuth support
-- OpenAI Codex / ChatGPT subscription OAuth support
-- auth-aware model selection
-- session persistence and branching
-- permissions for risky tools
-- local trusted extension loading
-- prompt templates
-- CLI REPL, one-shot mode, RPC stub entrypoint, and reusable TUI components
+- OpenRouter API-key auth
+- Anthropic OAuth auth
+- OpenAI Codex / ChatGPT subscription OAuth auth
+- auth-aware model registry and fallback selection
+- one-shot CLI, REPL, and JSONL RPC mode
+- session persistence, branching, export, and replay
+- runtime permission checks for risky tools
+- trusted local extensions with tools, commands, and middleware
+- prompt templates, skills, packages, and themes
+- structured tracing and mock eval harness
+- reusable TUI component/theme layer built on `@mariozechner/pi-tui`
 
 ## Quick start
 
 ```bash
 npm install
 npm run build
+npm test
+```
+
+Start the agent:
+
+```bash
+node packages/cli/dist/main.js
 ```
 
 Authenticate with OpenRouter:
@@ -35,54 +44,73 @@ Or log in from the REPL:
 /login openai-codex
 ```
 
-## Usage
+## Useful commands
 
 ```bash
-my-agent
-my-agent "explain this repo"
-my-agent --list-models
-my-agent --doctor
-my-agent --safe-mode
-my-agent --version
+node packages/cli/dist/main.js --help
+node packages/cli/dist/main.js --doctor
+node packages/cli/dist/main.js --list-models
+node packages/cli/dist/main.js --safe-mode
+node packages/cli/dist/main.js --trace
+node packages/cli/dist/main.js --replay <file>
+node packages/cli/dist/main.js --rpc
+npm run eval:mock
 ```
 
-## Auth model
+## Auth policy
 
-- `openrouter`: API key only
-- `anthropic`: OAuth
-- `openai-codex`: OAuth
+- `openrouter` → API key only
+- `anthropic` → OAuth only
+- `openai-codex` → OAuth only
 
-OpenRouter can use `OPENROUTER_API_KEY` or an `auth.json` entry.
-Anthropic and OpenAI Codex are intended to be used through `/login`.
+`openai-codex` is intentionally distinct from generic OpenAI Platform API usage.
 
-## Extensions
+## Resource model
 
-Extensions are trusted local JavaScript modules that export an `ExtensionDefinition`.
+- prompts → lightweight reusable prompt files
+- skills → task-specific prompt workflows with commands/aliases
+- packages → bundles of prompts, skills, extensions, and themes
+- themes → TUI palette overrides
+- extensions → trusted local code for tools, middleware, and deeper integrations
 
-Discovered from:
+Examples:
 
-- paths listed in `.my-agent/settings.json` under `extensions`
-- `.my-agent/extensions/`
-- `~/.my-agent/extensions/`
+- `examples/packages/research-bundle/`
+- `examples/extensions/`
+- `examples/prompts/generate-extension.md`
 
-Current runtime integration includes:
+## Docs
 
-- extension tools
-- tool interception / argument rewriting
-- extension event dispatch during agent runs
-- extension storage via the core extension runner
+See `docs/README.md`.
 
-## Repo checklist
+Key docs:
 
-The full target state is tracked in:
+- `docs/quickstart.md`
+- `docs/providers.md`
+- `docs/settings.md`
+- `docs/sessions.md`
+- `docs/extensions.md`
+- `docs/skills.md`
+- `docs/packages.md`
+- `docs/themes.md`
+- `docs/rpc.md`
+- `docs/tracing-replay.md`
+- `docs/security.md`
+- `docs/architecture.md`
 
-- `PRODUCTION_READINESS_CHECKLIST.md`
+## Validation
+
+Current repo validation targets:
+
+- `npm run build`
+- `npm test`
+- `npm run lint`
+- `npm run eval:mock`
+
+## Checklist
+
+The full target state is tracked in `PRODUCTION_READINESS_CHECKLIST.md`.
 
 ## Notes
 
-This repo is being used both as:
-
-- a practical private agent shell
-- a learning vehicle for understanding real agent internals end to end
-
-That means the codebase intentionally favors inspectability and explicit structure over hiding complexity.
+This codebase is intentionally optimized for inspectability and extension authoring, not for hiding complexity.

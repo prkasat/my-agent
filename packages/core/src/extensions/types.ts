@@ -7,19 +7,9 @@
  * trusted third-party plugins.
  */
 
-import type { TSchema, Static } from "@sinclair/typebox";
-import type {
-	Model,
-	Usage,
-	AssistantMessage,
-	AssistantMessageEvent,
-} from "@my-agent/ai";
-import type {
-	AgentContext,
-	AgentMessage,
-	AgentTool,
-	AgentToolResult,
-} from "../agent/types.js";
+import type { AssistantMessage, AssistantMessageEvent, Model, Usage } from "@my-agent/ai";
+import type { Static, TSchema } from "@sinclair/typebox";
+import type { AgentContext, AgentMessage, AgentTool, AgentToolResult } from "../agent/types.js";
 
 // =============================================================================
 // Events dispatched to extensions
@@ -142,10 +132,7 @@ export interface ToolMiddlewareContext {
 	durationMs?: number;
 }
 
-export type ToolMiddleware = (
-	ctx: ToolMiddlewareContext,
-	next: () => Promise<void>,
-) => Promise<void>;
+export type ToolMiddleware = (ctx: ToolMiddlewareContext, next: () => Promise<void>) => Promise<void>;
 
 // =============================================================================
 // UI adapter (TUI wires up a real impl; tests use a mock)
@@ -290,11 +277,11 @@ export type ExtensionEventHandler<T extends ExtensionEventType = ExtensionEventT
 	event: ExtensionEventByType<T>,
 	ctx: ExtensionContext,
 ) =>
-	| void
+	| undefined
 	| ToolInterceptResult
 	| ToolResultModification
 	| string
-	| Promise<void | ToolInterceptResult | ToolResultModification | string>;
+	| Promise<undefined | ToolInterceptResult | ToolResultModification | string>;
 
 export interface ExtensionCommand {
 	/** Command name, without the leading slash. */
@@ -365,10 +352,7 @@ export interface ExtensionContext<TConfig = unknown> {
 
 	// --- Registration ---
 	/** Subscribe to a typed event. Returns an unsubscribe function. */
-	on<T extends ExtensionEventType>(
-		event: T,
-		handler: ExtensionEventHandler<T>,
-	): () => void;
+	on<T extends ExtensionEventType>(event: T, handler: ExtensionEventHandler<T>): () => void;
 	/** Subscribe to every event. */
 	onAny(handler: (event: ExtensionEvent, ctx: ExtensionContext) => void | Promise<void>): () => void;
 	/** Register a slash command. */

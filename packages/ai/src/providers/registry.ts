@@ -1,6 +1,6 @@
-import type { StreamFunction, Model, Context, StreamOptions } from "../types.js";
-import type { AssistantMessageEvent, AssistantMessage } from "../types.js";
-import { EventStream } from "../utils/event-stream.js";
+import type { Context, Model, StreamFunction, StreamOptions } from "../types.js";
+import type { AssistantMessage, AssistantMessageEvent } from "../types.js";
+import type { EventStream } from "../utils/event-stream.js";
 
 type ProviderFactory = () => Promise<StreamFunction>;
 
@@ -48,11 +48,7 @@ export async function stream(
 /**
  * Convenience: get complete response without streaming.
  */
-export async function complete(
-	model: Model,
-	context: Context,
-	options: StreamOptions = {},
-): Promise<AssistantMessage> {
+export async function complete(model: Model, context: Context, options: StreamOptions = {}): Promise<AssistantMessage> {
 	const eventStream = await stream(model, context, options);
 	return eventStream.result();
 }

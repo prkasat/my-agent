@@ -2,8 +2,14 @@
  * Tests for DiffViewer component and parsing
  */
 
-import { describe, it, expect } from "vitest";
-import { DiffViewer, MultiDiffViewer, parseDiff, parseMultiDiff, type DiffData } from "../../../src/ui/components/diff-viewer.js";
+import { describe, expect, it } from "vitest";
+import {
+	type DiffData,
+	DiffViewer,
+	MultiDiffViewer,
+	parseDiff,
+	parseMultiDiff,
+} from "../../../src/ui/components/diff-viewer.js";
 import type { DiffViewerTheme } from "../../../src/ui/theme.js";
 
 // Simple theme without styling for testing
@@ -186,9 +192,9 @@ describe("parseDiff", () => {
 		const result = parseDiff(diffText);
 		expect(result.hunks[0].lines.length).toBe(3);
 		// All should start with space (context)
-		result.hunks[0].lines.forEach((line) => {
+		for (const line of result.hunks[0].lines) {
 			expect(line.startsWith(" ")).toBe(true);
-		});
+		}
 	});
 
 	it("parses hunk header with optional line counts", () => {

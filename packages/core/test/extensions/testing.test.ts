@@ -1,10 +1,5 @@
-import { describe, it, expect } from "vitest";
-import {
-	createMockContext,
-	createMockUI,
-	createMockActions,
-	activateForTest,
-} from "../../src/extensions/testing.js";
+import { describe, expect, it } from "vitest";
+import { activateForTest, createMockActions, createMockContext, createMockUI } from "../../src/extensions/testing.js";
 import type { ExtensionDefinition } from "../../src/extensions/types.js";
 
 describe("testing utilities", () => {

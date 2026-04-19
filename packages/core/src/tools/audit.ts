@@ -5,7 +5,16 @@
  * Logs are stored in a rotating file or can be sent to a custom handler.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { redactSecrets, redactValue } from "./redact.js";
@@ -123,9 +132,7 @@ export class AuditLogger {
 		const command = entry.command !== undefined ? redactSecrets(entry.command) : undefined;
 		const error = entry.error !== undefined ? redactSecrets(entry.error) : undefined;
 		const metadata =
-			entry.metadata !== undefined
-				? (redactValue(entry.metadata) as Record<string, unknown>)
-				: undefined;
+			entry.metadata !== undefined ? (redactValue(entry.metadata) as Record<string, unknown>) : undefined;
 		return {
 			...entry,
 			...(entry.command !== undefined ? { command } : {}),
@@ -148,7 +155,7 @@ export class AuditLogger {
 				mkdirSync(this.config.logDir, { recursive: true });
 			}
 
-			const line = JSON.stringify(entry) + "\n";
+			const line = `${JSON.stringify(entry)}\n`;
 			const lineBytes = Buffer.byteLength(line, "utf-8");
 
 			// Rotate if needed before getting the log file

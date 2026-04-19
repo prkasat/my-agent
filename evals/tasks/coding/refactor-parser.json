@@ -1,0 +1,6 @@
+{
+	"id": "coding-refactor-parser",
+	"prompt": "Refactor the parser to isolate tokenization and list the migration steps.",
+	"mockAssistantText": "Refactor plan: isolate tokenization, add tests, migrate callers, and validate the parser.",
+	"expectedContains": ["isolate tokenization", "tests", "migrate callers"]
+}

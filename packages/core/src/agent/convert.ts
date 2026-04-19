@@ -1,7 +1,7 @@
 import type { Message } from "@my-agent/ai";
-import type { AgentMessage } from "./types.js";
 import { customMessageToLlm } from "./custom-messages.js";
 import type { CustomMessage } from "./custom-messages.js";
+import type { AgentMessage } from "./types.js";
 
 /**
  * Convert AgentMessages to LLM-compatible Messages.

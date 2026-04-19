@@ -12,6 +12,7 @@
 		"test:watch": "vitest",
 		"lint": "biome check .",
 		"format": "biome format --write .",
+		"eval:mock": "npm run build && node scripts/eval.mjs",
 		"clean": "rm -rf packages/*/dist"
 	},
 	"devDependencies": {

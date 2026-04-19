@@ -1,12 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { EventStream } from "../src/utils/event-stream.js";
 
 describe("EventStream", () => {
 	it("should yield pushed events and resolve result", async () => {
-		const stream = new EventStream<
-			{ type: "data"; value: number } | { type: "done"; total: number },
-			number
-		>(
+		const stream = new EventStream<{ type: "data"; value: number } | { type: "done"; total: number }, number>(
 			(e) => e.type === "done",
 			(e) => (e as { type: "done"; total: number }).total,
 		);
@@ -27,10 +24,7 @@ describe("EventStream", () => {
 	});
 
 	it("should handle async push/consume pattern", async () => {
-		const stream = new EventStream<
-			{ type: "chunk"; text: string } | { type: "done"; text: string },
-			string
-		>(
+		const stream = new EventStream<{ type: "chunk"; text: string } | { type: "done"; text: string }, string>(
 			(e) => e.type === "done",
 			(e) => (e as { type: "done"; text: string }).text,
 		);
@@ -76,10 +70,7 @@ describe("EventStream", () => {
 	});
 
 	it("should ignore pushes after done", async () => {
-		const stream = new EventStream<
-			{ type: "data"; value: number } | { type: "done"; total: number },
-			number
-		>(
+		const stream = new EventStream<{ type: "data"; value: number } | { type: "done"; total: number }, number>(
 			(e) => e.type === "done",
 			(e) => (e as { type: "done"; total: number }).total,
 		);
@@ -101,10 +92,7 @@ describe("EventStream", () => {
 		// at the exact same moment, they all receive the same event (broadcast to waiters).
 		// This prevents the single-waiter bug where only one consumer would receive
 		// events while others hung forever.
-		const stream = new EventStream<
-			{ type: "data"; value: number } | { type: "done" },
-			void
-		>(
+		const stream = new EventStream<{ type: "data"; value: number } | { type: "done" }, void>(
 			(e) => e.type === "done",
 			() => undefined,
 		);
@@ -139,10 +127,7 @@ describe("EventStream", () => {
 	it("should not hang when multiple consumers iterate", async () => {
 		// This tests that multiple consumers can iterate without blocking each other.
 		// Events from the queue are distributed (not broadcast) to consumers.
-		const stream = new EventStream<
-			{ type: "data"; value: number } | { type: "done"; total: number },
-			number
-		>(
+		const stream = new EventStream<{ type: "data"; value: number } | { type: "done"; total: number }, number>(
 			(e) => e.type === "done",
 			(e) => (e as { type: "done"; total: number }).total,
 		);

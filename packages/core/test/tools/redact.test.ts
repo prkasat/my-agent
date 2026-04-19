@@ -44,7 +44,7 @@ describe("redactSecrets", () => {
 	it("redacts Authorization headers (Bearer / Basic / Token) preserving header name", () => {
 		const cases = [
 			"curl -H 'Authorization: Bearer REDACTED_OPENAI_TOKEN'",
-			"-H \"Authorization: Basic BASIC_AUTH_REDACTION_FIXTURE==\"",
+			'-H "Authorization: Basic BASIC_AUTH_REDACTION_FIXTURE=="',
 			"Authorization: Token REDACTED_GITHUB_TOKEN",
 		];
 		for (const c of cases) {
@@ -55,11 +55,23 @@ describe("redactSecrets", () => {
 
 	it("redacts KEY=value env exports for sensitive-named keys", () => {
 		const cases: { input: string; key: string; value: string }[] = [
-			{ input: "OPENAI_API_KEY=REDACTED_OPENAI_TOKEN", key: "OPENAI_API_KEY", value: "REDACTED_OPENAI_TOKEN" },
-			{ input: 'GITHUB_TOKEN="REDACTED_GITHUB_TOKEN"', key: "GITHUB_TOKEN", value: 'REDACTED_GITHUB_TOKEN' },
+			{
+				input: "OPENAI_API_KEY=REDACTED_OPENAI_TOKEN",
+				key: "OPENAI_API_KEY",
+				value: "REDACTED_OPENAI_TOKEN",
+			},
+			{
+				input: 'GITHUB_TOKEN="REDACTED_GITHUB_TOKEN"',
+				key: "GITHUB_TOKEN",
+				value: "REDACTED_GITHUB_TOKEN",
+			},
 			{ input: "DB_PASSWORD='hunter2'", key: "DB_PASSWORD", value: "hunter2" },
 			{ input: "MY_PRIVATE_KEY=-----BEGIN", key: "MY_PRIVATE_KEY", value: "-----BEGIN" },
-			{ input: "AWS_SECRET_ACCESS_KEY=AWS_SECRET_REDACTION_FIXTURE", key: "AWS_SECRET_ACCESS_KEY", value: "AWS_SECRET_REDACTION_FIXTURE" },
+			{
+				input: "AWS_SECRET_ACCESS_KEY=AWS_SECRET_REDACTION_FIXTURE",
+				key: "AWS_SECRET_ACCESS_KEY",
+				value: "AWS_SECRET_REDACTION_FIXTURE",
+			},
 		];
 		for (const c of cases) {
 			const out = redactSecrets(c.input);

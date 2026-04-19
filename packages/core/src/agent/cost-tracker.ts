@@ -1,4 +1,4 @@
-import type { Usage, Model } from "@my-agent/ai";
+import type { Model, Usage } from "@my-agent/ai";
 import type { AgentMessage } from "./types.js";
 
 export interface SessionCosts {
@@ -165,12 +165,7 @@ export class CostTracker {
 			// resume — without this, the current branch's kept tail
 			// would be the only input and the replay would miss the
 			// compacted turns' cost. Codex budget-fix pass-4 finding.
-			if (
-				"role" in msg &&
-				msg.role === "custom" &&
-				"type" in msg &&
-				msg.type === "compaction_summary"
-			) {
+			if ("role" in msg && msg.role === "custom" && "type" in msg && msg.type === "compaction_summary") {
 				const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
 				// Treat a malformed (NaN/Infinity/negative) snapshot as
 				// "unknown prior spend" rather than seeding a value that
@@ -191,11 +186,7 @@ export class CostTracker {
 				}
 				continue;
 			}
-			if (
-				"role" in msg &&
-				msg.role === "assistant" &&
-				msg.usage
-			) {
+			if ("role" in msg && msg.role === "assistant" && msg.usage) {
 				// Replay ALL assistant turns that carry usage — including
 				// `error` (Anthropic pause_turn carries authoritative
 				// billing) and `aborted` (the provider often finalizes

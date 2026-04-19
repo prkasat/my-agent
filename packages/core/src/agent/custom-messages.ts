@@ -51,11 +51,7 @@ export interface ExtensionMessage {
 	timestamp: number;
 }
 
-export type CustomMessage =
-	| BashExecutionMessage
-	| CompactionSummaryMessage
-	| BranchSummaryMessage
-	| ExtensionMessage;
+export type CustomMessage = BashExecutionMessage | CompactionSummaryMessage | BranchSummaryMessage | ExtensionMessage;
 
 /**
  * Convert a custom message to LLM-compatible format.

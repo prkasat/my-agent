@@ -53,10 +53,24 @@ export { ensureTool, getToolPath, getToolsDir } from "./tools/tools-manager.js";
 export type { EnsureToolOptions, EnsureToolResult } from "./tools/tools-manager.js";
 
 // Temp file management
-export { getTempFilePath, markForCleanup, preserveTempFile, cleanupTempFile, cleanupSessionTempFiles, cleanupOldTempFiles, getTempFileStats } from "./tools/temp-file-manager.js";
+export {
+	getTempFilePath,
+	markForCleanup,
+	preserveTempFile,
+	cleanupTempFile,
+	cleanupSessionTempFiles,
+	cleanupOldTempFiles,
+	getTempFileStats,
+} from "./tools/temp-file-manager.js";
 
 // Audit logging
-export { AuditLogger, ExecutionLogger, getAuditLogger, configureAuditLogger, disableAuditLogging } from "./tools/audit.js";
+export {
+	AuditLogger,
+	ExecutionLogger,
+	getAuditLogger,
+	configureAuditLogger,
+	disableAuditLogging,
+} from "./tools/audit.js";
 export type { AuditLogEntry, AuditLoggerConfig } from "./tools/audit.js";
 
 // Secret redaction (also reused by audit logger)
@@ -75,14 +89,37 @@ export { wrapToolDefinition, wrapToolDefinitions, createToolDefinitionFromAgentT
 export type { ToolDefinition } from "./tools/tool-definition.js";
 
 // Truncation utilities
-export { truncateHead, truncateTail, truncateLine, formatSize, DEFAULT_MAX_LINES, DEFAULT_MAX_BYTES, GREP_MAX_LINE_LENGTH } from "./tools/truncate.js";
+export {
+	truncateHead,
+	truncateTail,
+	truncateLine,
+	formatSize,
+	DEFAULT_MAX_LINES,
+	DEFAULT_MAX_BYTES,
+	GREP_MAX_LINE_LENGTH,
+} from "./tools/truncate.js";
 export type { TruncationResult, TruncationOptions } from "./tools/truncate.js";
 
 // Path utilities
-export { expandPath, resolveToCwd, resolveReadPath, isPathWithinBoundary, resolveAndValidatePath } from "./tools/path-utils.js";
+export {
+	expandPath,
+	resolveToCwd,
+	resolveReadPath,
+	isPathWithinBoundary,
+	resolveAndValidatePath,
+} from "./tools/path-utils.js";
 
 // Edit diff utilities
-export { fuzzyFindText, normalizeForFuzzyMatch, normalizeToLF, detectLineEnding, restoreLineEndings, stripBom, applyEditsToNormalizedContent, generateDiffString } from "./tools/edit-diff.js";
+export {
+	fuzzyFindText,
+	normalizeForFuzzyMatch,
+	normalizeToLF,
+	detectLineEnding,
+	restoreLineEndings,
+	stripBom,
+	applyEditsToNormalizedContent,
+	generateDiffString,
+} from "./tools/edit-diff.js";
 export type { Edit, FuzzyMatchResult, AppliedEditsResult } from "./tools/edit-diff.js";
 
 // Tools
@@ -96,7 +133,14 @@ export { createEditToolDefinition, createEditTool } from "./tools/edit.js";
 export type { EditToolInput, EditToolDetails, EditOperations, EditToolOptions } from "./tools/edit.js";
 
 export { createBashToolDefinition, createBashTool, createLocalBashOperations } from "./tools/bash.js";
-export type { BashToolInput, BashToolDetails, BashOperations, BashToolOptions, BashSpawnContext, BashSpawnHook } from "./tools/bash.js";
+export type {
+	BashToolInput,
+	BashToolDetails,
+	BashOperations,
+	BashToolOptions,
+	BashSpawnContext,
+	BashSpawnHook,
+} from "./tools/bash.js";
 
 export { createGrepToolDefinition, createGrepTool } from "./tools/grep.js";
 export type { GrepToolInput, GrepToolDetails, GrepOperations, GrepToolOptions } from "./tools/grep.js";
@@ -243,3 +287,16 @@ export {
 	getTemplateHelp,
 } from "./templates/prompt-templates.js";
 export type { PromptTemplate, TemplateLoadConfig } from "./templates/prompt-templates.js";
+
+// Resource packages
+export { loadResourcePackages } from "./resources/packages.js";
+export type {
+	LoadResourcePackagesConfig,
+	LoadResourcePackagesResult,
+	ResourcePackage,
+	ResourcePackageManifest,
+} from "./resources/packages.js";
+
+// Skills
+export { loadSkills, findSkillByCommand, expandSkill, getSkillHelp } from "./resources/skills.js";
+export type { LoadSkillsConfig, LoadSkillsResult, SkillDefinition } from "./resources/skills.js";

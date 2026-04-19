@@ -1,11 +1,11 @@
 import type {
-	Model,
-	Context,
-	StreamOptions,
-	AssistantMessageEvent,
 	AssistantMessage,
-	Usage,
+	AssistantMessageEvent,
+	Context,
+	Model,
+	StreamOptions,
 	ThinkingLevel,
+	Usage,
 } from "../types.js";
 import { EventStream } from "../utils/event-stream.js";
 
@@ -347,8 +347,7 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 	// signed thinking back to the real Anthropic API. Hosts that KNOW
 	// their proxy passes signatures through unchanged can opt back into
 	// "anthropic" explicitly via providerName.
-	const providerName =
-		config.providerName ?? (baseUrl === DEFAULT_BASE_URL ? "anthropic" : "anthropic-compatible");
+	const providerName = config.providerName ?? (baseUrl === DEFAULT_BASE_URL ? "anthropic" : "anthropic-compatible");
 
 	return function anthropicStream(
 		model: Model,
@@ -397,7 +396,7 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 					// passed both options doesn't get a deterministic
 					// 400. Matches the Pi-Mono baseline.
 					// Codex Tier-3 pass-8 finding.
-					delete body.temperature;
+					body.temperature = undefined;
 					// Anthropic requires max_tokens > budget_tokens.
 					// Honor an explicit caller cap rather than silently
 					// inflating it: a caller asking for maxTokens=1000
@@ -432,9 +431,10 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 					const error = await response.text();
 					const isRateLimit = response.status === 429;
 					const retryAfter = response.headers.get("retry-after");
-					const errorMsg = isRateLimit && retryAfter
-						? `anthropic API ${response.status}: ${error} (retry after ${retryAfter}s)`
-						: `anthropic API ${response.status}: ${error}`;
+					const errorMsg =
+						isRateLimit && retryAfter
+							? `anthropic API ${response.status}: ${error} (retry after ${retryAfter}s)`
+							: `anthropic API ${response.status}: ${error}`;
 					stream.push({ type: "error", error: errorMsg });
 					return;
 				}
@@ -531,7 +531,16 @@ async function parseSSEStream(
 		const eventType = data.type as string | undefined;
 		if (eventType === "message_start") {
 			sawMessageStart = true;
-			const msg = data.message as { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } } | undefined;
+			const msg = data.message as
+				| {
+						usage?: {
+							input_tokens?: number;
+							output_tokens?: number;
+							cache_read_input_tokens?: number;
+							cache_creation_input_tokens?: number;
+						};
+				  }
+				| undefined;
 			if (msg?.usage) {
 				usage = {
 					inputTokens: msg.usage.input_tokens || 0,
@@ -542,7 +551,15 @@ async function parseSSEStream(
 			}
 		} else if (eventType === "content_block_start") {
 			const idx = data.index as number;
-			const cb = data.content_block as { type: string; id?: string; name?: string; text?: string; thinking?: string; data?: string; input?: unknown };
+			const cb = data.content_block as {
+				type: string;
+				id?: string;
+				name?: string;
+				text?: string;
+				thinking?: string;
+				data?: string;
+				input?: unknown;
+			};
 			if (cb.type === "text") {
 				blocks.set(idx, { type: "text", text: cb.text || "" });
 			} else if (cb.type === "thinking") {
@@ -635,9 +652,10 @@ async function parseSSEStream(
 				stopReason = mapStopReason(delta.stop_reason);
 				sawTerminal = true;
 				if (stopReason === "error") {
-					const errMsg = delta.stop_reason === "pause_turn"
-						? "anthropic paused the turn for continuation; auto-continue is not yet implemented"
-						: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`;
+					const errMsg =
+						delta.stop_reason === "pause_turn"
+							? "anthropic paused the turn for continuation; auto-continue is not yet implemented"
+							: `anthropic stream stopped with unrecoverable reason: ${delta.stop_reason}`;
 					// Attach a terminal AssistantMessage so the agent
 					// loop classifies this as a final non-retryable
 					// outcome (it returns event.message and stops on
@@ -663,7 +681,12 @@ async function parseSSEStream(
 				}
 			}
 			const usageDelta = data.usage as
-				| { output_tokens?: number; input_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number }
+				| {
+						output_tokens?: number;
+						input_tokens?: number;
+						cache_read_input_tokens?: number;
+						cache_creation_input_tokens?: number;
+				  }
 				| undefined;
 			if (usageDelta) {
 				usage = {

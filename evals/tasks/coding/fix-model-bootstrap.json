@@ -1,0 +1,6 @@
+{
+	"id": "coding-fix-bootstrap",
+	"prompt": "Explain how to fix a broken default model bootstrap path.",
+	"mockAssistantText": "Use a valid default model, derive provider from the model registry, and show clear onboarding when no auth exists.",
+	"expectedContains": ["valid default model", "model registry", "onboarding"]
+}

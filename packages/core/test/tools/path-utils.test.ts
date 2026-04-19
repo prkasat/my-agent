@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	expandPath,
@@ -6,15 +9,12 @@ import {
 	resolveReadPath,
 	resolveToCwd,
 } from "../../src/tools/path-utils.js";
-import * as os from "node:os";
-import * as path from "node:path";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
 
 describe("path-utils", () => {
 	describe("expandPath", () => {
 		it("expands ~ to home directory", () => {
 			expect(expandPath("~")).toBe(os.homedir());
-			expect(expandPath("~/foo")).toBe(os.homedir() + "/foo");
+			expect(expandPath("~/foo")).toBe(`${os.homedir()}/foo`);
 		});
 
 		it("strips @ prefix", () => {
@@ -37,7 +37,7 @@ describe("path-utils", () => {
 
 		it("expands ~ before resolving", () => {
 			const result = resolveToCwd("~/docs", "/home/user");
-			expect(result).toBe(os.homedir() + "/docs");
+			expect(result).toBe(`${os.homedir()}/docs`);
 		});
 	});
 

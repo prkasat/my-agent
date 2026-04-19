@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
+import type { AssistantMessage, AssistantMessageEvent } from "../src/types.js";
 import { EventStream } from "../src/utils/event-stream.js";
-import type { AssistantMessageEvent, AssistantMessage } from "../src/types.js";
 
 describe("EventStream error handling", () => {
 	it("should encode errors as events, not throw", async () => {

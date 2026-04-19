@@ -2,7 +2,7 @@
  * ToolExecution - Shows tool execution progress with collapsible output
  */
 
-import { type Component, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { ToolExecutionTheme } from "../theme.js";
 
 export type ToolStatus = "pending" | "running" | "success" | "error";
@@ -13,8 +13,22 @@ export type ToolStatus = "pending" | "running" | "success" | "error";
 export type ToolExecutionState =
 	| { status: "pending"; name: string; input: Record<string, unknown>; expanded: boolean }
 	| { status: "running"; name: string; input: Record<string, unknown>; expanded: boolean; startTime: number }
-	| { status: "success"; name: string; input: Record<string, unknown>; expanded: boolean; output: string; durationMs: number }
-	| { status: "error"; name: string; input: Record<string, unknown>; expanded: boolean; error: string; durationMs?: number };
+	| {
+			status: "success";
+			name: string;
+			input: Record<string, unknown>;
+			expanded: boolean;
+			output: string;
+			durationMs: number;
+	  }
+	| {
+			status: "error";
+			name: string;
+			input: Record<string, unknown>;
+			expanded: boolean;
+			error: string;
+			durationMs?: number;
+	  };
 
 export interface ToolExecutionOptions {
 	/** Theme for styling */
@@ -51,7 +65,7 @@ export class ToolExecution implements Component {
 	private cachedWidth?: number;
 	private cachedLines?: string[];
 	private cachedInputJson?: string;
-	private dirty: boolean = true;
+	private dirty = true;
 
 	constructor(name: string, input: Record<string, unknown>, options: ToolExecutionOptions) {
 		// Deep clone input to prevent external mutation from desyncing rendered state
@@ -202,9 +216,7 @@ export class ToolExecution implements Component {
 		const icon = this.getStyledIcon(theme);
 		const name = theme.toolName(this.state.name);
 		const duration = this.getDurationText(theme);
-		const expandIndicator = this.hasExpandableContent()
-			? theme.collapsed(this.state.expanded ? " [-]" : " [+]")
-			: "";
+		const expandIndicator = this.hasExpandableContent() ? theme.collapsed(this.state.expanded ? " [-]" : " [+]") : "";
 
 		// Compose header without truncation first to measure
 		const headerContent = `${icon} ${name}${duration}${expandIndicator}`;
@@ -310,11 +322,7 @@ export class ToolExecution implements Component {
 		return lines;
 	}
 
-	private renderContent(
-		content: string,
-		availableWidth: number,
-		styleFn: (text: string) => string
-	): string[] {
+	private renderContent(content: string, availableWidth: number, styleFn: (text: string) => string): string[] {
 		const lines: string[] = [];
 		const maxLines = this.options.maxExpandedLines;
 		const contentLines = content.split("\n");

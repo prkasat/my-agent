@@ -163,17 +163,13 @@ export function verifyLockRoot(rootPath: string): void {
 		);
 	}
 	if (!st.isDirectory()) {
-		throw new Error(
-			`Lock root ${rootPath} exists but is not a directory; refusing to use.`,
-		);
+		throw new Error(`Lock root ${rootPath} exists but is not a directory; refusing to use.`);
 	}
 	// Owner check (POSIX only — Windows doesn't expose Unix uids here)
 	if (typeof process.getuid === "function") {
 		const ourUid = process.getuid();
 		if (st.uid !== ourUid) {
-			throw new Error(
-				`Lock root ${rootPath} is owned by uid ${st.uid}, not our uid ${ourUid}; refusing to use.`,
-			);
+			throw new Error(`Lock root ${rootPath} is owned by uid ${st.uid}, not our uid ${ourUid}; refusing to use.`);
 		}
 	}
 }
@@ -199,8 +195,7 @@ export function verifyLockRoot(rootPath: string): void {
  * on every platform we target.
  */
 const LOCK_ROOT = (() => {
-	const uid =
-		typeof process.getuid === "function" ? String(process.getuid()) : "unknown";
+	const uid = typeof process.getuid === "function" ? String(process.getuid()) : "unknown";
 	const host = os.hostname().replace(/[^a-zA-Z0-9-]/g, "_") || "unknown";
 	const ns = process.env.MY_AGENT_LOCK_NAMESPACE
 		? `-${process.env.MY_AGENT_LOCK_NAMESPACE.replace(/[^a-zA-Z0-9-]/g, "_")}`
@@ -225,9 +220,7 @@ const LOCK_ROOT = (() => {
  */
 export function lockDirFor(canonicalPath: string): string {
 	const key =
-		process.platform === "darwin" || process.platform === "win32"
-			? canonicalPath.toLowerCase()
-			: canonicalPath;
+		process.platform === "darwin" || process.platform === "win32" ? canonicalPath.toLowerCase() : canonicalPath;
 	const hash = crypto.createHash("sha256").update(key).digest("hex");
 	return path.join(LOCK_ROOT, `${hash}.lock`);
 }
@@ -308,9 +301,7 @@ function writeLockInfo(infoPath: string, token: string): void {
 		fs.constants.O_CREAT |
 		fs.constants.O_EXCL |
 		fs.constants.O_WRONLY |
-		(process.platform !== "win32" && typeof fs.constants.O_NOFOLLOW === "number"
-			? fs.constants.O_NOFOLLOW
-			: 0);
+		(process.platform !== "win32" && typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
 	const fd = fs.openSync(infoPath, flags, 0o600);
 	try {
 		fs.writeSync(fd, JSON.stringify(info));
@@ -345,8 +336,7 @@ function readLockInfo(infoPath: string): LockInfo | null {
 				hostname: parsed.hostname,
 				acquiredAt: parsed.acquiredAt,
 				token: typeof parsed.token === "string" ? parsed.token : "",
-				heartbeatAt:
-					typeof parsed.heartbeatAt === "number" ? parsed.heartbeatAt : undefined,
+				heartbeatAt: typeof parsed.heartbeatAt === "number" ? parsed.heartbeatAt : undefined,
 			};
 		}
 	} catch {
@@ -758,10 +748,12 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
 
 	// Chain onto existing queue for this path
 	const existing = queues.get(resolvedPath) || Promise.resolve();
-	let result: T;
+	let result: T | undefined;
+	let hasResult = false;
 
 	const newPromise = existing.then(async () => {
 		result = await fn();
+		hasResult = true;
 	});
 
 	// Don't propagate errors to future operations
@@ -778,5 +770,8 @@ export async function withFileLock<T>(filePath: string, fn: () => Promise<T>): P
 	});
 
 	await newPromise;
-	return result!;
+	if (!hasResult) {
+		throw new Error(`Lock queue completed without a result for ${resolvedPath}`);
+	}
+	return result as T;
 }

@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import type { SessionEntry, AgentMessage, SessionManager, SessionHeader } from "@my-agent/core";
+import type { AgentMessage, SessionEntry, SessionHeader, SessionManager } from "@my-agent/core";
 
 /**
  * Export a session to a standalone HTML file.
@@ -8,41 +8,38 @@ import type { SessionEntry, AgentMessage, SessionManager, SessionHeader } from "
  */
 
 export interface ExportOptions {
-  entries: SessionEntry[];
-  header: SessionHeader;
-  outputPath: string;
+	entries: SessionEntry[];
+	header: SessionHeader;
+	outputPath: string;
 }
 
 export async function exportSessionToHtml(options: ExportOptions): Promise<void> {
-  const { entries, header, outputPath } = options;
+	const { entries, header, outputPath } = options;
 
-  const messages = entries
-    .filter((e): e is Extract<SessionEntry, { type: "message" }> => e.type === "message")
-    .map(e => e.message);
+	const messages = entries
+		.filter((e): e is Extract<SessionEntry, { type: "message" }> => e.type === "message")
+		.map((e) => e.message);
 
-  const html = buildExportHtml(messages, header);
-  await fs.writeFile(outputPath, html, "utf-8");
+	const html = buildExportHtml(messages, header);
+	await fs.writeFile(outputPath, html, "utf-8");
 }
 
-export async function exportFromSessionManager(
-  sessionManager: SessionManager,
-  outputPath: string,
-): Promise<void> {
-  const entries = sessionManager.getEntries();
-  const header = sessionManager.getHeader();
+export async function exportFromSessionManager(sessionManager: SessionManager, outputPath: string): Promise<void> {
+	const entries = sessionManager.getEntries();
+	const header = sessionManager.getHeader();
 
-  if (!header) {
-    throw new Error("Session has no header");
-  }
+	if (!header) {
+		throw new Error("Session has no header");
+	}
 
-  await exportSessionToHtml({ entries, header, outputPath });
+	await exportSessionToHtml({ entries, header, outputPath });
 }
 
 function buildExportHtml(messages: AgentMessage[], header: SessionHeader): string {
-  const messageHtml = messages.map(renderMessage).join("\n");
-  const createdAt = new Date(header.timestamp).getTime();
+	const messageHtml = messages.map(renderMessage).join("\n");
+	const createdAt = new Date(header.timestamp).getTime();
 
-  return `<!DOCTYPE html>
+	return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -92,42 +89,45 @@ function buildExportHtml(messages: AgentMessage[], header: SessionHeader): strin
 }
 
 function renderMessage(msg: AgentMessage): string {
-  if (msg.role === "user") {
-    const text = typeof msg.content === "string" ? msg.content : "[complex content]";
-    return `<div class="message user"><div class="role">User</div><div class="content">${escapeHtml(text)}</div></div>`;
-  }
+	if (msg.role === "user") {
+		const text = typeof msg.content === "string" ? msg.content : "[complex content]";
+		return `<div class="message user"><div class="role">User</div><div class="content">${escapeHtml(text)}</div></div>`;
+	}
 
-  if (msg.role === "assistant") {
-    const parts = (msg.content as Array<{ type: string; text?: string; name?: string; arguments?: string }>)
-      .map((c) => {
-        if (c.type === "text") return escapeHtml(c.text || "");
-        if (c.type === "tool_call") return `<div class="tool-name">Tool: ${c.name}(${escapeHtml((c.arguments || "").substring(0, 200))}...)</div>`;
-        if (c.type === "thinking") return `<details><summary style="color:#8b949e;cursor:pointer">Thinking...</summary>${escapeHtml(c.text || "")}</details>`;
-        return "";
-      })
-      .join("\n");
-    return `<div class="message assistant"><div class="role">Assistant</div><div class="content">${parts}</div></div>`;
-  }
+	if (msg.role === "assistant") {
+		const parts = (msg.content as Array<{ type: string; text?: string; name?: string; arguments?: string }>)
+			.map((c) => {
+				if (c.type === "text") return escapeHtml(c.text || "");
+				if (c.type === "tool_call")
+					return `<div class="tool-name">Tool: ${c.name}(${escapeHtml((c.arguments || "").substring(0, 200))}...)</div>`;
+				if (c.type === "thinking")
+					return `<details><summary style="color:#8b949e;cursor:pointer">Thinking...</summary>${escapeHtml(c.text || "")}</details>`;
+				return "";
+			})
+			.join("\n");
+		return `<div class="message assistant"><div class="role">Assistant</div><div class="content">${parts}</div></div>`;
+	}
 
-  if (msg.role === "toolResult") {
-    const toolMsg = msg as { role: "toolResult"; toolName: string; isError?: boolean; content: Array<{ type: string; text?: string }> };
-    const text = toolMsg.content.map((c) => c.type === "text" ? c.text : "").join("");
-    const cls = toolMsg.isError ? "tool-result error" : "tool-result";
-    return `<div class="message ${cls}"><div class="role">Tool: ${toolMsg.toolName}</div><div class="content"><pre>${escapeHtml(text.substring(0, 5000))}</pre></div></div>`;
-  }
+	if (msg.role === "toolResult") {
+		const toolMsg = msg as {
+			role: "toolResult";
+			toolName: string;
+			isError?: boolean;
+			content: Array<{ type: string; text?: string }>;
+		};
+		const text = toolMsg.content.map((c) => (c.type === "text" ? c.text : "")).join("");
+		const cls = toolMsg.isError ? "tool-result error" : "tool-result";
+		return `<div class="message ${cls}"><div class="role">Tool: ${toolMsg.toolName}</div><div class="content"><pre>${escapeHtml(text.substring(0, 5000))}</pre></div></div>`;
+	}
 
-  return "";
+	return "";
 }
 
 function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
+	return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 
 export function getExportFilename(sessionId: string): string {
-  const date = new Date().toISOString().split("T")[0];
-  return `session-${sessionId.substring(0, 8)}-${date}.html`;
+	const date = new Date().toISOString().split("T")[0];
+	return `session-${sessionId.substring(0, 8)}-${date}.html`;
 }

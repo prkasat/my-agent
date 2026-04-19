@@ -2,12 +2,12 @@
  * Tests for keybindings
  */
 
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
 	AGENT_KEYBINDINGS,
+	getActionDescription,
 	getAgentKeybindingActions,
 	getDefaultKeyForAction,
-	getActionDescription,
 } from "../../src/ui/keybindings.js";
 
 describe("AGENT_KEYBINDINGS", () => {

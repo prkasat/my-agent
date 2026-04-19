@@ -4,7 +4,7 @@
  * Extends pi-tui keybindings with agent-specific actions.
  */
 
-import { type KeybindingDefinitions, type KeyId } from "@mariozechner/pi-tui";
+import type { KeyId, KeybindingDefinitions } from "@mariozechner/pi-tui";
 
 /**
  * Agent-specific keybinding definitions

@@ -1,6 +1,6 @@
+import type { Model, Usage } from "@my-agent/ai";
 import { describe, expect, it } from "vitest";
 import { CostTracker } from "../src/agent/cost-tracker.js";
-import type { Model, Usage } from "@my-agent/ai";
 
 const PRICED_MODEL: Model = {
 	id: "test-model",
@@ -212,11 +212,7 @@ describe("CostTracker", () => {
 		// based estimate, so totalCost stays finite and the cap still
 		// works.
 		const tracker = new CostTracker(0.01);
-		tracker.recordTurn(
-			PRICED_MODEL,
-			{ inputTokens: 100, outputTokens: 50, cost: Number.NaN },
-			0,
-		);
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 100, outputTokens: 50, cost: Number.NaN }, 0);
 		expect(Number.isFinite(tracker.getSummary().totalCost)).toBe(true);
 		// 100/1M * 3 + 50/1M * 15 = $0.001050 — positive, so a follow-up
 		// that blows past the cap still gets stopped.
@@ -229,11 +225,7 @@ describe("CostTracker", () => {
 		// totalCost and permanently lock the session under its cap.
 		// The calculator rejects it and uses the token-based fallback.
 		const tracker = new CostTracker(0.01);
-		tracker.recordTurn(
-			PRICED_MODEL,
-			{ inputTokens: 100, outputTokens: 50, cost: Number.POSITIVE_INFINITY },
-			0,
-		);
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 100, outputTokens: 50, cost: Number.POSITIVE_INFINITY }, 0);
 		expect(Number.isFinite(tracker.getSummary().totalCost)).toBe(true);
 		expect(tracker.getSummary().totalCost).toBeCloseTo(0.00105, 6);
 		expect(tracker.isBudgetExceeded()).toBe(false);
@@ -244,11 +236,7 @@ describe("CostTracker", () => {
 		// The cost calculator treats NaN tokens as 0 and the token
 		// counters do too.
 		const tracker = new CostTracker(0.01);
-		tracker.recordTurn(
-			PRICED_MODEL,
-			{ inputTokens: Number.NaN, outputTokens: 50, cost: 0.001 },
-			0,
-		);
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: Number.NaN, outputTokens: 50, cost: 0.001 }, 0);
 		// Token counter stays finite (NaN rejected, counted as 0).
 		expect(Number.isFinite(tracker.getSummary().totalInputTokens)).toBe(true);
 		expect(tracker.getSummary().totalInputTokens).toBe(0);
@@ -262,11 +250,7 @@ describe("CostTracker", () => {
 		// the token-based estimate from model.cost, which is strictly
 		// non-negative.
 		const tracker = new CostTracker(0.01);
-		tracker.recordTurn(
-			PRICED_MODEL,
-			{ inputTokens: 100, outputTokens: 50, cost: -5 },
-			0,
-		);
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 100, outputTokens: 50, cost: -5 }, 0);
 		// 100/1M * 3 + 50/1M * 15 = $0.001050
 		expect(tracker.getSummary().totalCost).toBeCloseTo(0.00105, 6);
 		expect(tracker.getSummary().totalCost).toBeGreaterThan(0);
@@ -427,11 +411,7 @@ describe("CostTracker", () => {
 		const tracker = new CostTracker(0.01);
 		// Recording an error-stop turn directly (recordTurn is
 		// stop-reason agnostic) — it just charges the usage.
-		tracker.recordTurn(
-			PRICED_MODEL,
-			{ inputTokens: 100, outputTokens: 50, cost: 0.011 },
-			0,
-		);
+		tracker.recordTurn(PRICED_MODEL, { inputTokens: 100, outputTokens: 50, cost: 0.011 }, 0);
 		expect(tracker.isBudgetExceeded()).toBe(true);
 	});
 });

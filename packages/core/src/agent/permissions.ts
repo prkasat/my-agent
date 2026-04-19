@@ -176,18 +176,38 @@ interface PermissionChecker {
  * heuristic below is the backstop for fields we don't recognize.
  */
 const PATH_FIELD_NAMES = new Set([
-	"path", "paths",
-	"filepath", "file_path", "filePath",
-	"pathname", "pathName",
-	"file", "files",
-	"filename", "file_name", "fileName",
-	"target", "targets",
-	"source", "sources", "src",
-	"dst", "dest", "destination",
-	"keyfile", "key_file", "keyFile",
-	"input", "inputs", "output", "outputs",
-	"directory", "dir", "folder",
-	"cwd", "root",
+	"path",
+	"paths",
+	"filepath",
+	"file_path",
+	"filePath",
+	"pathname",
+	"pathName",
+	"file",
+	"files",
+	"filename",
+	"file_name",
+	"fileName",
+	"target",
+	"targets",
+	"source",
+	"sources",
+	"src",
+	"dst",
+	"dest",
+	"destination",
+	"keyfile",
+	"key_file",
+	"keyFile",
+	"input",
+	"inputs",
+	"output",
+	"outputs",
+	"directory",
+	"dir",
+	"folder",
+	"cwd",
+	"root",
 ]);
 
 /**
@@ -319,10 +339,7 @@ export interface PermissionCheckerOptions {
 	onAsk?: (ctx: PermissionAskContext) => Promise<AskDecision>;
 }
 
-export function createPermissionChecker(
-	mode: PermissionMode,
-	options?: PermissionCheckerOptions,
-): PermissionChecker {
+export function createPermissionChecker(mode: PermissionMode, options?: PermissionCheckerOptions): PermissionChecker {
 	// Per-checker memory of "allow_session" decisions so a user who
 	// approved a tool once isn't prompted again for the same tool name
 	// in the same session.
@@ -395,13 +412,10 @@ export function createPermissionChecker(
 			// Final precedence (highest first):
 			//   requireConfirmation → KNOWN_WRITE_TOOLS → knownReadOnly
 			//                       → unknown (write-like)
-			const isExplicitlyConfirmed =
-				options?.requireConfirmation?.has(toolCall.name) === true;
+			const isExplicitlyConfirmed = options?.requireConfirmation?.has(toolCall.name) === true;
 			const isKnownWrite = KNOWN_WRITE_TOOLS.has(toolCall.name);
 			const isKnownRead =
-				!isExplicitlyConfirmed &&
-				!isKnownWrite &&
-				options?.knownReadOnly?.has(toolCall.name) === true;
+				!isExplicitlyConfirmed && !isKnownWrite && options?.knownReadOnly?.has(toolCall.name) === true;
 			// Auto mode preserves its old generous behavior — only
 			// known-writes and requireConfirmation tools matter there;
 			// everything else allowed. Ask/deny use the fail-closed
@@ -428,14 +442,8 @@ export function createPermissionChecker(
 				const askCtx: PermissionAskContext = {
 					toolName: toolCall.name,
 					args,
-					command:
-						typeof typedArgs?.command === "string"
-							? (typedArgs.command as string)
-							: undefined,
-					filePath:
-						typeof typedArgs?.path === "string"
-							? (typedArgs.path as string)
-							: undefined,
+					command: typeof typedArgs?.command === "string" ? (typedArgs.command as string) : undefined,
+					filePath: typeof typedArgs?.path === "string" ? (typedArgs.path as string) : undefined,
 				};
 				const decision = await options.onAsk(askCtx);
 				if (decision === "allow_once") return { action: "allow" };

@@ -10,8 +10,8 @@
  * - Unknown versions will warn but proceed (for flexibility)
  */
 
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	chmodSync,
 	createWriteStream,
@@ -43,9 +43,18 @@ const DOWNLOAD_TIMEOUT_MS = 120_000;
  * Downloads will proceed with a warning until checksums are added.
  */
 const KNOWN_CHECKSUMS: Record<string, string> = {
-	// TODO: Populate with real checksums from GitHub releases
-	// Example format:
-	// "rg-14.1.1-aarch64-apple-darwin": "actual_sha256_hash_here",
+	// ripgrep 14.1.1
+	"rg-14.1.1-aarch64-apple-darwin": "24ad76777745fbff131c8fbc466742b011f925bfa4fffa2ded6def23b5b937be",
+	"rg-14.1.1-x86_64-apple-darwin": "fc87e78f7cb3fea12d69072e7ef3b21509754717b746368fd40d88963630e2b3",
+	"rg-14.1.1-aarch64-unknown-linux-gnu": "c827481c4ff4ea10c9dc7a4022c8de5db34a5737cb74484d62eb94a95841ab2f",
+	"rg-14.1.1-x86_64-unknown-linux-musl": "4cf9f2741e6c465ffdb7c26f38056a59e2a2544b51f7cc128ef28337eeae4d8e",
+	"rg-14.1.1-x86_64-pc-windows-msvc": "d0f534024c42afd6cb4d38907c25cd2b249b79bbe6cc1dbee8e3e37c2b6e25a1",
+	// fd 10.2.0
+	"fd-10.2.0-aarch64-apple-darwin": "ae6327ba8c9a487cd63edd8bddd97da0207887a66d61e067dfe80c1430c5ae36",
+	"fd-10.2.0-x86_64-apple-darwin": "991a648a58870230af9547c1ae33e72cb5c5199a622fe5e540e162d6dba82d48",
+	"fd-10.2.0-aarch64-unknown-linux-gnu": "6de8be7a3d8ca27954a6d1e22bc327af4cf6fc7622791e68b820197f915c422b",
+	"fd-10.2.0-x86_64-unknown-linux-gnu": "5f9030bcb0e1d03818521ed2e3d74fdb046480a45a4418ccff4f070241b4ed25",
+	"fd-10.2.0-x86_64-pc-windows-msvc": "92ac9e6b0a0c6ecdab638ffe210dc786403fff4c66373604cf70df27be45e4fe",
 };
 
 /**
@@ -99,8 +108,8 @@ const TOOLS: Record<string, ToolConfig> = {
 				return `fd-v${version}-${archStr}-unknown-linux-gnu.tar.gz`;
 			}
 			if (plat === "win32") {
-				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-				return `fd-v${version}-${archStr}-pc-windows-msvc.zip`;
+				if (architecture === "arm64") return null;
+				return `fd-v${version}-x86_64-pc-windows-msvc.zip`;
 			}
 			return null;
 		},
@@ -123,8 +132,8 @@ const TOOLS: Record<string, ToolConfig> = {
 				return `ripgrep-${version}-x86_64-unknown-linux-musl.tar.gz`;
 			}
 			if (plat === "win32") {
-				const archStr = architecture === "arm64" ? "aarch64" : "x86_64";
-				return `ripgrep-${version}-${archStr}-pc-windows-msvc.zip`;
+				if (architecture === "arm64") return null;
+				return `ripgrep-${version}-x86_64-pc-windows-msvc.zip`;
 			}
 			return null;
 		},
@@ -218,7 +227,8 @@ function findBinaryRecursively(rootDir: string, binaryFileName: string): string 
 	const stack: string[] = [rootDir];
 
 	while (stack.length > 0) {
-		const currentDir = stack.pop()!;
+		const currentDir = stack.pop();
+		if (!currentDir) continue;
 		const entries = readdirSync(currentDir, { withFileTypes: true });
 
 		for (const entry of entries) {
@@ -285,6 +295,9 @@ function getChecksumKey(tool: string, version: string, plat: string, architectur
 		}
 		return `${tool}-${version}-${archStr}-unknown-linux-gnu`;
 	}
+	if (plat === "win32") {
+		return `${tool}-${version}-x86_64-pc-windows-msvc`;
+	}
 	return `${tool}-${version}-${plat}-${archStr}`;
 }
 
@@ -331,24 +344,22 @@ async function downloadTool(tool: "fd" | "rg"): Promise<string> {
 		if (actualChecksum !== expectedChecksum) {
 			rmSync(archivePath, { force: true });
 			throw new Error(
-				`Checksum verification failed for ${assetName}\n` +
-					`Expected: ${expectedChecksum}\n` +
-					`Got: ${actualChecksum}\n` +
-					`This could indicate a corrupted download or supply-chain attack.`,
+				`Checksum verification failed for ${assetName}\nExpected: ${expectedChecksum}\nGot: ${actualChecksum}\nThis could indicate a corrupted download or supply-chain attack.`,
 			);
 		}
 	} else {
 		// Log warning about unverified download (checksum not in our known list)
 		// This is a security consideration - ideally all downloads should be verified
 		console.warn(
-			`[security] No checksum available for ${checksumKey}. ` +
-				`Download proceeding without verification. ` +
-				`Computed SHA-256: ${actualChecksum}`,
+			`[security] No checksum available for ${checksumKey}. Download proceeding without verification. Computed SHA-256: ${actualChecksum}`,
 		);
 	}
 
 	// Extract into unique temp directory (avoid race conditions)
-	const extractDir = join(toolsDir, `extract_${config.binaryName}_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+	const extractDir = join(
+		toolsDir,
+		`extract_${config.binaryName}_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+	);
 	mkdirSync(extractDir, { recursive: true });
 
 	try {

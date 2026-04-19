@@ -52,9 +52,7 @@ export function createWriteToolDefinition(
 					if (signal?.aborted) throw new Error("Operation aborted");
 					await ops.writeFile(absolutePath, content);
 					return {
-						content: [
-							{ type: "text" as const, text: `Successfully wrote ${content.length} bytes to ${path}` },
-						],
+						content: [{ type: "text" as const, text: `Successfully wrote ${content.length} bytes to ${path}` }],
 						details: undefined,
 					};
 				},

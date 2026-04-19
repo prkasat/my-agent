@@ -1,0 +1,24 @@
+{
+	"name": "research-dark",
+	"description": "Dark theme for long research sessions.",
+	"footer": {
+		"background": "bgBlue",
+		"model": "bold white",
+		"mode": "cyan",
+		"cost": "yellow",
+		"tokens": "white",
+		"thinking": "magenta",
+		"separator": "white"
+	},
+	"toolExecution": {
+		"toolName": "cyan",
+		"successIcon": "green",
+		"errorIcon": "red"
+	},
+	"assistantMessage": {
+		"label": "bold green"
+	},
+	"userMessage": {
+		"label": "bold blue"
+	}
+}

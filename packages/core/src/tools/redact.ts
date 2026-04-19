@@ -38,8 +38,7 @@ const TOKEN_PATTERNS: readonly NamedPattern[] = [
 	{ name: "slack", pattern: /\bxox[abprs]-[A-Za-z0-9-]{20,}\b/g },
 	{
 		name: "jwt",
-		pattern:
-			/\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
+		pattern: /\beyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g,
 	},
 ];
 
@@ -52,14 +51,8 @@ const HEADER_PATTERN = /(Authorization\s*:\s*(?:Bearer|Basic|Token))\s+\S+/gi;
 const SENSITIVE_KEY_FRAGMENT =
 	"[A-Z][A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|CREDENTIAL|ACCESS_KEY|SESSION_KEY|AUTH_KEY)";
 
-const QUOTED_ENV_VAR_PATTERN = new RegExp(
-	`\\b(${SENSITIVE_KEY_FRAGMENT})=(['"])([^'"]+)\\2`,
-	"g",
-);
-const UNQUOTED_ENV_VAR_PATTERN = new RegExp(
-	`\\b(${SENSITIVE_KEY_FRAGMENT})=([^\\s'"]+)`,
-	"g",
-);
+const QUOTED_ENV_VAR_PATTERN = new RegExp(`\\b(${SENSITIVE_KEY_FRAGMENT})=(['"])([^'"]+)\\2`, "g");
+const UNQUOTED_ENV_VAR_PATTERN = new RegExp(`\\b(${SENSITIVE_KEY_FRAGMENT})=([^\\s'"]+)`, "g");
 
 /**
  * Redact every known secret pattern from a single string.

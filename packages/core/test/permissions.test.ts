@@ -1,15 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-	BUILTIN_READ_TOOL_NAMES,
-	createPermissionChecker,
 	type AskDecision,
+	BUILTIN_READ_TOOL_NAMES,
 	type PermissionAskContext,
 	type PermissionMode,
+	createPermissionChecker,
 } from "../src/agent/permissions.js";
-import type {
-	AgentContext,
-	BeforeToolCallContext,
-} from "../src/agent/types.js";
+import type { AgentContext, BeforeToolCallContext } from "../src/agent/types.js";
 
 const fakeContext: AgentContext = {
 	messages: [],
@@ -96,9 +93,7 @@ describe("createPermissionChecker — ask mode", () => {
 	});
 
 	it("calls onAsk for each write tool and respects allow_once", async () => {
-		const onAsk = vi
-			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-			.mockResolvedValue("allow_once");
+		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("allow_once");
 		const checker = createPermissionChecker("ask", { onAsk });
 
 		const r1 = await checker.check(makeCtx("write", { path: "/tmp/a", content: "1" }));
@@ -125,9 +120,7 @@ describe("createPermissionChecker — ask mode", () => {
 	});
 
 	it("deny decision blocks the tool with a user-denied reason", async () => {
-		const onAsk = vi
-			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-			.mockResolvedValue("deny");
+		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("deny");
 		const checker = createPermissionChecker("ask", { onAsk });
 		const result = await checker.check(makeCtx("write", { path: "/tmp/x" }));
 		expect(result.action).toBe("block");
@@ -148,9 +141,7 @@ describe("createPermissionChecker — ask mode", () => {
 	});
 
 	it("requireConfirmation extends the set of tools that ask", async () => {
-		const onAsk = vi
-			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-			.mockResolvedValue("allow_once");
+		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("allow_once");
 		const checker = createPermissionChecker("ask", {
 			onAsk,
 			requireConfirmation: new Set(["mcp_tool"]),
@@ -190,9 +181,7 @@ describe("createPermissionChecker — Tier-2 pass-2 regression: fail-closed for 
 	});
 
 	it("(ask) prompts for an unknown custom tool instead of silently allowing", async () => {
-		const onAsk = vi
-			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-			.mockResolvedValue("deny");
+		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("deny");
 		const checker = createPermissionChecker("ask", { onAsk });
 		const result = await checker.check(makeCtx("github_create_pr", { title: "x" }));
 		expect(result.action).toBe("block"); // user denied via prompt
@@ -243,9 +232,7 @@ describe("createPermissionChecker — Tier-2 pass-3 regression: requireConfirmat
 	});
 
 	it("(ask) prompts for `read` when listed in requireConfirmation", async () => {
-		const onAsk = vi
-			.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-			.mockResolvedValue("deny");
+		const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("deny");
 		const checker = createPermissionChecker("ask", {
 			requireConfirmation: new Set(["read"]),
 			onAsk,
@@ -292,9 +279,7 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 		});
 
 		it(`(ask) blocks knownReadOnly tool with protected path under "${field}"`, async () => {
-			const onAsk = vi
-				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-				.mockResolvedValue("allow_once");
+			const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("allow_once");
 			const checker = createPermissionChecker("ask", {
 				knownReadOnly: new Set(["custom_read"]),
 				onAsk,
@@ -312,9 +297,7 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 		const checker = createPermissionChecker("deny", {
 			knownReadOnly: new Set(["custom_read"]),
 		});
-		const result = await checker.check(
-			makeCtx("custom_read", { target: { path: "/etc/shadow" } }),
-		);
+		const result = await checker.check(makeCtx("custom_read", { target: { path: "/etc/shadow" } }));
 		expect(result.action).toBe("block");
 	});
 
@@ -322,9 +305,7 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 		const checker = createPermissionChecker("deny", {
 			knownReadOnly: new Set(["custom_read"]),
 		});
-		const result = await checker.check(
-			makeCtx("custom_read", { paths: ["/tmp/safe.txt", "/etc/shadow"] }),
-		);
+		const result = await checker.check(makeCtx("custom_read", { paths: ["/tmp/safe.txt", "/etc/shadow"] }));
 		expect(result.action).toBe("block");
 	});
 
@@ -332,18 +313,14 @@ describe("createPermissionChecker — Tier-2 pass-7 regression: protected-path f
 		const checker = createPermissionChecker("deny", {
 			knownReadOnly: new Set(["custom_read"]),
 		});
-		const result = await checker.check(
-			makeCtx("custom_read", { keyfile: "/home/user/.ssh/id_rsa" }),
-		);
+		const result = await checker.check(makeCtx("custom_read", { keyfile: "/home/user/.ssh/id_rsa" }));
 		expect(result.action).toBe("block");
 	});
 
 	it("(auto) protected paths are blocked even in auto mode (always-blocked floor)", async () => {
 		// Auto mode is permissive for unknown tools, but the floor must hold.
 		const checker = createPermissionChecker("auto");
-		const result = await checker.check(
-			makeCtx("custom_tool", { filePath: "/home/user/.aws/credentials" }),
-		);
+		const result = await checker.check(makeCtx("custom_tool", { filePath: "/home/user/.aws/credentials" }));
 		expect(result.action).toBe("block");
 	});
 
@@ -429,19 +406,23 @@ describe("createPermissionChecker — Tier-2 pass-13 regression: kebab-case keys
 	// the actual system root dirs.
 	it("(auto) does NOT block workspace path /repo/etc/config.yml", async () => {
 		const checker = createPermissionChecker("auto");
-		const result = await checker.check(makeCtx("write", {
-			path: "/repo/etc/config.yml",
-			content: "x",
-		}));
+		const result = await checker.check(
+			makeCtx("write", {
+				path: "/repo/etc/config.yml",
+				content: "x",
+			}),
+		);
 		expect(result.action).toBe("allow");
 	});
 
 	it("(auto) does NOT block workspace path /workspace/usr/local.txt", async () => {
 		const checker = createPermissionChecker("auto");
-		const result = await checker.check(makeCtx("write", {
-			path: "/workspace/usr/local.txt",
-			content: "x",
-		}));
+		const result = await checker.check(
+			makeCtx("write", {
+				path: "/workspace/usr/local.txt",
+				content: "x",
+			}),
+		);
 		expect(result.action).toBe("allow");
 	});
 
@@ -459,11 +440,7 @@ describe("createPermissionChecker — Tier-2 pass-13 regression: kebab-case keys
 
 	it("(auto) does NOT block path containing 'sys' or 'boot' as a non-root segment", async () => {
 		const checker = createPermissionChecker("auto");
-		for (const path of [
-			"/repo/sys/test.txt",
-			"/workspace/boot/init.sh",
-			"/home/user/code/sys/file.txt",
-		]) {
+		for (const path of ["/repo/sys/test.txt", "/workspace/boot/init.sh", "/home/user/code/sys/file.txt"]) {
 			const result = await checker.check(makeCtx("write", { path, content: "x" }));
 			expect(result.action).toBe("allow");
 		}
@@ -482,12 +459,7 @@ describe("createPermissionChecker — Tier-2 pass-13 regression: kebab-case keys
 
 	it("(auto) STILL blocks bash commands targeting actual system dirs", async () => {
 		const checker = createPermissionChecker("auto");
-		for (const command of [
-			"cat /etc/shadow",
-			"ls /usr/bin",
-			"find /sys/kernel",
-			`cat "/boot/grub.cfg"`,
-		]) {
+		for (const command of ["cat /etc/shadow", "ls /usr/bin", "find /sys/kernel", `cat "/boot/grub.cfg"`]) {
 			const result = await checker.check(makeCtx("bash", { command }));
 			expect(result.action).toBe("block");
 		}
@@ -533,9 +505,7 @@ describe("createPermissionChecker — Tier-2 pass-12 regression: suffix-based pa
 		const checker = createPermissionChecker("deny", {
 			knownReadOnly: new Set(["custom_read"]),
 		});
-		const result = await checker.check(
-			makeCtx("custom_read", { envSecretFile: ".env" }),
-		);
+		const result = await checker.check(makeCtx("custom_read", { envSecretFile: ".env" }));
 		expect(result.action).toBe("block");
 	});
 
@@ -563,12 +533,12 @@ describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash ope
 	// (whitespace, /, \, quotes, ;, |, &, >, <, (, ), …) as a boundary.
 
 	const quotedExactDirs: Array<[string, string]> = [
-		[`cat "/etc"`, `/etc with double quotes`],
-		[`cat '/etc'`, `/etc with single quotes`],
-		[`ls "~/.ssh"`, `~/.ssh with double quotes`],
-		[`ls "~/.aws"`, `~/.aws with double quotes`],
-		[`find "/Users/pk/.aws"`, `nested ~/.aws with double quotes`],
-		[`cat "/etc/shadow"`, `/etc/shadow with double quotes`],
+		[`cat "/etc"`, "/etc with double quotes"],
+		[`cat '/etc'`, "/etc with single quotes"],
+		[`ls "~/.ssh"`, "~/.ssh with double quotes"],
+		[`ls "~/.aws"`, "~/.aws with double quotes"],
+		[`find "/Users/pk/.aws"`, "nested ~/.aws with double quotes"],
+		[`cat "/etc/shadow"`, "/etc/shadow with double quotes"],
 	];
 
 	for (const [command, label] of quotedExactDirs) {
@@ -580,12 +550,12 @@ describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash ope
 	}
 
 	const quotedBareBasenames: Array<[string, string]> = [
-		[`cat ".env"`, `.env with double quotes`],
-		[`cat '.env'`, `.env with single quotes`],
-		[`cat ".env.local"`, `.env.local with double quotes`],
-		[`cat "credentials.json"`, `credentials.json with double quotes`],
-		[`cat "id_rsa"`, `id_rsa with double quotes`],
-		[`cat "id_ed25519.pub"`, `id_ed25519 with double quotes`],
+		[`cat ".env"`, ".env with double quotes"],
+		[`cat '.env'`, ".env with single quotes"],
+		[`cat ".env.local"`, ".env.local with double quotes"],
+		[`cat "credentials.json"`, "credentials.json with double quotes"],
+		[`cat "id_rsa"`, "id_rsa with double quotes"],
+		[`cat "id_ed25519.pub"`, "id_ed25519 with double quotes"],
 	];
 
 	for (const [command, label] of quotedBareBasenames) {
@@ -597,12 +567,12 @@ describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash ope
 	}
 
 	const shellMetaForms: Array<[string, string]> = [
-		[`cat /etc/shadow|grep root`, `pipe after protected path`],
-		[`cat .env;ls`, `semicolon after .env`],
-		[`cat .env&&echo done`, `&& chain`],
-		[`cat /etc/shadow>out.txt`, `> redirect after protected path`],
-		[`cat <(cat /etc/shadow)`, `process substitution`],
-		[`(cat .env)`, `subshell parens`],
+		["cat /etc/shadow|grep root", "pipe after protected path"],
+		["cat .env;ls", "semicolon after .env"],
+		["cat .env&&echo done", "&& chain"],
+		["cat /etc/shadow>out.txt", "> redirect after protected path"],
+		["cat <(cat /etc/shadow)", "process substitution"],
+		["(cat .env)", "subshell parens"],
 	];
 
 	for (const [command, label] of shellMetaForms) {
@@ -615,9 +585,7 @@ describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash ope
 
 	it("(auto) bash command with .pem inside quotes is blocked", async () => {
 		const checker = createPermissionChecker("auto");
-		const result = await checker.check(
-			makeCtx("bash", { command: `cat "private.pem"` }),
-		);
+		const result = await checker.check(makeCtx("bash", { command: `cat "private.pem"` }));
 		expect(result.action).toBe("block");
 	});
 
@@ -625,11 +593,7 @@ describe("createPermissionChecker — Tier-2 pass-11 regression: quoted bash ope
 		// /etcetera, .envelope, id_rsa_demo are NOT the protected items.
 		// Lookbehind/lookahead must hold here.
 		const checker = createPermissionChecker("auto");
-		for (const command of [
-			"cat /etcetera/file.txt",
-			"cat .envelope.bak",
-			"cat id_rsa_demo.txt",
-		]) {
+		for (const command of ["cat /etcetera/file.txt", "cat .envelope.bak", "cat id_rsa_demo.txt"]) {
 			const result = await checker.check(makeCtx("bash", { command }));
 			expect(result.action).toBe("allow");
 		}
@@ -787,9 +751,7 @@ describe("createPermissionChecker — Tier-2 pass-9 regression: bare protected b
 		});
 
 		it(`(ask) blocks knownReadOnly tool with bare "${value}" under "${field}" before prompting`, async () => {
-			const onAsk = vi
-				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-				.mockResolvedValue("allow_once");
+			const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("allow_once");
 			const checker = createPermissionChecker("ask", {
 				knownReadOnly: new Set(["custom_read"]),
 				onAsk,
@@ -888,9 +850,7 @@ describe("createPermissionChecker — Tier-2 pass-8 regression: floor does not b
 		// Sanity: relaxing the floor for prose must NOT relax it for the
 		// canonical `path` field, even on built-in writes.
 		const checker = createPermissionChecker("deny");
-		const result = await checker.check(
-			makeCtx("write", { path: "/etc/shadow", content: "x" }),
-		);
+		const result = await checker.check(makeCtx("write", { path: "/etc/shadow", content: "x" }));
 		expect(result.action).toBe("block");
 		if (result.action === "block") {
 			expect(result.reason).toMatch(/Protected path/);
@@ -915,9 +875,7 @@ describe("createPermissionChecker — Tier-2 pass-5 regression: no implicit name
 		});
 
 		it(`(ask) prompts for bare-name "${name}" when host did not opt in via knownReadOnly`, async () => {
-			const onAsk = vi
-				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-				.mockResolvedValue("deny");
+			const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("deny");
 			const checker = createPermissionChecker("ask", { onAsk });
 			const result = await checker.check(makeCtx(name, { path: "/tmp/safe.txt" }));
 			expect(result.action).toBe("block");
@@ -930,9 +888,7 @@ describe("createPermissionChecker — Tier-2 pass-5 regression: no implicit name
 		// Lock the constant so a future refactor renaming a built-in read
 		// tool can't silently shrink the published opt-in set without
 		// updating the export contract.
-		expect(new Set(BUILTIN_READ_TOOL_NAMES)).toEqual(
-			new Set(["read", "ls", "find", "grep"]),
-		);
+		expect(new Set(BUILTIN_READ_TOOL_NAMES)).toEqual(new Set(["read", "ls", "find", "grep"]));
 	});
 });
 
@@ -957,9 +913,7 @@ describe("createPermissionChecker — Tier-2 pass-4 regression: knownReadOnly ca
 		});
 
 		it(`(ask) prompts for built-in write "${tool}" even when listed in knownReadOnly`, async () => {
-			const onAsk = vi
-				.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>()
-				.mockResolvedValue("deny");
+			const onAsk = vi.fn<(ctx: PermissionAskContext) => Promise<AskDecision>>().mockResolvedValue("deny");
 			const checker = createPermissionChecker("ask", {
 				knownReadOnly: new Set([tool]),
 				onAsk,

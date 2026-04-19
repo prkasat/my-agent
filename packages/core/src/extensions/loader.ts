@@ -19,9 +19,9 @@
  * `runner.load(definition)`.
  */
 
-import { FSWatcher, watch } from "node:fs";
-import { pathToFileURL } from "node:url";
+import { type FSWatcher, watch } from "node:fs";
 import { resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ExtensionRunner } from "./runner.js";
 import type { ExtensionDefinition, ExtensionManifest } from "./types.js";
 
@@ -194,9 +194,7 @@ export class ExtensionLoader {
 		const mod = (await import(withBuster)) as Record<string, unknown>;
 		const def = (mod.default ?? mod.extension) as ExtensionDefinition | undefined;
 		if (!def || !def.metadata || typeof def.activate !== "function") {
-			throw new Error(
-				`Module ${entry} does not export a valid ExtensionDefinition (default or "extension")`,
-			);
+			throw new Error(`Module ${entry} does not export a valid ExtensionDefinition (default or "extension")`);
 		}
 		return def;
 	}
@@ -224,9 +222,7 @@ function topologicalSort(manifests: ExtensionManifest[]): ExtensionManifest[] {
 		visiting.add(id);
 		for (const dep of m.metadata.requires ?? []) {
 			if (!byId.has(dep)) {
-				throw new Error(
-					`Extension "${id}" requires "${dep}" which is not available`,
-				);
+				throw new Error(`Extension "${id}" requires "${dep}" which is not available`);
 			}
 			visit(dep, [...stack, id]);
 		}

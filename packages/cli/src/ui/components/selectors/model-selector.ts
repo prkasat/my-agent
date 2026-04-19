@@ -4,10 +4,10 @@
 
 import {
 	type Component,
-	SelectList,
-	type SelectItem,
-	type SelectListTheme,
 	type OverlayHandle,
+	type SelectItem,
+	SelectList,
+	type SelectListTheme,
 	type TUI,
 } from "@mariozechner/pi-tui";
 
@@ -51,11 +51,7 @@ export interface ModelSelectorOptions {
  * // Call selector.hide() to close it
  * ```
  */
-export function createModelSelector(
-	tui: TUI,
-	models: ModelInfo[],
-	options: ModelSelectorOptions
-): OverlayHandle {
+export function createModelSelector(tui: TUI, models: ModelInfo[], options: ModelSelectorOptions): OverlayHandle {
 	if (models.length === 0) {
 		throw new Error("ModelSelector requires at least one model.");
 	}
@@ -66,15 +62,10 @@ export function createModelSelector(
 		description: model.description,
 	}));
 
-	const selectList = new SelectList(
-		items,
-		options.maxVisible ?? 10,
-		options.theme,
-		{
-			minPrimaryColumnWidth: 20,
-			maxPrimaryColumnWidth: 40,
-		}
-	);
+	const selectList = new SelectList(items, options.maxVisible ?? 10, options.theme, {
+		minPrimaryColumnWidth: 20,
+		maxPrimaryColumnWidth: 40,
+	});
 
 	// Find and select the default model
 	const defaultIndex = models.findIndex((m) => m.isDefault);

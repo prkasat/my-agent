@@ -175,7 +175,7 @@ export function createBashToolDefinition(
 		async execute(toolCallId, { command, timeout }, signal, onUpdate) {
 			const startTime = Date.now();
 			const audit = getAuditLogger().startExecution("bash", toolCallId, {
-				command: command.length > 200 ? command.slice(0, 200) + "..." : command,
+				command: command.length > 200 ? `${command.slice(0, 200)}...` : command,
 				cwd,
 				timeout,
 			});
@@ -218,7 +218,8 @@ export function createBashToolDefinition(
 					chunks.push(sanitized);
 					chunksBytes += sanitized.length;
 					while (chunksBytes > maxChunksBytes && chunks.length > 1) {
-						const removed = chunks.shift()!;
+						const removed = chunks.shift();
+						if (removed === undefined) break;
 						chunksBytes -= removed.length;
 					}
 

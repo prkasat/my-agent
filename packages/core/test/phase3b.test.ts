@@ -1,14 +1,11 @@
-import { describe, it, expect } from "vitest";
-import { buildSystemPrompt, SAFETY_RULES } from "../src/agent/system-prompt.js";
-import {
-	BUILTIN_READ_TOOL_NAMES,
-	createPermissionChecker,
-} from "../src/agent/permissions.js";
-import { CostTracker } from "../src/agent/cost-tracker.js";
+import { describe, expect, it } from "vitest";
 import { defaultConvertToLlm } from "../src/agent/convert.js";
+import { CostTracker } from "../src/agent/cost-tracker.js";
 import { customMessageToLlm } from "../src/agent/custom-messages.js";
-import { computeDiff } from "../src/tools/diff.js";
+import { BUILTIN_READ_TOOL_NAMES, createPermissionChecker } from "../src/agent/permissions.js";
+import { SAFETY_RULES, buildSystemPrompt } from "../src/agent/system-prompt.js";
 import type { BeforeToolCallContext } from "../src/agent/types.js";
+import { computeDiff } from "../src/tools/diff.js";
 
 describe("System Prompt Assembly", () => {
 	it("should build prompt from all sources", () => {
@@ -250,8 +247,8 @@ describe("Custom Messages + convertToLlm", () => {
 		});
 
 		expect(result).not.toBeNull();
-		expect(result!.role).toBe("user");
-		expect(result!.content).toContain("Previous conversation summary");
+		expect(result?.role).toBe("user");
+		expect(result?.content).toContain("Previous conversation summary");
 	});
 
 	it("should not convert bash execution to LLM message", () => {

@@ -2,7 +2,7 @@
  * DiffViewer - Component for displaying unified diffs
  */
 
-import { type Component, visibleWidth, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { DiffViewerTheme } from "../theme.js";
 
 export interface DiffHunk {
@@ -61,7 +61,7 @@ export class DiffViewer implements Component {
 	// Cache
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private dirty: boolean = true;
+	private dirty = true;
 
 	constructor(diff: DiffData, options: DiffViewerOptions) {
 		this.diff = diff;
@@ -137,9 +137,7 @@ export class DiffViewer implements Component {
 		const lines: string[] = [];
 
 		// Header showing file path
-		const headerText = diff.oldPath === diff.newPath
-			? diff.newPath
-			: `${diff.oldPath} -> ${diff.newPath}`;
+		const headerText = diff.oldPath === diff.newPath ? diff.newPath : `${diff.oldPath} -> ${diff.newPath}`;
 
 		const header = theme.header(truncateToWidth(headerText, contentWidth, "..."));
 		lines.push(this.composeLine(padding, header, width));
@@ -159,7 +157,7 @@ export class DiffViewer implements Component {
 		for (const hunk of diff.hunks) {
 			// Hunk header
 			const hunkHeader = theme.hunkHeader(
-				`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`
+				`@@ -${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`,
 			);
 			lines.push(this.composeLine(padding, hunkHeader, width));
 
@@ -279,7 +277,7 @@ export class MultiDiffViewer implements Component {
 	// Cache
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private dirty: boolean = true;
+	private dirty = true;
 
 	constructor(diffs: DiffData[] | MultiDiffData, options: DiffViewerOptions) {
 		this.diffs = Array.isArray(diffs) ? diffs : diffs.files;
@@ -293,10 +291,13 @@ export class MultiDiffViewer implements Component {
 		};
 
 		// Create a viewer for each file
-		this.viewers = this.diffs.map(diff => new DiffViewer(diff, {
-			...options,
-			onInvalidate: () => this.markDirty(),
-		}));
+		this.viewers = this.diffs.map(
+			(diff) =>
+				new DiffViewer(diff, {
+					...options,
+					onInvalidate: () => this.markDirty(),
+				}),
+		);
 	}
 
 	/**
@@ -304,14 +305,17 @@ export class MultiDiffViewer implements Component {
 	 */
 	setDiffs(diffs: DiffData[] | MultiDiffData): void {
 		this.diffs = Array.isArray(diffs) ? diffs : diffs.files;
-		this.viewers = this.diffs.map(diff => new DiffViewer(diff, {
-			theme: this.options.theme,
-			paddingX: this.options.paddingX,
-			showLineNumbers: this.options.showLineNumbers,
-			maxLinesPerHunk: this.options.maxLinesPerHunk,
-			collapsed: this.options.collapsed,
-			onInvalidate: () => this.markDirty(),
-		}));
+		this.viewers = this.diffs.map(
+			(diff) =>
+				new DiffViewer(diff, {
+					theme: this.options.theme,
+					paddingX: this.options.paddingX,
+					showLineNumbers: this.options.showLineNumbers,
+					maxLinesPerHunk: this.options.maxLinesPerHunk,
+					collapsed: this.options.collapsed,
+					onInvalidate: () => this.markDirty(),
+				}),
+		);
 		this.markDirty();
 	}
 
@@ -375,7 +379,7 @@ export class MultiDiffViewer implements Component {
  * Parse a unified diff string into DiffData (single file)
  * @deprecated Use parseMultiDiff for multi-file support
  */
-export function parseDiff(diffText: string, defaultPath: string = "file"): DiffData {
+export function parseDiff(diffText: string, defaultPath = "file"): DiffData {
 	const diffs = parseMultiDiff(diffText, defaultPath);
 	if (diffs.length === 0) {
 		return { oldPath: defaultPath, newPath: defaultPath, hunks: [] };
@@ -386,7 +390,7 @@ export function parseDiff(diffText: string, defaultPath: string = "file"): DiffD
 /**
  * Parse a unified diff string into an array of DiffData (supports multiple files)
  */
-export function parseMultiDiff(diffText: string, defaultPath: string = "file"): DiffData[] {
+export function parseMultiDiff(diffText: string, defaultPath = "file"): DiffData[] {
 	const lines = diffText.split("\n");
 	const diffs: DiffData[] = [];
 
@@ -450,10 +454,10 @@ export function parseMultiDiff(diffText: string, defaultPath: string = "file"): 
 			}
 
 			currentHunk = {
-				oldStart: parseInt(hunkMatch[1], 10),
-				oldLines: parseInt(hunkMatch[2] ?? "1", 10),
-				newStart: parseInt(hunkMatch[3], 10),
-				newLines: parseInt(hunkMatch[4] ?? "1", 10),
+				oldStart: Number.parseInt(hunkMatch[1], 10),
+				oldLines: Number.parseInt(hunkMatch[2] ?? "1", 10),
+				newStart: Number.parseInt(hunkMatch[3], 10),
+				newLines: Number.parseInt(hunkMatch[4] ?? "1", 10),
 				lines: [],
 			};
 			continue;
@@ -493,18 +497,19 @@ export function parseMultiDiff(diffText: string, defaultPath: string = "file"): 
 			diffs.push({
 				oldPath: oldPath === "/dev/null" ? newPath : oldPath,
 				newPath: newPath === "/dev/null" ? oldPath : newPath,
-				hunks: [{
-					oldStart: 0,
-					oldLines: 0,
-					newStart: 0,
-					newLines: 0,
-					lines: [" [Binary file]"],
-				}],
+				hunks: [
+					{
+						oldStart: 0,
+						oldLines: 0,
+						newStart: 0,
+						newLines: 0,
+						lines: [" [Binary file]"],
+					},
+				],
 			});
 
 			currentDiff = null;
 			pendingOldPath = null;
-			continue;
 		}
 
 		// Skip other lines (git headers like "diff --git", "index ...", etc.)

@@ -4,8 +4,8 @@
  * Provides cross-platform shell detection with fallbacks and helpful error messages.
  */
 
-import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 export interface ShellConfig {
 	shell: string;
@@ -90,14 +90,7 @@ export function getShellConfig(): ShellConfig {
 	// No shell found - provide helpful error
 	const tried = envShell ? `SHELL=${envShell}, ` : "";
 	throw new Error(
-		`No shell found.\n` +
-			`Tried: ${tried}${SHELL_CANDIDATES.join(", ")}\n` +
-			`\n` +
-			`Solutions:\n` +
-			`  - Set SHELL environment variable to your shell path\n` +
-			`  - Ensure /bin/bash or /bin/sh exists\n` +
-			`  - On macOS: shells should be available by default\n` +
-			`  - On Linux: install bash with your package manager`,
+		`No shell found.\nTried: ${tried}${SHELL_CANDIDATES.join(", ")}\n\nSolutions:\n  - Set SHELL environment variable to your shell path\n  - Ensure /bin/bash or /bin/sh exists\n  - On macOS: shells should be available by default\n  - On Linux: install bash with your package manager`,
 	);
 }
 

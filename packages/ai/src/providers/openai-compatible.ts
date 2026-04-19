@@ -1,10 +1,10 @@
 import type {
-	Model,
-	Context,
-	StreamOptions,
-	AssistantMessageEvent,
 	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
 	Message,
+	Model,
+	StreamOptions,
 	Usage,
 } from "../types.js";
 import { EventStream } from "../utils/event-stream.js";
@@ -189,9 +189,10 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 					// Include retry hint for rate limits
 					const isRateLimit = response.status === 429;
 					const retryAfter = response.headers.get("retry-after");
-					const errorMsg = isRateLimit && retryAfter
-						? `${config.providerName} API ${response.status}: ${error} (retry after ${retryAfter}s)`
-						: `${config.providerName} API ${response.status}: ${error}`;
+					const errorMsg =
+						isRateLimit && retryAfter
+							? `${config.providerName} API ${response.status}: ${error} (retry after ${retryAfter}s)`
+							: `${config.providerName} API ${response.status}: ${error}`;
 					stream.push({ type: "error", error: errorMsg });
 					return;
 				}
@@ -278,7 +279,12 @@ async function parseSSEStream(
 					finishReason = choices[0].finish_reason as string;
 				}
 				const earlyChunkUsage = chunk.usage as
-					| { prompt_tokens?: number; completion_tokens?: number; cost?: number; prompt_tokens_details?: { cached_tokens?: number } }
+					| {
+							prompt_tokens?: number;
+							completion_tokens?: number;
+							cost?: number;
+							prompt_tokens_details?: { cached_tokens?: number };
+					  }
 					| undefined;
 				if (earlyChunkUsage) {
 					// Trust this usage when EITHER:
@@ -319,8 +325,7 @@ async function parseSSEStream(
 				// in the AssistantMessage so downstream code (compaction, branch
 				// summary, persistence) doesn't need provider-specific knowledge.
 				const reasoningDelta =
-					(delta.reasoning_content as string | undefined) ??
-					(delta.reasoning as string | undefined);
+					(delta.reasoning_content as string | undefined) ?? (delta.reasoning as string | undefined);
 				if (reasoningDelta) {
 					thinkingContent += reasoningDelta;
 					stream.push({ type: "thinking_delta", text: reasoningDelta });
@@ -348,7 +353,8 @@ async function parseSSEStream(
 								stream.push({ type: "tool_call_start", id: tc.id, name: tc.function?.name || "" });
 							}
 						}
-						const existing = toolCalls.get(tc.index)!;
+						const existing = toolCalls.get(tc.index);
+						if (!existing) continue;
 						if (tc.id) existing.id = tc.id;
 						if (tc.function?.name) existing.name = tc.function.name;
 						if (tc.function?.arguments) {

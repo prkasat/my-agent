@@ -2,13 +2,7 @@
  * SessionSelector - Overlay for selecting and managing sessions
  */
 
-import {
-	SelectList,
-	type SelectItem,
-	type SelectListTheme,
-	type OverlayHandle,
-	type TUI,
-} from "@mariozechner/pi-tui";
+import { type OverlayHandle, type SelectItem, SelectList, type SelectListTheme, type TUI } from "@mariozechner/pi-tui";
 
 export interface SessionInfo {
 	/** Session identifier */
@@ -30,9 +24,7 @@ export interface SessionInfo {
 /**
  * Discriminated union for session selector result
  */
-export type SessionSelectorResult =
-	| { kind: "new" }
-	| { kind: "existing"; session: SessionInfo };
+export type SessionSelectorResult = { kind: "new" } | { kind: "existing"; session: SessionInfo };
 
 export interface SessionSelectorOptions {
 	/** Theme for the select list */
@@ -74,7 +66,7 @@ const NEW_SESSION_VALUE = "\0__new_session__";
 export function createSessionSelector(
 	tui: TUI,
 	sessions: SessionInfo[],
-	options: SessionSelectorOptions
+	options: SessionSelectorOptions,
 ): OverlayHandle {
 	const showNew = options.showNewSession ?? true;
 	const items: SelectItem[] = [];
@@ -95,9 +87,7 @@ export function createSessionSelector(
 	}
 
 	// Add existing sessions, sorted by last active
-	const sortedSessions = [...sessions].sort(
-		(a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime()
-	);
+	const sortedSessions = [...sessions].sort((a, b) => b.lastActiveAt.getTime() - a.lastActiveAt.getTime());
 
 	for (const session of sortedSessions) {
 		items.push({
@@ -112,15 +102,10 @@ export function createSessionSelector(
 		throw new Error("SessionSelector requires at least one item. Enable showNewSession or provide sessions.");
 	}
 
-	const selectList = new SelectList(
-		items,
-		options.maxVisible ?? 10,
-		options.theme,
-		{
-			minPrimaryColumnWidth: 25,
-			maxPrimaryColumnWidth: 50,
-		}
-	);
+	const selectList = new SelectList(items, options.maxVisible ?? 10, options.theme, {
+		minPrimaryColumnWidth: 25,
+		maxPrimaryColumnWidth: 50,
+	});
 
 	// Select the active session by default (or first item if new session option present)
 	const activeIndex = items.findIndex((item) => {

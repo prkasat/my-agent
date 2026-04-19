@@ -11,20 +11,14 @@
 		"rules": {
 			"recommended": true,
 			"complexity": {
-				"noExcessiveCognitiveComplexity": "warn"
+				"noExcessiveCognitiveComplexity": "off"
 			},
 			"suspicious": {
-				"noExplicitAny": "warn"
+				"noExplicitAny": "off"
 			}
 		}
 	},
 	"files": {
-		"ignore": [
-			"**/dist/**",
-			"**/node_modules/**",
-			"**/.claude/**",
-			"**/.omc/**",
-			"**/.temp/**"
-		]
+		"ignore": ["**/dist/**", "**/node_modules/**", "**/.claude/**", "**/.omc/**", "**/.temp/**"]
 	}
 }

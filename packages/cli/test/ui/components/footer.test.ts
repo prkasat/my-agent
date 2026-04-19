@@ -2,10 +2,10 @@
  * Tests for Footer component
  */
 
-import { describe, it, expect } from "vitest";
+import { visibleWidth } from "@mariozechner/pi-tui";
+import { describe, expect, it } from "vitest";
 import { Footer, type FooterData } from "../../../src/ui/components/footer.js";
 import type { FooterTheme } from "../../../src/ui/theme.js";
-import { visibleWidth } from "@mariozechner/pi-tui";
 
 // Simple theme without styling for testing
 const testTheme: FooterTheme = {
@@ -86,7 +86,7 @@ describe("Footer", () => {
 		expect(footer.render(80)[0]).toContain("$0.123");
 
 		// Large cost
-		footer = new Footer({ ...defaultData, cost: 1.50 }, { theme: testTheme });
+		footer = new Footer({ ...defaultData, cost: 1.5 }, { theme: testTheme });
 		expect(footer.render(80)[0]).toContain("$1.50");
 	});
 

@@ -31,10 +31,7 @@ export interface DiscoveryResult {
  * Files closer to cwd are listed first (higher priority).
  * SYSTEM.md closest to cwd wins (only one override).
  */
-export async function discoverProjectContext(
-	cwd: string,
-	globalDir?: string,
-): Promise<DiscoveryResult> {
+export async function discoverProjectContext(cwd: string, globalDir?: string): Promise<DiscoveryResult> {
 	const found: ProjectContextFile[] = [];
 	const seen = new Set<string>();
 	let systemOverride: string | undefined;

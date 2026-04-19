@@ -22,9 +22,7 @@ import type { AssistantMessageEvent, Model } from "../src/types.js";
 
 function ssePayload(chunks: object[]): Uint8Array {
 	const encoder = new TextEncoder();
-	const body =
-		chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("") +
-		"data: [DONE]\n\n";
+	const body = `${chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join("")}data: [DONE]\n\n`;
 	return encoder.encode(body);
 }
 
@@ -71,7 +69,7 @@ describe("openai-compatible reasoning normalization", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
-		delete process.env.TEST_KEY;
+		process.env.TEST_KEY = undefined;
 	});
 
 	function runWith(chunks: object[]) {
@@ -120,10 +118,7 @@ describe("openai-compatible reasoning normalization", () => {
 			type: "thinking_delta";
 			text: string;
 		}[];
-		expect(thinkingDeltas.map((e) => e.text)).toEqual([
-			"Let me think ",
-			"step by step.",
-		]);
+		expect(thinkingDeltas.map((e) => e.text)).toEqual(["Let me think ", "step by step."]);
 	});
 
 	it("OpenRouter-style: bare `reasoning` field collapses to the same thinking block", async () => {

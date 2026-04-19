@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ExtensionLoader } from "../../src/extensions/loader.js";
 import { ExtensionRunner } from "../../src/extensions/runner.js";
 
@@ -119,7 +119,7 @@ describe("ExtensionLoader", () => {
 
 	it("rejects modules without a valid definition", async () => {
 		const entry = join(tmp, "ext-bad.mjs");
-		writeFileSync(entry, `export default { nope: true };`);
+		writeFileSync(entry, "export default { nope: true };");
 		const runner = new ExtensionRunner({ log: silentLog });
 		const loader = new ExtensionLoader({ runner, log: silentLog });
 		const res = loader.loadFromManifest({
@@ -132,10 +132,7 @@ describe("ExtensionLoader", () => {
 	it("loadAll respects topological order when requires is set", async () => {
 		const a = join(tmp, "a.mjs");
 		const b = join(tmp, "b.mjs");
-		writeFileSync(
-			a,
-			`export default { metadata: { id: "a", name: "A", version: "1.0.0" }, activate(){} };`,
-		);
+		writeFileSync(a, `export default { metadata: { id: "a", name: "A", version: "1.0.0" }, activate(){} };`);
 		writeFileSync(
 			b,
 			`export default { metadata: { id: "b", name: "B", version: "1.0.0", requires: ["a"] }, activate(){} };`,
@@ -155,14 +152,8 @@ describe("ExtensionLoader", () => {
 		const loader = new ExtensionLoader({ runner, log: silentLog });
 		const a = join(tmp, "a.mjs");
 		const b = join(tmp, "b.mjs");
-		writeFileSync(
-			a,
-			`export default { metadata: { id: "a", name: "A", version: "1.0.0" }, activate(){} };`,
-		);
-		writeFileSync(
-			b,
-			`export default { metadata: { id: "b", name: "B", version: "1.0.0" }, activate(){} };`,
-		);
+		writeFileSync(a, `export default { metadata: { id: "a", name: "A", version: "1.0.0" }, activate(){} };`);
+		writeFileSync(b, `export default { metadata: { id: "b", name: "B", version: "1.0.0" }, activate(){} };`);
 		const res = loader.loadAll([
 			{ entry: a, metadata: { id: "a", name: "A", version: "1.0.0", requires: ["b"] } },
 			{ entry: b, metadata: { id: "b", name: "B", version: "1.0.0", requires: ["a"] } },

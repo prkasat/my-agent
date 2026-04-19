@@ -2,7 +2,7 @@
  * UserMessage - Styled display of user input messages
  */
 
-import { type Component, visibleWidth, wrapTextWithAnsi, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
 import type { UserMessageTheme } from "../theme.js";
 
 export interface UserMessageOptions {
@@ -28,7 +28,7 @@ export class UserMessage implements Component {
 	// Cache
 	private cachedWidth?: number;
 	private cachedLines?: string[];
-	private dirty: boolean = true;
+	private dirty = true;
 
 	constructor(text: string, options: UserMessageOptions) {
 		this.text = text;
@@ -136,7 +136,7 @@ export class UserMessage implements Component {
 		prefix: string,
 		content: string,
 		width: number,
-		bgFn?: (text: string) => string
+		bgFn?: (text: string) => string,
 	): string {
 		const composed = `${padding}${prefix}${content}`;
 		// Truncate to ensure we don't exceed width

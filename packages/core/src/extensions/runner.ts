@@ -16,9 +16,9 @@
 import type { Static } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AgentContext, AgentTool } from "../agent/types.js";
+import { noopActions, noopUI } from "./context.js";
 import { MetricsTracker } from "./metrics.js";
 import { FileExtensionStorage, MemoryExtensionStorage } from "./storage.js";
-import { noopActions, noopUI } from "./context.js";
 import type {
 	ExtensionActions,
 	ExtensionCommand,
@@ -175,9 +175,7 @@ export class ExtensionRunner {
 			}
 			loaded.abortController.abort();
 			this.extensions.delete(id);
-			throw new Error(
-				`Extension "${id}" failed to activate: ${err instanceof Error ? err.message : String(err)}`,
-			);
+			throw new Error(`Extension "${id}" failed to activate: ${err instanceof Error ? err.message : String(err)}`);
 		}
 
 		// Announce to peers (not to the newly-loaded extension itself).
@@ -232,7 +230,7 @@ export class ExtensionRunner {
 		const existing = this.extensions.get(id);
 
 		let savedState: unknown;
-		if (existing && existing.definition.onBeforeReload && existing.context) {
+		if (existing?.definition.onBeforeReload && existing.context) {
 			try {
 				savedState = existing.definition.onBeforeReload(existing.context);
 			} catch (err) {
@@ -307,17 +305,14 @@ export class ExtensionRunner {
 		for (const loaded of this.extensions.values()) {
 			if (loaded.disabled) continue;
 			const cmd = loaded.commands.get(name);
-			if (!cmd || !loaded.context) continue;
-			const result = await this.runGuarded(loaded, "command", () =>
-				cmd.execute(args, loaded.context!),
-			);
+			const context = loaded.context;
+			if (!cmd || !context) continue;
+			const result = await this.runGuarded(loaded, "command", () => cmd.execute(args, context));
 			if (!result.ok) return false;
-			await this.dispatchInternal(
-				{ type: "command_executed", command: name, args } as Omit<
-					ExtensionEventByType<"command_executed">,
-					keyof import("./types.js").ExtensionEventBase
-				>,
-			);
+			await this.dispatchInternal({ type: "command_executed", command: name, args } as Omit<
+				ExtensionEventByType<"command_executed">,
+				keyof import("./types.js").ExtensionEventBase
+			>);
 			return true;
 		}
 		return false;
@@ -346,11 +341,7 @@ export class ExtensionRunner {
 	 * The first extension to return a "block" wins. modifiedArgs are
 	 * composed in registration order (later handlers see earlier mods).
 	 */
-	async dispatchToolStart(
-		toolCallId: string,
-		toolName: string,
-		args: unknown,
-	): Promise<ToolInterceptResult> {
+	async dispatchToolStart(toolCallId: string, toolName: string, args: unknown): Promise<ToolInterceptResult> {
 		const base = this.makeBase();
 		let currentArgs = args;
 		let modified = false;
@@ -425,8 +416,7 @@ export class ExtensionRunner {
 				if (!modification || typeof modification !== "object") continue;
 				current = { ...(current ?? {}), ...modification };
 				if (modification.content) currentResult = { ...currentResult, content: modification.content };
-				if (modification.details !== undefined)
-					currentResult = { ...currentResult, details: modification.details };
+				if (modification.details !== undefined) currentResult = { ...currentResult, details: modification.details };
 				if (modification.isError !== undefined) currentIsError = modification.isError;
 			}
 		}
@@ -506,15 +496,12 @@ export class ExtensionRunner {
 					called = true;
 					await inner();
 				};
-				const guarded = await this.runGuarded(loaded, "middleware", () =>
-					mw(chainCtx, wrapped),
-				);
+				const guarded = await this.runGuarded(loaded, "middleware", () => mw(chainCtx, wrapped));
 				// Surface middleware errors on chainCtx so callers see them,
 				// regardless of whether the failure happened before or after
 				// next(). Don't overwrite an earlier error (the first wins).
 				if (!guarded.ok && !chainCtx.error) {
-					chainCtx.error = guarded.error ??
-						new Error(`middleware ${loaded.definition.metadata.id} failed`);
+					chainCtx.error = guarded.error ?? new Error(`middleware ${loaded.definition.metadata.id} failed`);
 				}
 			};
 		}
@@ -544,8 +531,9 @@ export class ExtensionRunner {
 				}
 			}
 			for (const any of loaded.anyHandlers) {
-				if (loaded.disabled) break;
-				await this.runGuarded(loaded, event.type, () => any(full, loaded.context!));
+				const context = loaded.context;
+				if (loaded.disabled || !context) break;
+				await this.runGuarded(loaded, event.type, () => any(full, context));
 			}
 		}
 	}
@@ -556,9 +544,11 @@ export class ExtensionRunner {
 		handler: ExtensionEventHandler,
 		event: ExtensionEvent,
 	): Promise<GuardedResult> {
-		return await this.runGuarded(loaded, eventType, () =>
-			handler(event as never, loaded.context!),
-		);
+		const context = loaded.context;
+		if (!context) {
+			return { ok: false, value: undefined, error: new Error("Extension context not initialized") };
+		}
+		return await this.runGuarded(loaded, eventType, () => handler(event as never, context));
 	}
 
 	/**
@@ -573,11 +563,7 @@ export class ExtensionRunner {
 	 * observe it. The runner records a `recordError()` on timeout and
 	 * applies the configured failure-mode, same as any other throw.
 	 */
-	private async runGuarded(
-		loaded: LoadedExtension,
-		source: string,
-		fn: () => unknown,
-	): Promise<GuardedResult> {
+	private async runGuarded(loaded: LoadedExtension, source: string, fn: () => unknown): Promise<GuardedResult> {
 		const started = Date.now();
 		const timeoutMs = loaded.definition.metadata.handlerTimeoutMs;
 		try {
@@ -589,10 +575,7 @@ export class ExtensionRunner {
 			const id = loaded.definition.metadata.id;
 			const mode = loaded.definition.metadata.failureMode ?? "continue";
 			const error = err instanceof Error ? err : new Error(String(err));
-			this.log.error(
-				`[ext:${id}] handler threw (source=${source}, mode=${mode})`,
-				error.message,
-			);
+			this.log.error(`[ext:${id}] handler threw (source=${source}, mode=${mode})`, error.message);
 			if (mode === "abort") throw err;
 			if (mode === "disable") loaded.disabled = true;
 			return { ok: false, value: undefined, error };
@@ -628,21 +611,15 @@ export class ExtensionRunner {
 		const errors = [...Value.Errors(def.config.schema, defaulted)];
 		if (errors.length > 0) {
 			const first = errors[0];
-			throw new Error(
-				`Extension "${def.metadata.id}" config is invalid at ${first.path || "/"}: ${first.message}`,
-			);
+			throw new Error(`Extension "${def.metadata.id}" config is invalid at ${first.path || "/"}: ${first.message}`);
 		}
 		return defaulted as Static<typeof def.config.schema>;
 	}
 
 	private buildContext(loaded: LoadedExtension): ExtensionContext {
-		const runner = this;
 		const id = loaded.definition.metadata.id;
 
-		const on = <T extends ExtensionEventType>(
-			event: T,
-			handler: ExtensionEventHandler<T>,
-		): (() => void) => {
+		const on = <T extends ExtensionEventType>(event: T, handler: ExtensionEventHandler<T>): (() => void) => {
 			let set = loaded.handlers.get(event);
 			if (!set) {
 				set = new Set();
@@ -650,13 +627,11 @@ export class ExtensionRunner {
 			}
 			set.add(handler as unknown as ExtensionEventHandler);
 			return () => {
-				set!.delete(handler as unknown as ExtensionEventHandler);
+				set?.delete(handler as unknown as ExtensionEventHandler);
 			};
 		};
 
-		const onAny = (
-			handler: (event: ExtensionEvent, ctx: ExtensionContext) => void | Promise<void>,
-		): (() => void) => {
+		const onAny = (handler: (event: ExtensionEvent, ctx: ExtensionContext) => void | Promise<void>): (() => void) => {
 			loaded.anyHandlers.add(handler);
 			return () => {
 				loaded.anyHandlers.delete(handler);
@@ -664,43 +639,39 @@ export class ExtensionRunner {
 		};
 
 		const registerCommand = (cmd: ExtensionCommand): (() => void) => {
-			const existingOwner = runner.commandOwners.get(cmd.name);
+			const existingOwner = this.commandOwners.get(cmd.name);
 			if (existingOwner && existingOwner !== id) {
-				runner.log.warn(
-					`[ext:${id}] command "${cmd.name}" already registered by "${existingOwner}" — skipping`,
-				);
+				this.log.warn(`[ext:${id}] command "${cmd.name}" already registered by "${existingOwner}" — skipping`);
 				return () => {};
 			}
 			if (loaded.commands.has(cmd.name)) {
-				runner.log.warn(`[ext:${id}] command "${cmd.name}" re-registered — replacing`);
+				this.log.warn(`[ext:${id}] command "${cmd.name}" re-registered — replacing`);
 			}
-			runner.commandOwners.set(cmd.name, id);
+			this.commandOwners.set(cmd.name, id);
 			loaded.commands.set(cmd.name, cmd);
 			return () => {
 				loaded.commands.delete(cmd.name);
-				if (runner.commandOwners.get(cmd.name) === id) {
-					runner.commandOwners.delete(cmd.name);
+				if (this.commandOwners.get(cmd.name) === id) {
+					this.commandOwners.delete(cmd.name);
 				}
 			};
 		};
 
 		const registerTool = (tool: AgentTool): (() => void) => {
-			const existingOwner = runner.toolOwners.get(tool.name);
+			const existingOwner = this.toolOwners.get(tool.name);
 			if (existingOwner && existingOwner !== id) {
-				runner.log.warn(
-					`[ext:${id}] tool "${tool.name}" already registered by "${existingOwner}" — skipping`,
-				);
+				this.log.warn(`[ext:${id}] tool "${tool.name}" already registered by "${existingOwner}" — skipping`);
 				return () => {};
 			}
 			if (loaded.tools.has(tool.name)) {
-				runner.log.warn(`[ext:${id}] tool "${tool.name}" re-registered — replacing`);
+				this.log.warn(`[ext:${id}] tool "${tool.name}" re-registered — replacing`);
 			}
-			runner.toolOwners.set(tool.name, id);
+			this.toolOwners.set(tool.name, id);
 			loaded.tools.set(tool.name, tool);
 			return () => {
 				loaded.tools.delete(tool.name);
-				if (runner.toolOwners.get(tool.name) === id) {
-					runner.toolOwners.delete(tool.name);
+				if (this.toolOwners.get(tool.name) === id) {
+					this.toolOwners.delete(tool.name);
 				}
 			};
 		};
@@ -714,10 +685,10 @@ export class ExtensionRunner {
 		};
 
 		const log = {
-			debug: (msg: string, data?: unknown) => runner.log.debug(`[ext:${id}] ${msg}`, data),
-			info: (msg: string, data?: unknown) => runner.log.info(`[ext:${id}] ${msg}`, data),
-			warn: (msg: string, data?: unknown) => runner.log.warn(`[ext:${id}] ${msg}`, data),
-			error: (msg: string, data?: unknown) => runner.log.error(`[ext:${id}] ${msg}`, data),
+			debug: (msg: string, data?: unknown) => this.log.debug(`[ext:${id}] ${msg}`, data),
+			info: (msg: string, data?: unknown) => this.log.info(`[ext:${id}] ${msg}`, data),
+			warn: (msg: string, data?: unknown) => this.log.warn(`[ext:${id}] ${msg}`, data),
+			error: (msg: string, data?: unknown) => this.log.error(`[ext:${id}] ${msg}`, data),
 		};
 
 		const ctx: ExtensionContext = {
@@ -729,13 +700,13 @@ export class ExtensionRunner {
 			registerTool,
 			use,
 			storage: loaded.storage,
-			ui: runner.options.ui ?? noopUI,
-			actions: runner.options.actions ?? noopActions,
+			ui: this.options.ui ?? noopUI,
+			actions: this.options.actions ?? noopActions,
 			get metrics() {
 				return loaded.metrics.snapshot();
 			},
 			recorder: loaded.metrics as MetricsRecorder,
-			getAgentContext: () => runner.options.getAgentContext?.() ?? null,
+			getAgentContext: () => this.options.getAgentContext?.() ?? null,
 			signal: loaded.abortController.signal,
 			log,
 		};

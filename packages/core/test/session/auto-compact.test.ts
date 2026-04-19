@@ -1,11 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
 import { EventStream } from "@my-agent/ai";
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@my-agent/ai";
-import {
-	createAutoCompactor,
-	createAutoCompactorWithPersistence,
-} from "../../src/session/auto-compact.js";
+import { describe, expect, it, vi } from "vitest";
 import type { AgentContext, AgentMessage } from "../../src/agent/types.js";
+import { createAutoCompactor, createAutoCompactorWithPersistence } from "../../src/session/auto-compact.js";
 
 const fakeModel: Model = {
 	id: "test",
@@ -333,11 +330,7 @@ describe("regression A4 — repeated-compaction double-count", () => {
 		const summarizationInputs: string[][] = [];
 		let summaryRound = 0;
 
-		const trackingStreamFn: any = (
-			_model: Model,
-			ctx: { messages: AgentMessage[] },
-			_opts: any,
-		) => {
+		const trackingStreamFn: any = (_model: Model, ctx: { messages: AgentMessage[] }, _opts: any) => {
 			// The compactor wraps the conversation in a single user message
 			// (see formatMessagesForSummary); capture its text so we can assert
 			// the prior summary doesn't appear inside.
@@ -349,10 +342,7 @@ describe("regression A4 — repeated-compaction double-count", () => {
 						? userMsg.content
 						: Array.isArray(userMsg.content)
 							? userMsg.content
-									.filter(
-										(c: any): c is { type: "text"; text: string } =>
-											c.type === "text",
-									)
+									.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
 									.map((c: any) => c.text)
 									.join("\n")
 							: "";
@@ -403,8 +393,8 @@ describe("regression A4 — repeated-compaction double-count", () => {
 		// prior summary must appear in the latter, never inside the former.
 		const conversationMatch = round2Prompt.match(/<conversation>([\s\S]*?)<\/conversation>/);
 		expect(conversationMatch).not.toBeNull();
-		expect(conversationMatch![1]).not.toContain("SUMMARY-ROUND-1");
-		expect(conversationMatch![1]).not.toContain("[Previous conversation summary]");
+		expect(conversationMatch?.[1]).not.toContain("SUMMARY-ROUND-1");
+		expect(conversationMatch?.[1]).not.toContain("[Previous conversation summary]");
 	});
 
 	it("does not promote a real user message starting with the legacy summary prefix", async () => {
@@ -417,11 +407,7 @@ describe("regression A4 — repeated-compaction double-count", () => {
 		// only legitimate provenance for a prior summary is a typed
 		// custom-role compaction_summary entry, never raw user text.
 		const summarizationInputs: string[] = [];
-		const trackingStreamFn: any = (
-			_model: Model,
-			ctx: { messages: AgentMessage[] },
-			_opts: any,
-		) => {
+		const trackingStreamFn: any = (_model: Model, ctx: { messages: AgentMessage[] }, _opts: any) => {
 			const userMsg = ctx.messages[0];
 			let text = "";
 			if (userMsg && "role" in userMsg && userMsg.role === "user") {
@@ -430,10 +416,7 @@ describe("regression A4 — repeated-compaction double-count", () => {
 						? userMsg.content
 						: Array.isArray(userMsg.content)
 							? userMsg.content
-									.filter(
-										(c: any): c is { type: "text"; text: string } =>
-											c.type === "text",
-									)
+									.filter((c: any): c is { type: "text"; text: string } => c.type === "text")
 									.map((c: any) => c.text)
 									.join("\n")
 							: "";
@@ -471,7 +454,7 @@ describe("regression A4 — repeated-compaction double-count", () => {
 		const conversationMatch = prompt.match(/<conversation>([\s\S]*?)<\/conversation>/);
 		expect(conversationMatch).not.toBeNull();
 		// The user's text MUST be inside the <conversation> block, not promoted.
-		expect(conversationMatch![1]).toContain(sentinel);
+		expect(conversationMatch?.[1]).toContain(sentinel);
 		// And the <previous-summary> block, if present, MUST NOT contain it.
 		const prevMatch = prompt.match(/<previous-summary>([\s\S]*?)<\/previous-summary>/);
 		if (prevMatch) {

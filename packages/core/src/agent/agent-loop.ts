@@ -1,14 +1,8 @@
 import { EventStream } from "@my-agent/ai";
-import { Value } from "@sinclair/typebox/value";
-import type {
-	AgentContext,
-	AgentEvent,
-	AgentLoopConfig,
-	AgentMessage,
-	AgentToolResult,
-} from "./types.js";
 import type { AssistantMessage, Message, ToolCallContent, ToolResultMessage } from "@my-agent/ai";
+import { Value } from "@sinclair/typebox/value";
 import { calculateUsageCost } from "./cost-tracker.js";
+import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentToolResult } from "./types.js";
 
 /**
  * Per-invocation options for the agent loop.
@@ -99,7 +93,10 @@ export function agentLoopContinue(
  * Idempotent and safe to call multiple times — `recordTurn` runs the
  * same gate later as belt-and-braces.
  */
-function stampUsageCost(model: { cost?: { inputPerMillion: number; outputPerMillion: number } }, message: AssistantMessage): void {
+function stampUsageCost(
+	model: { cost?: { inputPerMillion: number; outputPerMillion: number } },
+	message: AssistantMessage,
+): void {
 	if (!message.usage) return;
 	const existing = message.usage.cost;
 	if (typeof existing === "number" && Number.isFinite(existing) && existing >= 0) return;
@@ -187,7 +184,7 @@ async function runLoop(
 	const maxTurns = config.maxTurns ?? 50;
 
 	// === Outer Loop: Follow-up messages ===
-	outerLoop: while (true) {
+	while (true) {
 		// === Inner Loop: LLM call + tools + steering ===
 		while (true) {
 			if (signal.aborted) {
@@ -252,9 +249,7 @@ async function runLoop(
 			}
 
 			// --- Execute Tool Calls ---
-			const toolCalls = assistantMessage.content.filter(
-				(c): c is ToolCallContent => c.type === "tool_call",
-			);
+			const toolCalls = assistantMessage.content.filter((c): c is ToolCallContent => c.type === "tool_call");
 
 			// Auto-wire cost tracking. The recordTurn happened above (so
 			// even error/aborted turns count); this branch only handles
@@ -309,9 +304,7 @@ async function runLoop(
 				// avoid surfacing "fake" tool-execution failures — the abort
 				// is a control-flow signal, not a tool malfunction.
 				const completeResults =
-					toolResults.length < toolCalls.length
-						? padCancelledToolResults(toolCalls, toolResults)
-						: toolResults;
+					toolResults.length < toolCalls.length ? padCancelledToolResults(toolCalls, toolResults) : toolResults;
 
 				context.messages.push(...completeResults);
 			}
@@ -339,7 +332,7 @@ async function runLoop(
 		// === Check for follow-up messages ===
 		const followUpMessages = config.getFollowUpMessages?.();
 		if (!followUpMessages?.length) {
-			break outerLoop;
+			break;
 		}
 
 		context.messages.push(...followUpMessages);
@@ -423,8 +416,7 @@ async function streamAssistantResponse(
 		signal,
 		apiKey,
 	});
-	const llmStream =
-		llmStreamOrPromise instanceof Promise ? await llmStreamOrPromise : llmStreamOrPromise;
+	const llmStream = llmStreamOrPromise instanceof Promise ? await llmStreamOrPromise : llmStreamOrPromise;
 
 	// Forward LLM events to the agent stream
 	for await (const event of llmStream) {
@@ -592,7 +584,10 @@ async function executeSingleTool(
 				}
 			}
 		} catch (hookErr) {
-			return createErrorResult(toolCall, `beforeToolCall hook failed: ${hookErr instanceof Error ? hookErr.message : hookErr}`);
+			return createErrorResult(
+				toolCall,
+				`beforeToolCall hook failed: ${hookErr instanceof Error ? hookErr.message : hookErr}`,
+			);
 		}
 	}
 
@@ -688,10 +683,7 @@ function createErrorResult(toolCall: ToolCallContent, error: string): ToolResult
  * as errors would cause downstream auto-retry/recovery logic to misread
  * the situation as a tool failure.
  */
-function padCancelledToolResults(
-	toolCalls: ToolCallContent[],
-	actual: ToolResultMessage[],
-): ToolResultMessage[] {
+function padCancelledToolResults(toolCalls: ToolCallContent[], actual: ToolResultMessage[]): ToolResultMessage[] {
 	const byId = new Map(actual.map((r) => [r.toolCallId, r]));
 	return toolCalls.map(
 		(tc): ToolResultMessage =>

@@ -1,0 +1,8 @@
+{
+	"name": "research-bundle",
+	"description": "Example non-coding workflow bundle for research and review tasks.",
+	"prompts": ["prompts"],
+	"skills": ["skills"],
+	"extensions": ["extensions/research-capture.mjs"],
+	"themes": ["themes/research-dark.json"]
+}

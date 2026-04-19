@@ -1,17 +1,17 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
-	symlinkSync,
-	writeFileSync,
 	statSync,
+	symlinkSync,
 	utimesSync,
+	writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
 	acquireFileLock,
 	lockDirFor,
@@ -42,8 +42,7 @@ function locateLockDir(filePath: string): string {
 		while (true) {
 			try {
 				const real = realpathSyncFn(p);
-				canonical =
-					tail.length === 0 ? real : path.resolve(real, ...tail.reverse());
+				canonical = tail.length === 0 ? real : path.resolve(real, ...tail.reverse());
 				break;
 			} catch {
 				const parent = path.dirname(p);
@@ -192,10 +191,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		// Now age it out past the unknown-owner threshold (5 min)
 		rmSync(lockDir, { recursive: true });
 		mkdirSync(lockDir);
-		writeFileSync(
-			path.join(lockDir, "info"),
-			JSON.stringify({ ...foreignInfo, acquiredAt: Date.now() - 10 * 60_000 }),
-		);
+		writeFileSync(path.join(lockDir, "info"), JSON.stringify({ ...foreignInfo, acquiredAt: Date.now() - 10 * 60_000 }));
 
 		// Now beyond threshold — eviction allowed
 		const release = await acquireFileLock(file, { timeout: 1_000 });
@@ -334,18 +330,13 @@ describe("file-mutation-queue cross-process lock", () => {
 		const aliasPath = path.join(dirLink, "shared.txt");
 
 		// Acquire via the alias
-		const release = await withFileMutationLock(
-			aliasPath,
-			async () => {
-				// While we hold via the alias, attempting to acquire via
-				// the real path with a short timeout MUST fail. If
-				// canonicalization is broken they'd be different locks.
-				await expect(
-					acquireFileLock(target, { timeout: 200 }),
-				).rejects.toThrow("Timeout");
-				return "ok";
-			},
-		);
+		const release = await withFileMutationLock(aliasPath, async () => {
+			// While we hold via the alias, attempting to acquire via
+			// the real path with a short timeout MUST fail. If
+			// canonicalization is broken they'd be different locks.
+			await expect(acquireFileLock(target, { timeout: 200 })).rejects.toThrow("Timeout");
+			return "ok";
+		});
 		expect(release).toBe("ok");
 	});
 
@@ -362,9 +353,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		const newViaAlias = path.join(dirLink, "new.txt");
 
 		await withFileMutationLock(newViaAlias, async () => {
-			await expect(
-				acquireFileLock(newViaReal, { timeout: 200 }),
-			).rejects.toThrow("Timeout");
+			await expect(acquireFileLock(newViaReal, { timeout: 200 })).rejects.toThrow("Timeout");
 		});
 	});
 
@@ -401,9 +390,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		const ac = new AbortController();
 		ac.abort();
 
-		await expect(
-			acquireFileLock(file, { timeout: 200, signal: ac.signal }),
-		).rejects.toThrow(/Aborted/);
+		await expect(acquireFileLock(file, { timeout: 200, signal: ac.signal })).rejects.toThrow(/Aborted/);
 	});
 
 	it("regression (pass-6): canonicalization happens inside acquireFileLock so all callers benefit", async () => {
@@ -423,9 +410,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		// path. They MUST contend even though we used withCrossProcessLock
 		// (NOT withFileMutationLock) to acquire.
 		const release = await withCrossProcessLock(aliasFile, async () => {
-			await expect(
-				acquireFileLock(realFile, { timeout: 200 }),
-			).rejects.toThrow("Timeout");
+			await expect(acquireFileLock(realFile, { timeout: 200 })).rejects.toThrow("Timeout");
 			return "ok";
 		});
 		expect(release).toBe("ok");
@@ -575,9 +560,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		writeFileSync(file, "");
 		const release = await acquireFileLock(file, { timeout: 200 });
 		try {
-			const info = JSON.parse(
-				readFileSync(path.join(locateLockDir(file), "info"), "utf-8"),
-			);
+			const info = JSON.parse(readFileSync(path.join(locateLockDir(file), "info"), "utf-8"));
 			expect(info.target).toBeUndefined();
 			// And no other field surfacing the path
 			for (const [, value] of Object.entries(info)) {
@@ -625,9 +608,7 @@ describe("file-mutation-queue cross-process lock", () => {
 			// While we hold via Foo.ts, an attempt via foo.ts MUST
 			// contend (NOT acquire its own independent lock). With
 			// case-folding the hash collides → EEXIST → poll → timeout.
-			await expect(
-				acquireFileLock(lowerPath, { timeout: 200 }),
-			).rejects.toThrow("Timeout");
+			await expect(acquireFileLock(lowerPath, { timeout: 200 })).rejects.toThrow("Timeout");
 			return "ok";
 		});
 		expect(release).toBe("ok");
@@ -887,7 +868,7 @@ describe("file-mutation-queue cross-process lock", () => {
 		// Sanity check the other direction: a definitively-evicted lock
 		// (lockDir rmSync'd) MUST report "lost" so the heartbeat timer
 		// shuts down and stops leaking writes against a peer's directory.
-		const lockDir = path.join(root, "vanished-lock-" + Math.random().toString(36).slice(2));
+		const lockDir = path.join(root, `vanished-lock-${Math.random().toString(36).slice(2)}`);
 		const infoPath = path.join(lockDir, "info");
 		// lockDir was never created — refresh sees no directory, returns lost.
 		const outcome = refreshLockHeartbeat(infoPath, "any-token");

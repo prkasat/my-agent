@@ -11,11 +11,11 @@
  * - LLM-powered summarization with merge support
  */
 
-import type { AgentMessage, AgentContext } from "../agent/types.js";
 import type { AssistantMessage, Message, Model, StreamFunctionLike, Usage } from "@my-agent/ai";
-import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 import { defaultConvertToLlm } from "../agent/convert.js";
 import { calculateUsageCost } from "../agent/cost-tracker.js";
+import type { AgentContext, AgentMessage } from "../agent/types.js";
+import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 
 // ============================================================================
 // Token Estimation
@@ -27,71 +27,71 @@ import { calculateUsageCost } from "../agent/cost-tracker.js";
  * Overestimating is safer - we compact slightly early rather than hitting the limit.
  */
 export function estimateTokens(message: AgentMessage): number {
-  // Custom messages - handle different types
-  if ("role" in message && message.role === "custom") {
-    // Generic custom messages have content
-    if ("content" in message && typeof message.content === "string") {
-      return message.content.length / 4;
-    }
-    // Compaction and branch summaries have summary field
-    if ("summary" in message && typeof message.summary === "string") {
-      return message.summary.length / 4;
-    }
-    // Bash execution messages
-    if ("output" in message && typeof message.output === "string") {
-      return (message.command.length + message.output.length) / 4;
-    }
-    return 0;
-  }
+	// Custom messages - handle different types
+	if ("role" in message && message.role === "custom") {
+		// Generic custom messages have content
+		if ("content" in message && typeof message.content === "string") {
+			return message.content.length / 4;
+		}
+		// Compaction and branch summaries have summary field
+		if ("summary" in message && typeof message.summary === "string") {
+			return message.summary.length / 4;
+		}
+		// Bash execution messages
+		if ("output" in message && typeof message.output === "string") {
+			return (message.command.length + message.output.length) / 4;
+		}
+		return 0;
+	}
 
-  if (!("role" in message)) return 0;
+	if (!("role" in message)) return 0;
 
-  switch (message.role) {
-    case "user": {
-      if (typeof message.content === "string") {
-        return message.content.length / 4;
-      }
-      let tokens = 0;
-      for (const block of message.content) {
-        if (block.type === "text") {
-          tokens += block.text.length / 4;
-        } else if (block.type === "image") {
-          // Images are roughly 1200 tokens
-          tokens += 1200;
-        }
-      }
-      return tokens;
-    }
+	switch (message.role) {
+		case "user": {
+			if (typeof message.content === "string") {
+				return message.content.length / 4;
+			}
+			let tokens = 0;
+			for (const block of message.content) {
+				if (block.type === "text") {
+					tokens += block.text.length / 4;
+				} else if (block.type === "image") {
+					// Images are roughly 1200 tokens
+					tokens += 1200;
+				}
+			}
+			return tokens;
+		}
 
-    case "assistant": {
-      let tokens = 0;
-      for (const block of message.content) {
-        if (block.type === "text") {
-          tokens += block.text.length / 4;
-        } else if (block.type === "thinking") {
-          tokens += block.text.length / 4;
-        } else if (block.type === "tool_call") {
-          tokens += (block.name.length + block.arguments.length) / 4;
-        }
-      }
-      return tokens;
-    }
+		case "assistant": {
+			let tokens = 0;
+			for (const block of message.content) {
+				if (block.type === "text") {
+					tokens += block.text.length / 4;
+				} else if (block.type === "thinking") {
+					tokens += block.text.length / 4;
+				} else if (block.type === "tool_call") {
+					tokens += (block.name.length + block.arguments.length) / 4;
+				}
+			}
+			return tokens;
+		}
 
-    case "toolResult": {
-      let tokens = 0;
-      for (const block of message.content) {
-        if (block.type === "text") {
-          tokens += block.text.length / 4;
-        } else if (block.type === "image") {
-          tokens += 1200;
-        }
-      }
-      return tokens;
-    }
+		case "toolResult": {
+			let tokens = 0;
+			for (const block of message.content) {
+				if (block.type === "text") {
+					tokens += block.text.length / 4;
+				} else if (block.type === "image") {
+					tokens += 1200;
+				}
+			}
+			return tokens;
+		}
 
-    default:
-      return 0;
-  }
+		default:
+			return 0;
+	}
 }
 
 /**
@@ -101,7 +101,7 @@ export function estimateTokens(message: AgentMessage): number {
  * the trailing tail.
  */
 export function estimateContextTokens(messages: AgentMessage[]): number {
-  return messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
+	return messages.reduce((sum, msg) => sum + estimateTokens(msg), 0);
 }
 
 /**
@@ -113,12 +113,9 @@ export function estimateContextTokens(messages: AgentMessage[]): number {
  * for and that count against the context window, so they're included.
  */
 export function calculateContextTokens(usage: Usage): number {
-  return (
-    (usage.inputTokens || 0) +
-    (usage.outputTokens || 0) +
-    (usage.cacheReadTokens || 0) +
-    (usage.cacheWriteTokens || 0)
-  );
+	return (
+		(usage.inputTokens || 0) + (usage.outputTokens || 0) + (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0)
+	);
 }
 
 /**
@@ -139,28 +136,20 @@ export function calculateContextTokens(usage: Usage): number {
  * not a real false-negative.
  */
 function isUsableUsage(usage: Usage | undefined): usage is Usage {
-  if (!usage) return false;
-  const fields = [
-    usage.inputTokens,
-    usage.outputTokens,
-    usage.cacheReadTokens ?? 0,
-    usage.cacheWriteTokens ?? 0,
-  ];
-  for (const v of fields) {
-    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
-  }
-  // Prompt-side accounting must be present. A record like
-  // `{ inputTokens: 0, outputTokens: 10 }` looks "non-zero" but
-  // misrepresents the prompt cost — treating it as the anchor would
-  // bill the whole prefix as just the output side and mask overflow.
-  // Cache reads/writes also cover prompt-side accounting (they are
-  // tokens the model loaded from cache instead of input), so any of
-  // those qualifies as "the prompt has been measured."
-  const inputSide =
-    (usage.inputTokens || 0) +
-    (usage.cacheReadTokens ?? 0) +
-    (usage.cacheWriteTokens ?? 0);
-  return inputSide > 0;
+	if (!usage) return false;
+	const fields = [usage.inputTokens, usage.outputTokens, usage.cacheReadTokens ?? 0, usage.cacheWriteTokens ?? 0];
+	for (const v of fields) {
+		if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return false;
+	}
+	// Prompt-side accounting must be present. A record like
+	// `{ inputTokens: 0, outputTokens: 10 }` looks "non-zero" but
+	// misrepresents the prompt cost — treating it as the anchor would
+	// bill the whole prefix as just the output side and mask overflow.
+	// Cache reads/writes also cover prompt-side accounting (they are
+	// tokens the model loaded from cache instead of input), so any of
+	// those qualifies as "the prompt has been measured."
+	const inputSide = (usage.inputTokens || 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+	return inputSide > 0;
 }
 
 /**
@@ -171,36 +160,34 @@ function isUsableUsage(usage: Usage | undefined): usage is Usage {
  * Also skips messages whose usage is structurally zero / malformed (see
  * `isUsableUsage`).
  */
-function getLastAssistantUsageInfo(
-  messages: AgentMessage[],
-): { usage: Usage; index: number } | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (
-      "role" in msg &&
-      msg.role === "assistant" &&
-      msg.stopReason !== "aborted" &&
-      msg.stopReason !== "error" &&
-      isUsableUsage(msg.usage)
-    ) {
-      return { usage: msg.usage as Usage, index: i };
-    }
-  }
-  return undefined;
+function getLastAssistantUsageInfo(messages: AgentMessage[]): { usage: Usage; index: number } | undefined {
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const msg = messages[i];
+		if (
+			"role" in msg &&
+			msg.role === "assistant" &&
+			msg.stopReason !== "aborted" &&
+			msg.stopReason !== "error" &&
+			isUsableUsage(msg.usage)
+		) {
+			return { usage: msg.usage as Usage, index: i };
+		}
+	}
+	return undefined;
 }
 
 export interface ContextTokenMeasurement {
-  /** Best estimate of the tokens that will be sent on the next LLM call. */
-  tokens: number;
-  /** Tokens taken from the last assistant message's reported Usage (0 if none). */
-  usageTokens: number;
-  /** Tokens estimated for messages after the last assistant Usage anchor. */
-  trailingTokens: number;
-  /**
-   * Index of the assistant message whose Usage was used as the anchor, or
-   * `null` if no usage was found and the count is fully estimated.
-   */
-  lastUsageIndex: number | null;
+	/** Best estimate of the tokens that will be sent on the next LLM call. */
+	tokens: number;
+	/** Tokens taken from the last assistant message's reported Usage (0 if none). */
+	usageTokens: number;
+	/** Tokens estimated for messages after the last assistant Usage anchor. */
+	trailingTokens: number;
+	/**
+	 * Index of the assistant message whose Usage was used as the anchor, or
+	 * `null` if no usage was found and the count is fully estimated.
+	 */
+	lastUsageIndex: number | null;
 }
 
 /**
@@ -215,33 +202,31 @@ export interface ContextTokenMeasurement {
  * When no assistant message has reported usage yet (cold start, before the
  * first turn completes), this falls back to a fully-estimated count.
  */
-export function measureContextTokens(
-  messages: AgentMessage[],
-): ContextTokenMeasurement {
-  const usageInfo = getLastAssistantUsageInfo(messages);
+export function measureContextTokens(messages: AgentMessage[]): ContextTokenMeasurement {
+	const usageInfo = getLastAssistantUsageInfo(messages);
 
-  if (!usageInfo) {
-    const estimated = estimateContextTokens(messages);
-    return {
-      tokens: estimated,
-      usageTokens: 0,
-      trailingTokens: estimated,
-      lastUsageIndex: null,
-    };
-  }
+	if (!usageInfo) {
+		const estimated = estimateContextTokens(messages);
+		return {
+			tokens: estimated,
+			usageTokens: 0,
+			trailingTokens: estimated,
+			lastUsageIndex: null,
+		};
+	}
 
-  const usageTokens = calculateContextTokens(usageInfo.usage);
-  let trailingTokens = 0;
-  for (let i = usageInfo.index + 1; i < messages.length; i++) {
-    trailingTokens += estimateTokens(messages[i]);
-  }
+	const usageTokens = calculateContextTokens(usageInfo.usage);
+	let trailingTokens = 0;
+	for (let i = usageInfo.index + 1; i < messages.length; i++) {
+		trailingTokens += estimateTokens(messages[i]);
+	}
 
-  return {
-    tokens: usageTokens + trailingTokens,
-    usageTokens,
-    trailingTokens,
-    lastUsageIndex: usageInfo.index,
-  };
+	return {
+		tokens: usageTokens + trailingTokens,
+		usageTokens,
+		trailingTokens,
+		lastUsageIndex: usageInfo.index,
+	};
 }
 
 // ============================================================================
@@ -252,12 +237,12 @@ export function measureContextTokens(
  * Result of finding a cut point, including split-turn information.
  */
 export interface CutPointResult {
-  /** Index of first message to keep */
-  firstKeptIndex: number;
-  /** Index of user message that starts the turn being split, or -1 if not splitting */
-  turnStartIndex: number;
-  /** Whether this cut splits a turn (cut point is not at a turn boundary) */
-  isSplitTurn: boolean;
+	/** Index of first message to keep */
+	firstKeptIndex: number;
+	/** Index of user message that starts the turn being split, or -1 if not splitting */
+	turnStartIndex: number;
+	/** Whether this cut splits a turn (cut point is not at a turn boundary) */
+	isSplitTurn: boolean;
 }
 
 /**
@@ -265,38 +250,34 @@ export interface CutPointResult {
  * Returns -1 if no user message is found before the index.
  */
 function findTurnStartIndex(messages: AgentMessage[], fromIndex: number): number {
-  for (let i = fromIndex; i >= 0; i--) {
-    const msg = messages[i];
-    if ("role" in msg && msg.role === "user") {
-      return i;
-    }
-    // Custom messages that convert to user content also start turns
-    if ("role" in msg && msg.role === "custom" && "type" in msg) {
-      const type = msg.type;
-      // Branch summaries and compaction summaries start turns
-      if (type === "branch_summary" || type === "compaction_summary") {
-        return i;
-      }
-      // Extension messages with sendToLlm: true convert to user messages
-      if (
-        type === "extension" &&
-        "sendToLlm" in msg &&
-        (msg as { sendToLlm?: boolean }).sendToLlm === true
-      ) {
-        return i;
-      }
-    }
-  }
-  return -1;
+	for (let i = fromIndex; i >= 0; i--) {
+		const msg = messages[i];
+		if ("role" in msg && msg.role === "user") {
+			return i;
+		}
+		// Custom messages that convert to user content also start turns
+		if ("role" in msg && msg.role === "custom" && "type" in msg) {
+			const type = msg.type;
+			// Branch summaries and compaction summaries start turns
+			if (type === "branch_summary" || type === "compaction_summary") {
+				return i;
+			}
+			// Extension messages with sendToLlm: true convert to user messages
+			if (type === "extension" && "sendToLlm" in msg && (msg as { sendToLlm?: boolean }).sendToLlm === true) {
+				return i;
+			}
+		}
+	}
+	return -1;
 }
 
 /**
  * Check if a message is a valid cut point (not a toolResult).
  */
 function isValidCutPoint(msg: AgentMessage): boolean {
-  if (!("role" in msg)) return false;
-  // Never cut at toolResult — would orphan it from its tool_call
-  return msg.role !== "toolResult";
+	if (!("role" in msg)) return false;
+	// Never cut at toolResult — would orphan it from its tool_call
+	return msg.role !== "toolResult";
 }
 
 /**
@@ -306,79 +287,79 @@ function isValidCutPoint(msg: AgentMessage): boolean {
  * cut occurs mid-turn. Used by compact() for split-turn compaction.
  */
 function findCutPointWithSplitInfo(
-  messages: AgentMessage[],
-  keepRecentTokens: number,
-  forceProgress = false,
+	messages: AgentMessage[],
+	keepRecentTokens: number,
+	forceProgress = false,
 ): CutPointResult {
-  const noCut: CutPointResult = { firstKeptIndex: 0, turnStartIndex: -1, isSplitTurn: false };
-  if (messages.length === 0) return noCut;
+	const noCut: CutPointResult = { firstKeptIndex: 0, turnStartIndex: -1, isSplitTurn: false };
+	if (messages.length === 0) return noCut;
 
-  // Walk backwards, accumulating tokens
-  let tokens = 0;
-  let cutIndex = messages.length;
+	// Walk backwards, accumulating tokens
+	let tokens = 0;
+	let cutIndex = messages.length;
 
-  for (let i = messages.length - 1; i >= 0; i--) {
-    tokens += estimateTokens(messages[i]);
-    if (tokens >= keepRecentTokens) {
-      cutIndex = i;
-      break;
-    }
-  }
+	for (let i = messages.length - 1; i >= 0; i--) {
+		tokens += estimateTokens(messages[i]);
+		if (tokens >= keepRecentTokens) {
+			cutIndex = i;
+			break;
+		}
+	}
 
-  // If total tokens < keepRecentTokens, normally don't cut anything.
-  // But when forceProgress is set (provider Usage says we're over limit),
-  // we MUST drop something to avoid livelock.
-  if (cutIndex === messages.length) {
-    if (!forceProgress) return noCut;
-    if (messages.length < 2) return noCut;
-    // Force-cut at half the messages, clamped to keep at least 1 message
-    cutIndex = Math.max(1, Math.min(messages.length - 1, Math.floor(messages.length / 2)));
-  }
+	// If total tokens < keepRecentTokens, normally don't cut anything.
+	// But when forceProgress is set (provider Usage says we're over limit),
+	// we MUST drop something to avoid livelock.
+	if (cutIndex === messages.length) {
+		if (!forceProgress) return noCut;
+		if (messages.length < 2) return noCut;
+		// Force-cut at half the messages, clamped to keep at least 1 message
+		cutIndex = Math.max(1, Math.min(messages.length - 1, Math.floor(messages.length / 2)));
+	}
 
-  // Adjust: don't cut at a toolResult (would orphan it from its tool_call).
-  // First try advancing forward to find a valid cut point.
-  const originalCutIndex = cutIndex;
-  while (cutIndex < messages.length) {
-    const msg = messages[cutIndex];
-    if (!isValidCutPoint(msg)) {
-      cutIndex++;
-    } else {
-      break;
-    }
-  }
+	// Adjust: don't cut at a toolResult (would orphan it from its tool_call).
+	// First try advancing forward to find a valid cut point.
+	const originalCutIndex = cutIndex;
+	while (cutIndex < messages.length) {
+		const msg = messages[cutIndex];
+		if (!isValidCutPoint(msg)) {
+			cutIndex++;
+		} else {
+			break;
+		}
+	}
 
-  // If we advanced past all messages (all trailing toolResults), look backward
-  // for the last valid cut point instead. This handles contexts that end with
-  // pending tool results (common when resuming after tool execution).
-  if (cutIndex >= messages.length && originalCutIndex > 0) {
-    cutIndex = originalCutIndex - 1;
-    while (cutIndex > 0) {
-      const msg = messages[cutIndex];
-      if (isValidCutPoint(msg)) {
-        break;
-      }
-      cutIndex--;
-    }
-  }
+	// If we advanced past all messages (all trailing toolResults), look backward
+	// for the last valid cut point instead. This handles contexts that end with
+	// pending tool results (common when resuming after tool execution).
+	if (cutIndex >= messages.length && originalCutIndex > 0) {
+		cutIndex = originalCutIndex - 1;
+		while (cutIndex > 0) {
+			const msg = messages[cutIndex];
+			if (isValidCutPoint(msg)) {
+				break;
+			}
+			cutIndex--;
+		}
+	}
 
-  cutIndex = Math.max(0, cutIndex);
-  if (cutIndex === 0 || cutIndex >= messages.length) return noCut;
+	cutIndex = Math.max(0, cutIndex);
+	if (cutIndex === 0 || cutIndex >= messages.length) return noCut;
 
-  // Determine if this is a split turn. A split occurs when the cut lands
-  // mid-turn (after the turn start, before the turn ends). Cuts exactly at
-  // turn boundaries (user messages, branch_summary, compaction_summary,
-  // extension with sendToLlm) are NOT splits.
-  const cutMsg = messages[cutIndex];
-  const turnStartIndex = findTurnStartIndex(messages, cutIndex);
-  // Cut is at a turn boundary if turnStartIndex equals cutIndex, or if
-  // no turn start was found (turnStartIndex === -1, e.g., leading assistant).
-  const isAtTurnBoundary = turnStartIndex === cutIndex || turnStartIndex === -1;
+	// Determine if this is a split turn. A split occurs when the cut lands
+	// mid-turn (after the turn start, before the turn ends). Cuts exactly at
+	// turn boundaries (user messages, branch_summary, compaction_summary,
+	// extension with sendToLlm) are NOT splits.
+	const cutMsg = messages[cutIndex];
+	const turnStartIndex = findTurnStartIndex(messages, cutIndex);
+	// Cut is at a turn boundary if turnStartIndex equals cutIndex, or if
+	// no turn start was found (turnStartIndex === -1, e.g., leading assistant).
+	const isAtTurnBoundary = turnStartIndex === cutIndex || turnStartIndex === -1;
 
-  return {
-    firstKeptIndex: cutIndex,
-    turnStartIndex: isAtTurnBoundary ? -1 : turnStartIndex,
-    isSplitTurn: !isAtTurnBoundary,
-  };
+	return {
+		firstKeptIndex: cutIndex,
+		turnStartIndex: isAtTurnBoundary ? -1 : turnStartIndex,
+		isSplitTurn: !isAtTurnBoundary,
+	};
 }
 
 /**
@@ -395,12 +376,8 @@ function findCutPointWithSplitInfo(
  *
  * @returns Index of the first message to keep (0 means no cut needed)
  */
-export function findCutPoint(
-  messages: AgentMessage[],
-  keepRecentTokens: number,
-  forceProgress = false,
-): number {
-  return findCutPointWithSplitInfo(messages, keepRecentTokens, forceProgress).firstKeptIndex;
+export function findCutPoint(messages: AgentMessage[], keepRecentTokens: number, forceProgress = false): number {
+	return findCutPointWithSplitInfo(messages, keepRecentTokens, forceProgress).firstKeptIndex;
 }
 
 // ============================================================================
@@ -412,49 +389,49 @@ export function findCutPoint(
  * Tracks which files were read and modified for context preservation.
  */
 export function extractFileOperations(
-  messages: AgentMessage[],
-  existing?: Partial<CompactionDetails>
+	messages: AgentMessage[],
+	existing?: Partial<CompactionDetails>,
 ): CompactionDetails {
-  const readFiles = new Set<string>(existing?.readFiles ?? []);
-  const modifiedFiles = new Set<string>(existing?.modifiedFiles ?? []);
+	const readFiles = new Set<string>(existing?.readFiles ?? []);
+	const modifiedFiles = new Set<string>(existing?.modifiedFiles ?? []);
 
-  for (const msg of messages) {
-    if (!("role" in msg) || msg.role !== "assistant") continue;
+	for (const msg of messages) {
+		if (!("role" in msg) || msg.role !== "assistant") continue;
 
-    for (const block of msg.content) {
-      if (block.type !== "tool_call") continue;
+		for (const block of msg.content) {
+			if (block.type !== "tool_call") continue;
 
-      try {
-        const args = JSON.parse(block.arguments);
-        const path = args.path || args.file_path;
+			try {
+				const args = JSON.parse(block.arguments);
+				const path = args.path || args.file_path;
 
-        switch (block.name) {
-          case "read":
-          case "Read":
-            if (path) readFiles.add(path);
-            break;
-          case "write":
-          case "Write":
-          case "edit":
-          case "Edit":
-            if (path) modifiedFiles.add(path);
-            break;
-          case "bash":
-          case "Bash":
-            // Could parse bash commands for file operations, but skip for now
-            break;
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-  }
+				switch (block.name) {
+					case "read":
+					case "Read":
+						if (path) readFiles.add(path);
+						break;
+					case "write":
+					case "Write":
+					case "edit":
+					case "Edit":
+						if (path) modifiedFiles.add(path);
+						break;
+					case "bash":
+					case "Bash":
+						// Could parse bash commands for file operations, but skip for now
+						break;
+				}
+			} catch {
+				// Ignore parse errors
+			}
+		}
+	}
 
-  return {
-    readFiles: [...readFiles],
-    modifiedFiles: [...modifiedFiles],
-    tokensAfter: 0, // Filled after compaction
-  };
+	return {
+		readFiles: [...readFiles],
+		modifiedFiles: [...modifiedFiles],
+		tokensAfter: 0, // Filled after compaction
+	};
 }
 
 // ============================================================================
@@ -536,9 +513,9 @@ export const TOOL_RESULT_MAX_CHARS = 2000;
  * messages, structural cues) but rarely the full body.
  */
 function truncateForSummary(text: string, maxChars: number): string {
-  if (text.length <= maxChars) return text;
-  const truncated = text.length - maxChars;
-  return `${text.slice(0, maxChars)}\n\n[... ${truncated} more characters truncated]`;
+	if (text.length <= maxChars) return text;
+	const truncated = text.length - maxChars;
+	return `${text.slice(0, maxChars)}\n\n[... ${truncated} more characters truncated]`;
 }
 
 // ============================================================================
@@ -557,67 +534,67 @@ function truncateForSummary(text: string, maxChars: number): string {
  * a 200KB grep result) would otherwise blow the summarization budget.
  */
 function formatMessagesForSummary(messages: Message[]): string {
-  const parts: string[] = [];
+	const parts: string[] = [];
 
-  for (const msg of messages) {
-    if (msg.role === "user") {
-      const text =
-        typeof msg.content === "string"
-          ? msg.content
-          : msg.content
-              .filter((c): c is { type: "text"; text: string } => c.type === "text")
-              .map((c) => c.text)
-              .join("");
-      if (text) parts.push(`[User]: ${text}`);
-    } else if (msg.role === "assistant") {
-      const textParts: string[] = [];
-      const thinkingParts: string[] = [];
-      const toolCalls: string[] = [];
+	for (const msg of messages) {
+		if (msg.role === "user") {
+			const text =
+				typeof msg.content === "string"
+					? msg.content
+					: msg.content
+							.filter((c): c is { type: "text"; text: string } => c.type === "text")
+							.map((c) => c.text)
+							.join("");
+			if (text) parts.push(`[User]: ${text}`);
+		} else if (msg.role === "assistant") {
+			const textParts: string[] = [];
+			const thinkingParts: string[] = [];
+			const toolCalls: string[] = [];
 
-      for (const block of msg.content) {
-        if (block.type === "text") {
-          textParts.push(block.text);
-        } else if (block.type === "thinking") {
-          thinkingParts.push(block.text);
-        } else if (block.type === "tool_call") {
-          let argsStr = "";
-          try {
-            const args = JSON.parse(block.arguments) as Record<string, unknown>;
-            argsStr = Object.entries(args)
-              .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
-              .join(", ");
-          } catch {
-            // Malformed arguments — fall back to the raw string. Better
-            // to expose the broken call than silently drop it from the
-            // summary.
-            argsStr = block.arguments;
-          }
-          toolCalls.push(`${block.name}(${argsStr})`);
-        }
-      }
+			for (const block of msg.content) {
+				if (block.type === "text") {
+					textParts.push(block.text);
+				} else if (block.type === "thinking") {
+					thinkingParts.push(block.text);
+				} else if (block.type === "tool_call") {
+					let argsStr = "";
+					try {
+						const args = JSON.parse(block.arguments) as Record<string, unknown>;
+						argsStr = Object.entries(args)
+							.map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+							.join(", ");
+					} catch {
+						// Malformed arguments — fall back to the raw string. Better
+						// to expose the broken call than silently drop it from the
+						// summary.
+						argsStr = block.arguments;
+					}
+					toolCalls.push(`${block.name}(${argsStr})`);
+				}
+			}
 
-      if (thinkingParts.length > 0) {
-        parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
-      }
-      if (textParts.length > 0) {
-        parts.push(`[Assistant]: ${textParts.join("\n")}`);
-      }
-      if (toolCalls.length > 0) {
-        parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
-      }
-    } else if (msg.role === "toolResult") {
-      const text = msg.content
-        .filter((c): c is { type: "text"; text: string } => c.type === "text")
-        .map((c) => c.text)
-        .join("");
-      if (text) {
-        const label = msg.isError ? "Tool result (error)" : "Tool result";
-        parts.push(`[${label} ${msg.toolName}]: ${truncateForSummary(text, TOOL_RESULT_MAX_CHARS)}`);
-      }
-    }
-  }
+			if (thinkingParts.length > 0) {
+				parts.push(`[Assistant thinking]: ${thinkingParts.join("\n")}`);
+			}
+			if (textParts.length > 0) {
+				parts.push(`[Assistant]: ${textParts.join("\n")}`);
+			}
+			if (toolCalls.length > 0) {
+				parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
+			}
+		} else if (msg.role === "toolResult") {
+			const text = msg.content
+				.filter((c): c is { type: "text"; text: string } => c.type === "text")
+				.map((c) => c.text)
+				.join("");
+			if (text) {
+				const label = msg.isError ? "Tool result (error)" : "Tool result";
+				parts.push(`[${label} ${msg.toolName}]: ${truncateForSummary(text, TOOL_RESULT_MAX_CHARS)}`);
+			}
+		}
+	}
 
-  return parts.join("\n\n");
+	return parts.join("\n\n");
 }
 
 /**
@@ -641,25 +618,17 @@ function formatMessagesForSummary(messages: Message[]): string {
  * text human-readable while preventing the prompt's real wrappers from
  * being confused with text inside them.
  */
-const PROMPT_WRAPPER_TAGS = [
-  "conversation",
-  "previous-summary",
-  "read-files",
-  "modified-files",
-] as const;
+const PROMPT_WRAPPER_TAGS = ["conversation", "previous-summary", "read-files", "modified-files"] as const;
 
 // Match opening (`<tag>`, `<tag/>`) AND closing (`</tag>`) variants of any
 // wrapper tag. Tolerates whitespace and case variation. The `/?` after the
 // optional `/` covers self-closing forms like `<conversation/>`.
-const WRAPPER_TAG_RE = new RegExp(
-  `<\\s*(/?)\\s*(${PROMPT_WRAPPER_TAGS.join("|")})\\s*(/?)\\s*>`,
-  "gi",
-);
+const WRAPPER_TAG_RE = new RegExp(`<\\s*(/?)\\s*(${PROMPT_WRAPPER_TAGS.join("|")})\\s*(/?)\\s*>`, "gi");
 
 function escapeWrapperTags(text: string): string {
-  return text.replace(WRAPPER_TAG_RE, (_, lead: string, name: string, trail: string) => {
-    return `&lt;${lead}${name.toLowerCase()}${trail}&gt;`;
-  });
+	return text.replace(WRAPPER_TAG_RE, (_, lead: string, name: string, trail: string) => {
+		return `&lt;${lead}${name.toLowerCase()}${trail}&gt;`;
+	});
 }
 
 /**
@@ -671,17 +640,17 @@ function escapeWrapperTags(text: string): string {
  * Path semantics survive because `&lt;` etc. are not valid in real paths.
  */
 function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections: string[] = [];
-  if (readFiles.length > 0) {
-    const safe = readFiles.slice().sort().map(escapeWrapperTags).join("\n");
-    sections.push(`<read-files>\n${safe}\n</read-files>`);
-  }
-  if (modifiedFiles.length > 0) {
-    const safe = modifiedFiles.slice().sort().map(escapeWrapperTags).join("\n");
-    sections.push(`<modified-files>\n${safe}\n</modified-files>`);
-  }
-  if (sections.length === 0) return "";
-  return `\n\n${sections.join("\n\n")}`;
+	const sections: string[] = [];
+	if (readFiles.length > 0) {
+		const safe = readFiles.slice().sort().map(escapeWrapperTags).join("\n");
+		sections.push(`<read-files>\n${safe}\n</read-files>`);
+	}
+	if (modifiedFiles.length > 0) {
+		const safe = modifiedFiles.slice().sort().map(escapeWrapperTags).join("\n");
+		sections.push(`<modified-files>\n${safe}\n</modified-files>`);
+	}
+	if (sections.length === 0) return "";
+	return `\n\n${sections.join("\n\n")}`;
 }
 
 /**
@@ -690,7 +659,7 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
  */
 const FILE_FOOTER_RE = /\n\n<(read-files|modified-files)>[\s\S]*?<\/\1>/gi;
 function stripFileFooters(summary: string): string {
-  return summary.replace(FILE_FOOTER_RE, "");
+	return summary.replace(FILE_FOOTER_RE, "");
 }
 
 /**
@@ -701,12 +670,22 @@ function stripFileFooters(summary: string): string {
 const READ_FILES_RE = /<read-files>([\s\S]*?)<\/read-files>/i;
 const MODIFIED_FILES_RE = /<modified-files>([\s\S]*?)<\/modified-files>/i;
 function parseFileFooters(summary: string): { readFiles: string[]; modifiedFiles: string[] } {
-  const readMatch = READ_FILES_RE.exec(summary);
-  const modifiedMatch = MODIFIED_FILES_RE.exec(summary);
-  return {
-    readFiles: readMatch ? readMatch[1].trim().split("\n").filter((p) => p.trim()) : [],
-    modifiedFiles: modifiedMatch ? modifiedMatch[1].trim().split("\n").filter((p) => p.trim()) : [],
-  };
+	const readMatch = READ_FILES_RE.exec(summary);
+	const modifiedMatch = MODIFIED_FILES_RE.exec(summary);
+	return {
+		readFiles: readMatch
+			? readMatch[1]
+					.trim()
+					.split("\n")
+					.filter((p) => p.trim())
+			: [],
+		modifiedFiles: modifiedMatch
+			? modifiedMatch[1]
+					.trim()
+					.split("\n")
+					.filter((p) => p.trim())
+			: [],
+	};
 }
 
 /**
@@ -717,72 +696,64 @@ function parseFileFooters(summary: string): { readFiles: string[]; modifiedFiles
  * the side LLM call against the same session total.
  */
 export async function generateCompactionSummary(
-  messages: AgentMessage[],
-  model: Model,
-  streamFn: StreamFunctionLike,
-  options?: {
-    previousSummary?: string;
-    apiKey?: string;
-    signal?: AbortSignal;
-    onUsage?: (usage: Usage) => void;
-  }
+	messages: AgentMessage[],
+	model: Model,
+	streamFn: StreamFunctionLike,
+	options?: {
+		previousSummary?: string;
+		apiKey?: string;
+		signal?: AbortSignal;
+		onUsage?: (usage: Usage) => void;
+	},
 ): Promise<string> {
-  const llmMessages = defaultConvertToLlm(messages);
-  const formatted = formatMessagesForSummary(llmMessages);
+	const llmMessages = defaultConvertToLlm(messages);
+	const formatted = formatMessagesForSummary(llmMessages);
 
-  // Structured prompt body: <conversation> then optional
-  // <previous-summary> then instructions. Wrapping the transcript in
-  // an XML section makes the boundary between "what to summarize" and
-  // "the instruction" unambiguous so the model doesn't mistake the
-  // last user turn in the transcript for a fresh request.
-  //
-  // Both inputs come from untrusted sources (user prompts, tool output,
-  // model-generated prior summaries that may have echoed user content),
-  // so they MUST be escaped against `</conversation>` / sibling
-  // injections before being interpolated into the wrappers.
-  const sections: string[] = [
-    `<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>`,
-  ];
-  if (options?.previousSummary) {
-    sections.push(
-      `<previous-summary>\n${escapeWrapperTags(options.previousSummary)}\n</previous-summary>`,
-    );
-  }
-  sections.push(
-    options?.previousSummary
-      ? SUMMARIZATION_INSTRUCTIONS_WITH_PRIOR
-      : SUMMARIZATION_INSTRUCTIONS,
-  );
-  const prompt = sections.join("\n\n");
+	// Structured prompt body: <conversation> then optional
+	// <previous-summary> then instructions. Wrapping the transcript in
+	// an XML section makes the boundary between "what to summarize" and
+	// "the instruction" unambiguous so the model doesn't mistake the
+	// last user turn in the transcript for a fresh request.
+	//
+	// Both inputs come from untrusted sources (user prompts, tool output,
+	// model-generated prior summaries that may have echoed user content),
+	// so they MUST be escaped against `</conversation>` / sibling
+	// injections before being interpolated into the wrappers.
+	const sections: string[] = [`<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>`];
+	if (options?.previousSummary) {
+		sections.push(`<previous-summary>\n${escapeWrapperTags(options.previousSummary)}\n</previous-summary>`);
+	}
+	sections.push(options?.previousSummary ? SUMMARIZATION_INSTRUCTIONS_WITH_PRIOR : SUMMARIZATION_INSTRUCTIONS);
+	const prompt = sections.join("\n\n");
 
-  // Handle both sync and async stream functions (registry.stream() returns Promise<EventStream>)
-  const streamOrPromise = streamFn(
-    model,
-    {
-      systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-    },
-    {
-      maxTokens: 4096,
-      apiKey: options?.apiKey,
-      signal: options?.signal,
-    }
-  );
-  const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
+	// Handle both sync and async stream functions (registry.stream() returns Promise<EventStream>)
+	const streamOrPromise = streamFn(
+		model,
+		{
+			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+		},
+		{
+			maxTokens: 4096,
+			apiKey: options?.apiKey,
+			signal: options?.signal,
+		},
+	);
+	const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
-  const result: AssistantMessage = await stream.result();
-  if (result.usage && options?.onUsage) {
-    options.onUsage(result.usage);
-  }
-  // The LLM can echo wrapper tags from the transcript verbatim. Re-apply
-  // escape on output so persisted summaries never carry literal wrapper-
-  // close tokens that could break future prompt interpolation.
-  return escapeWrapperTags(
-    result.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join(""),
-  );
+	const result: AssistantMessage = await stream.result();
+	if (result.usage && options?.onUsage) {
+		options.onUsage(result.usage);
+	}
+	// The LLM can echo wrapper tags from the transcript verbatim. Re-apply
+	// escape on output so persisted summaries never carry literal wrapper-
+	// close tokens that could break future prompt interpolation.
+	return escapeWrapperTags(
+		result.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join(""),
+	);
 }
 
 /**
@@ -792,44 +763,44 @@ export async function generateCompactionSummary(
  * and summarize just the prefix to provide context for the kept portion.
  */
 export async function generateTurnPrefixSummary(
-  messages: AgentMessage[],
-  model: Model,
-  streamFn: StreamFunctionLike,
-  options?: {
-    apiKey?: string;
-    signal?: AbortSignal;
-    onUsage?: (usage: Usage) => void;
-  }
+	messages: AgentMessage[],
+	model: Model,
+	streamFn: StreamFunctionLike,
+	options?: {
+		apiKey?: string;
+		signal?: AbortSignal;
+		onUsage?: (usage: Usage) => void;
+	},
 ): Promise<string> {
-  const llmMessages = defaultConvertToLlm(messages);
-  const formatted = formatMessagesForSummary(llmMessages);
+	const llmMessages = defaultConvertToLlm(messages);
+	const formatted = formatMessagesForSummary(llmMessages);
 
-  const prompt = `<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+	const prompt = `<conversation>\n${escapeWrapperTags(formatted)}\n</conversation>\n\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
 
-  const streamOrPromise = streamFn(
-    model,
-    {
-      systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-      messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
-    },
-    {
-      maxTokens: 2048, // Smaller budget for turn prefix
-      apiKey: options?.apiKey,
-      signal: options?.signal,
-    }
-  );
-  const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
+	const streamOrPromise = streamFn(
+		model,
+		{
+			systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+			messages: [{ role: "user", content: prompt, timestamp: Date.now() }],
+		},
+		{
+			maxTokens: 2048, // Smaller budget for turn prefix
+			apiKey: options?.apiKey,
+			signal: options?.signal,
+		},
+	);
+	const stream = streamOrPromise instanceof Promise ? await streamOrPromise : streamOrPromise;
 
-  const result: AssistantMessage = await stream.result();
-  if (result.usage && options?.onUsage) {
-    options.onUsage(result.usage);
-  }
-  return escapeWrapperTags(
-    result.content
-      .filter((c): c is { type: "text"; text: string } => c.type === "text")
-      .map((c) => c.text)
-      .join(""),
-  );
+	const result: AssistantMessage = await stream.result();
+	if (result.usage && options?.onUsage) {
+		options.onUsage(result.usage);
+	}
+	return escapeWrapperTags(
+		result.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join(""),
+	);
 }
 
 // ============================================================================
@@ -837,22 +808,22 @@ export async function generateTurnPrefixSummary(
 // ============================================================================
 
 export interface CompactionResult {
-  /** Generated summary */
-  summary: string;
-  /** Messages to keep (after cut point) */
-  keptMessages: AgentMessage[];
-  /** Index where cut occurred */
-  cutIndex: number;
-  /** ID of first kept entry (for session manager) */
-  firstKeptEntryId?: string;
-  /** Compaction metadata */
-  details: CompactionDetails;
-  /**
-   * The summarization LLM call's reported usage. Exposed separately so the
-   * caller can charge a live cost tracker AFTER the compaction entry has
-   * been durably persisted, keeping disk and in-memory state in sync.
-   */
-  summaryUsage?: Usage;
+	/** Generated summary */
+	summary: string;
+	/** Messages to keep (after cut point) */
+	keptMessages: AgentMessage[];
+	/** Index where cut occurred */
+	cutIndex: number;
+	/** ID of first kept entry (for session manager) */
+	firstKeptEntryId?: string;
+	/** Compaction metadata */
+	details: CompactionDetails;
+	/**
+	 * The summarization LLM call's reported usage. Exposed separately so the
+	 * caller can charge a live cost tracker AFTER the compaction entry has
+	 * been durably persisted, keeping disk and in-memory state in sync.
+	 */
+	summaryUsage?: Usage;
 }
 
 // ============================================================================
@@ -883,78 +854,71 @@ export interface CompactionResult {
  * pass-1 finding.
  */
 export function evaluateCompaction(
-  summarizedMessages: AgentMessage[],
-  summary: string,
-  trackedFiles: { readFiles: string[]; modifiedFiles: string[] },
-  options?: { previousSummary?: string },
+	summarizedMessages: AgentMessage[],
+	summary: string,
+	trackedFiles: { readFiles: string[]; modifiedFiles: string[] },
+	options?: { previousSummary?: string },
 ): CompactionEvaluation {
-  const transcriptTokens = estimateContextTokens(summarizedMessages);
-  // Add the prior summary's token estimate so multi-round compactions
-  // measure the FULL input the LLM was asked to digest. Without this,
-  // a small new transcript merged with a large prior summary would
-  // look like the model "blew up" the input even when the merged
-  // summary is well-shaped.
-  const priorSummaryTokens = options?.previousSummary
-    ? options.previousSummary.length / 4
-    : 0;
-  const tokensBefore = transcriptTokens + priorSummaryTokens;
-  const trimmed = summary.trim();
-  const tokensAfterSummary = trimmed.length / 4;
-  // Guard against divide-by-zero when there was nothing to summarize.
-  // Treat as savingsRatio = 0 (perfect compression of nothing).
-  const savingsRatio = tokensBefore > 0 ? tokensAfterSummary / tokensBefore : 0;
+	const transcriptTokens = estimateContextTokens(summarizedMessages);
+	// Add the prior summary's token estimate so multi-round compactions
+	// measure the FULL input the LLM was asked to digest. Without this,
+	// a small new transcript merged with a large prior summary would
+	// look like the model "blew up" the input even when the merged
+	// summary is well-shaped.
+	const priorSummaryTokens = options?.previousSummary ? options.previousSummary.length / 4 : 0;
+	const tokensBefore = transcriptTokens + priorSummaryTokens;
+	const trimmed = summary.trim();
+	const tokensAfterSummary = trimmed.length / 4;
+	// Guard against divide-by-zero when there was nothing to summarize.
+	// Treat as savingsRatio = 0 (perfect compression of nothing).
+	const savingsRatio = tokensBefore > 0 ? tokensAfterSummary / tokensBefore : 0;
 
-  const warnings: string[] = [];
+	const warnings: string[] = [];
 
-  if (trimmed.length === 0) {
-    warnings.push("compaction produced an empty summary");
-  }
+	if (trimmed.length === 0) {
+		warnings.push("compaction produced an empty summary");
+	}
 
-  // Only flag size regression when the input was non-trivial. A 50-char
-  // input that summarizes to 60 chars isn't a real regression — the
-  // wrapper / framing dominates. Threshold matches the "didn't bother
-  // compacting" case in findCutPoint's clamp behavior.
-  if (tokensBefore >= 100 && tokensAfterSummary > tokensBefore) {
-    warnings.push(
-      `summary (${Math.round(tokensAfterSummary)} tok) is larger than the input it summarized (${Math.round(tokensBefore)} tok)`,
-    );
-  }
+	// Only flag size regression when the input was non-trivial. A 50-char
+	// input that summarizes to 60 chars isn't a real regression — the
+	// wrapper / framing dominates. Threshold matches the "didn't bother
+	// compacting" case in findCutPoint's clamp behavior.
+	if (tokensBefore >= 100 && tokensAfterSummary > tokensBefore) {
+		warnings.push(
+			`summary (${Math.round(tokensAfterSummary)} tok) is larger than the input it summarized (${Math.round(tokensBefore)} tok)`,
+		);
+	}
 
-  // Tracked-files check: a tracked path that doesn't appear anywhere in
-  // the summary text is suspicious. This is a substring match, so a
-  // basename-only summary mention still passes.
-  //
-  // We check the FULL path AND its basename — the LLM commonly shortens
-  // paths in summaries, and we don't want to false-flag those.
-  const missingFiles: string[] = [];
-  const lower = trimmed.toLowerCase();
-  const allTracked = [...trackedFiles.readFiles, ...trackedFiles.modifiedFiles];
-  // Dedupe so the same file mentioned in both lists doesn't double-count.
-  const seen = new Set<string>();
-  for (const path of allTracked) {
-    if (seen.has(path)) continue;
-    seen.add(path);
-    const basename = path.split("/").pop() ?? path;
-    if (
-      !lower.includes(path.toLowerCase()) &&
-      !lower.includes(basename.toLowerCase())
-    ) {
-      missingFiles.push(path);
-    }
-  }
-  if (missingFiles.length > 0) {
-    warnings.push(
-      `${missingFiles.length} tracked file(s) missing from summary text`,
-    );
-  }
+	// Tracked-files check: a tracked path that doesn't appear anywhere in
+	// the summary text is suspicious. This is a substring match, so a
+	// basename-only summary mention still passes.
+	//
+	// We check the FULL path AND its basename — the LLM commonly shortens
+	// paths in summaries, and we don't want to false-flag those.
+	const missingFiles: string[] = [];
+	const lower = trimmed.toLowerCase();
+	const allTracked = [...trackedFiles.readFiles, ...trackedFiles.modifiedFiles];
+	// Dedupe so the same file mentioned in both lists doesn't double-count.
+	const seen = new Set<string>();
+	for (const path of allTracked) {
+		if (seen.has(path)) continue;
+		seen.add(path);
+		const basename = path.split("/").pop() ?? path;
+		if (!lower.includes(path.toLowerCase()) && !lower.includes(basename.toLowerCase())) {
+			missingFiles.push(path);
+		}
+	}
+	if (missingFiles.length > 0) {
+		warnings.push(`${missingFiles.length} tracked file(s) missing from summary text`);
+	}
 
-  return {
-    tokensBefore,
-    tokensAfterSummary,
-    savingsRatio,
-    missingFiles,
-    warnings,
-  };
+	return {
+		tokensBefore,
+		tokensAfterSummary,
+		savingsRatio,
+		missingFiles,
+		warnings,
+	};
 }
 
 // ============================================================================
@@ -970,36 +934,36 @@ export function evaluateCompaction(
  * tests can pass a stub.
  */
 export interface CompactionCostHook {
-  recordTurn: (model: Model, usage: Usage, turnIndex: number) => void;
-  isBudgetExceeded: () => boolean;
+	recordTurn: (model: Model, usage: Usage, turnIndex: number) => void;
+	isBudgetExceeded: () => boolean;
 }
 
 export interface CompactOptions {
-  /** Minimum tokens of recent context to keep */
-  keepRecentTokens: number;
-  /** Model to use for summarization */
-  model: Model;
-  /** Stream function for LLM calls (sync or async) */
-  streamFn: StreamFunctionLike;
-  /** Previous compaction details (for file tracking) */
-  previousCompaction?: CompactionDetails;
-  /** Previous summary (for merging) */
-  previousSummary?: string;
-  /** API key for LLM */
-  apiKey?: string;
-  /** Abort signal */
-  signal?: AbortSignal;
-  /**
-   * Force a non-zero cut even when chars/4 says all messages fit inside
-   * keepRecentTokens. Set when provider-Usage reports overflow to avoid
-   * livelock where the auto-compactor triggers but findCutPoint returns 0.
-   */
-  forceProgress?: boolean;
-  /**
-   * Cost tracker for the summarization LLM call. When provided, the call's
-   * usage is passed through recordTurn so it counts toward maxCostPerSession.
-   */
-  costTracker?: CompactionCostHook;
+	/** Minimum tokens of recent context to keep */
+	keepRecentTokens: number;
+	/** Model to use for summarization */
+	model: Model;
+	/** Stream function for LLM calls (sync or async) */
+	streamFn: StreamFunctionLike;
+	/** Previous compaction details (for file tracking) */
+	previousCompaction?: CompactionDetails;
+	/** Previous summary (for merging) */
+	previousSummary?: string;
+	/** API key for LLM */
+	apiKey?: string;
+	/** Abort signal */
+	signal?: AbortSignal;
+	/**
+	 * Force a non-zero cut even when chars/4 says all messages fit inside
+	 * keepRecentTokens. Set when provider-Usage reports overflow to avoid
+	 * livelock where the auto-compactor triggers but findCutPoint returns 0.
+	 */
+	forceProgress?: boolean;
+	/**
+	 * Cost tracker for the summarization LLM call. When provided, the call's
+	 * usage is passed through recordTurn so it counts toward maxCostPerSession.
+	 */
+	costTracker?: CompactionCostHook;
 }
 
 /**
@@ -1013,275 +977,242 @@ export interface CompactOptions {
  * Returns the compacted state (summary + kept messages).
  * The caller is responsible for persisting via SessionManager.
  */
-export async function compact(
-  messages: AgentMessage[],
-  options: CompactOptions
-): Promise<CompactionResult> {
-  const cutResult = findCutPointWithSplitInfo(
-    messages,
-    options.keepRecentTokens,
-    options.forceProgress ?? false,
-  );
+export async function compact(messages: AgentMessage[], options: CompactOptions): Promise<CompactionResult> {
+	const cutResult = findCutPointWithSplitInfo(messages, options.keepRecentTokens, options.forceProgress ?? false);
 
-  // Nothing to compact
-  if (cutResult.firstKeptIndex <= 0) {
-    return {
-      summary: options.previousSummary ?? "",
-      keptMessages: messages,
-      cutIndex: 0,
-      details: extractFileOperations(messages, options.previousCompaction),
-    };
-  }
+	// Nothing to compact
+	if (cutResult.firstKeptIndex <= 0) {
+		return {
+			summary: options.previousSummary ?? "",
+			keptMessages: messages,
+			cutIndex: 0,
+			details: extractFileOperations(messages, options.previousCompaction),
+		};
+	}
 
-  const { firstKeptIndex, turnStartIndex, isSplitTurn } = cutResult;
-  const keptMessages = messages.slice(firstKeptIndex);
+	const { firstKeptIndex, turnStartIndex, isSplitTurn } = cutResult;
+	const keptMessages = messages.slice(firstKeptIndex);
 
-  // For split turns, we summarize history (before turn start) and turn prefix
-  // (turn start to cut point) separately, then merge them.
-  const historyEnd = isSplitTurn ? turnStartIndex : firstKeptIndex;
-  const messagesToSummarize = messages.slice(0, historyEnd);
-  const turnPrefixMessages = isSplitTurn
-    ? messages.slice(turnStartIndex, firstKeptIndex)
-    : [];
+	// For split turns, we summarize history (before turn start) and turn prefix
+	// (turn start to cut point) separately, then merge them.
+	const historyEnd = isSplitTurn ? turnStartIndex : firstKeptIndex;
+	const messagesToSummarize = messages.slice(0, historyEnd);
+	const turnPrefixMessages = isSplitTurn ? messages.slice(turnStartIndex, firstKeptIndex) : [];
 
-  // Strip prior compaction summaries from the summarization input to avoid
-  // doubling summaries each round. Recover previousSummary and cost snapshot
-  // from the most recent compaction_summary if caller didn't pass them.
-  // Also scan turnPrefixMessages for split turns where turnStartIndex is 0.
-  let inferredPreviousSummary: string | undefined;
-  let inferredPriorCumulativeCost: number | undefined;
+	// Strip prior compaction summaries from the summarization input to avoid
+	// doubling summaries each round. Recover previousSummary and cost snapshot
+	// from the most recent compaction_summary if caller didn't pass them.
+	// Also scan turnPrefixMessages for split turns where turnStartIndex is 0.
+	let inferredPreviousSummary: string | undefined;
+	let inferredPriorCumulativeCost: number | undefined;
 
-  const extractCompactionInfo = (msg: AgentMessage): boolean => {
-    if (
-      "role" in msg &&
-      msg.role === "custom" &&
-      "type" in msg &&
-      msg.type === "compaction_summary"
-    ) {
-      if ("summary" in msg && typeof (msg as { summary: unknown }).summary === "string") {
-        inferredPreviousSummary = (msg as { summary: string }).summary;
-      }
-      const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
-      if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-        inferredPriorCumulativeCost = raw;
-      }
-      return true;
-    }
-    return false;
-  };
+	const extractCompactionInfo = (msg: AgentMessage): boolean => {
+		if ("role" in msg && msg.role === "custom" && "type" in msg && msg.type === "compaction_summary") {
+			if ("summary" in msg && typeof (msg as { summary: unknown }).summary === "string") {
+				inferredPreviousSummary = (msg as { summary: string }).summary;
+			}
+			const raw = (msg as { priorCumulativeCost?: unknown }).priorCumulativeCost;
+			if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+				inferredPriorCumulativeCost = raw;
+			}
+			return true;
+		}
+		return false;
+	};
 
-  const filteredToSummarize: AgentMessage[] = [];
-  for (const msg of messagesToSummarize) {
-    if (extractCompactionInfo(msg)) continue;
-    filteredToSummarize.push(msg);
-  }
+	const filteredToSummarize: AgentMessage[] = [];
+	for (const msg of messagesToSummarize) {
+		if (extractCompactionInfo(msg)) continue;
+		filteredToSummarize.push(msg);
+	}
 
-  // For split turns, also filter compaction_summary from turnPrefixMessages.
-  // This handles resumed sessions where turnStartIndex is 0.
-  const filteredTurnPrefix: AgentMessage[] = [];
-  for (const msg of turnPrefixMessages) {
-    if (extractCompactionInfo(msg)) continue;
-    filteredTurnPrefix.push(msg);
-  }
+	// For split turns, also filter compaction_summary from turnPrefixMessages.
+	// This handles resumed sessions where turnStartIndex is 0.
+	const filteredTurnPrefix: AgentMessage[] = [];
+	for (const msg of turnPrefixMessages) {
+		if (extractCompactionInfo(msg)) continue;
+		filteredTurnPrefix.push(msg);
+	}
 
-  const effectivePreviousSummary = options.previousSummary ?? inferredPreviousSummary;
+	const effectivePreviousSummary = options.previousSummary ?? inferredPreviousSummary;
 
-  // Track total summary cost for the priorCumulativeCost snapshot.
-  // For split-turn compaction, we aggregate usage from both LLM calls.
-  // Cost tracking is atomic: we buffer usage during LLM calls and only
-  // charge the costTracker after all calls complete successfully. This
-  // prevents budget leaks when one split-turn call succeeds but the
-  // other fails.
-  let summaryCallCost = 0;
-  let aggregatedUsage: Usage = {
-    inputTokens: 0,
-    outputTokens: 0,
-    cacheReadTokens: 0,
-    cacheWriteTokens: 0,
-  };
-  // Buffer for deferred charging after all calls complete
-  const bufferedUsages: Usage[] = [];
+	// Track total summary cost for the priorCumulativeCost snapshot.
+	// For split-turn compaction, we aggregate usage from both LLM calls.
+	// Cost tracking is atomic: we buffer usage during LLM calls and only
+	// charge the costTracker after all calls complete successfully. This
+	// prevents budget leaks when one split-turn call succeeds but the
+	// other fails.
+	let summaryCallCost = 0;
+	let aggregatedUsage: Usage = {
+		inputTokens: 0,
+		outputTokens: 0,
+		cacheReadTokens: 0,
+		cacheWriteTokens: 0,
+	};
+	// Buffer for deferred charging after all calls complete
+	const bufferedUsages: Usage[] = [];
 
-  const handleUsage = (usage: Usage) => {
-    // Buffer usage for deferred charging (don't charge immediately)
-    bufferedUsages.push(usage);
-    aggregatedUsage = {
-      inputTokens: (aggregatedUsage.inputTokens || 0) + (usage.inputTokens || 0),
-      outputTokens: (aggregatedUsage.outputTokens || 0) + (usage.outputTokens || 0),
-      cacheReadTokens: (aggregatedUsage.cacheReadTokens || 0) + (usage.cacheReadTokens || 0),
-      cacheWriteTokens: (aggregatedUsage.cacheWriteTokens || 0) + (usage.cacheWriteTokens || 0),
-    };
-    const turnCost = calculateUsageCost(options.model, usage);
-    if (Number.isFinite(turnCost) && turnCost > 0) {
-      summaryCallCost += turnCost;
-    }
-  };
+	const handleUsage = (usage: Usage) => {
+		// Buffer usage for deferred charging (don't charge immediately)
+		bufferedUsages.push(usage);
+		aggregatedUsage = {
+			inputTokens: (aggregatedUsage.inputTokens || 0) + (usage.inputTokens || 0),
+			outputTokens: (aggregatedUsage.outputTokens || 0) + (usage.outputTokens || 0),
+			cacheReadTokens: (aggregatedUsage.cacheReadTokens || 0) + (usage.cacheReadTokens || 0),
+			cacheWriteTokens: (aggregatedUsage.cacheWriteTokens || 0) + (usage.cacheWriteTokens || 0),
+		};
+		const turnCost = calculateUsageCost(options.model, usage);
+		if (Number.isFinite(turnCost) && turnCost > 0) {
+			summaryCallCost += turnCost;
+		}
+	};
 
-  // Charge costTracker for all buffered usages after all calls complete
-  const commitUsageToTracker = () => {
-    if (options.costTracker) {
-      for (const usage of bufferedUsages) {
-        options.costTracker.recordTurn(options.model, usage, -1);
-      }
-    }
-  };
+	// Charge costTracker for all buffered usages after all calls complete
+	const commitUsageToTracker = () => {
+		if (options.costTracker) {
+			for (const usage of bufferedUsages) {
+				options.costTracker.recordTurn(options.model, usage, -1);
+			}
+		}
+	};
 
-  let summary: string;
+	let summary: string;
 
-  if (isSplitTurn && filteredTurnPrefix.length > 0) {
-    // Generate summaries sequentially. On any failure, commit whatever
-    // usage we've buffered so far — the provider already billed us for
-    // successful calls, so the live tracker must reflect that even if
-    // the overall compaction fails. This prevents budget drift where
-    // billed spend vanishes from our accounting on partial failure.
-    let historyResult: string;
-    let turnPrefixResult: string;
-    try {
-      if (filteredToSummarize.length > 0) {
-        historyResult = await generateCompactionSummary(
-          filteredToSummarize,
-          options.model,
-          options.streamFn,
-          {
-            previousSummary: effectivePreviousSummary,
-            apiKey: options.apiKey,
-            signal: options.signal,
-            onUsage: handleUsage,
-          },
-        );
-      } else {
-        // Strip file footers when reusing prior summary directly to avoid duplication
-        historyResult = stripFileFooters(effectivePreviousSummary ?? "");
-      }
+	if (isSplitTurn && filteredTurnPrefix.length > 0) {
+		// Generate summaries sequentially. On any failure, commit whatever
+		// usage we've buffered so far — the provider already billed us for
+		// successful calls, so the live tracker must reflect that even if
+		// the overall compaction fails. This prevents budget drift where
+		// billed spend vanishes from our accounting on partial failure.
+		let historyResult: string;
+		let turnPrefixResult: string;
+		try {
+			if (filteredToSummarize.length > 0) {
+				historyResult = await generateCompactionSummary(filteredToSummarize, options.model, options.streamFn, {
+					previousSummary: effectivePreviousSummary,
+					apiKey: options.apiKey,
+					signal: options.signal,
+					onUsage: handleUsage,
+				});
+			} else {
+				// Strip file footers when reusing prior summary directly to avoid duplication
+				historyResult = stripFileFooters(effectivePreviousSummary ?? "");
+			}
 
-      turnPrefixResult = await generateTurnPrefixSummary(
-        filteredTurnPrefix,
-        options.model,
-        options.streamFn,
-        {
-          apiKey: options.apiKey,
-          signal: options.signal,
-          onUsage: handleUsage,
-        },
-      );
-    } catch (err) {
-      // Commit any buffered usage before rethrowing — we were billed
-      // for successful calls even if the overall compaction fails.
-      // Also check budget: if the partial charge exceeded the cap, wrap
-      // the original error so the caller knows to stop rather than
-      // proceeding under fail-open policy.
-      commitUsageToTracker();
-      if (options.costTracker?.isBudgetExceeded?.()) {
-        const budgetErr = new Error("Cost budget exceeded after partial compaction");
-        (budgetErr as any).cause = err;
-        throw budgetErr;
-      }
-      throw err;
-    }
-    // Both calls succeeded — commit all buffered usage
-    commitUsageToTracker();
-    // Merge into single summary (skip history section if empty)
-    summary = historyResult
-      ? `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`
-      : `**Turn Context (split turn):**\n\n${turnPrefixResult}`;
-  } else {
-    // Non-split-turn compaction: just generate history summary.
-    // Skip LLM call when no new messages to summarize - reuse prior summary.
-    if (filteredToSummarize.length > 0) {
-      summary = await generateCompactionSummary(
-        filteredToSummarize,
-        options.model,
-        options.streamFn,
-        {
-          previousSummary: effectivePreviousSummary,
-          apiKey: options.apiKey,
-          signal: options.signal,
-          onUsage: handleUsage,
-        },
-      );
-      // Commit charges after successful generation
-      commitUsageToTracker();
-    } else if (effectivePreviousSummary) {
-      // Strip existing file footers to avoid duplication - they'll be
-      // re-added via formatFileOperations with the merged file lists.
-      summary = stripFileFooters(effectivePreviousSummary);
-    } else {
-      summary = "";
-    }
-  }
+			turnPrefixResult = await generateTurnPrefixSummary(filteredTurnPrefix, options.model, options.streamFn, {
+				apiKey: options.apiKey,
+				signal: options.signal,
+				onUsage: handleUsage,
+			});
+		} catch (err) {
+			// Commit any buffered usage before rethrowing — we were billed
+			// for successful calls even if the overall compaction fails.
+			// Also check budget: if the partial charge exceeded the cap, wrap
+			// the original error so the caller knows to stop rather than
+			// proceeding under fail-open policy.
+			commitUsageToTracker();
+			if (options.costTracker?.isBudgetExceeded?.()) {
+				const budgetErr = new Error("Cost budget exceeded after partial compaction");
+				(budgetErr as any).cause = err;
+				throw budgetErr;
+			}
+			throw err;
+		}
+		// Both calls succeeded — commit all buffered usage
+		commitUsageToTracker();
+		// Merge into single summary (skip history section if empty)
+		summary = historyResult
+			? `${historyResult}\n\n---\n\n**Turn Context (split turn):**\n\n${turnPrefixResult}`
+			: `**Turn Context (split turn):**\n\n${turnPrefixResult}`;
+	} else {
+		// Non-split-turn compaction: just generate history summary.
+		// Skip LLM call when no new messages to summarize - reuse prior summary.
+		if (filteredToSummarize.length > 0) {
+			summary = await generateCompactionSummary(filteredToSummarize, options.model, options.streamFn, {
+				previousSummary: effectivePreviousSummary,
+				apiKey: options.apiKey,
+				signal: options.signal,
+				onUsage: handleUsage,
+			});
+			// Commit charges after successful generation
+			commitUsageToTracker();
+		} else if (effectivePreviousSummary) {
+			// Strip existing file footers to avoid duplication - they'll be
+			// re-added via formatFileOperations with the merged file lists.
+			summary = stripFileFooters(effectivePreviousSummary);
+		} else {
+			summary = "";
+		}
+	}
 
-  // Track file operations from all summarized messages (history + turn prefix).
-  // When previousCompaction is not available (fresh-process resume), parse file
-  // footers from the previous summary text to avoid losing tracked paths.
-  const allSummarizedMessages = [...messagesToSummarize, ...turnPrefixMessages];
-  const existingDetails: Partial<CompactionDetails> = options.previousCompaction ?? (
-    effectivePreviousSummary ? parseFileFooters(effectivePreviousSummary) : {}
-  );
-  const details = extractFileOperations(allSummarizedMessages, existingDetails);
-  details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
+	// Track file operations from all summarized messages (history + turn prefix).
+	// When previousCompaction is not available (fresh-process resume), parse file
+	// footers from the previous summary text to avoid losing tracked paths.
+	const allSummarizedMessages = [...messagesToSummarize, ...turnPrefixMessages];
+	const existingDetails: Partial<CompactionDetails> =
+		options.previousCompaction ?? (effectivePreviousSummary ? parseFileFooters(effectivePreviousSummary) : {});
+	const details = extractFileOperations(allSummarizedMessages, existingDetails);
+	details.tokensAfter = estimateContextTokens(keptMessages) + summary.length / 4;
 
-  // Snapshot cumulative cost for restart recovery. Includes:
-  // 1. Prior compaction's snapshot (in-memory or recovered from compaction_summary)
-  // 2. All assistant turns being folded into this summary
-  // 3. The summarization LLM call(s) themselves
-  const previousSnapshot =
-    options.previousCompaction?.priorCumulativeCost ??
-    inferredPriorCumulativeCost ??
-    0;
-  let priorCumulativeCost = previousSnapshot;
-  for (const msg of allSummarizedMessages) {
-    if ("role" in msg && msg.role === "assistant" && msg.usage) {
-      const turnCost = calculateUsageCost(options.model, msg.usage);
-      if (Number.isFinite(turnCost) && turnCost > 0) {
-        priorCumulativeCost += turnCost;
-      }
-    }
-  }
-  priorCumulativeCost += summaryCallCost;
-  details.priorCumulativeCost = priorCumulativeCost;
+	// Snapshot cumulative cost for restart recovery. Includes:
+	// 1. Prior compaction's snapshot (in-memory or recovered from compaction_summary)
+	// 2. All assistant turns being folded into this summary
+	// 3. The summarization LLM call(s) themselves
+	const previousSnapshot = options.previousCompaction?.priorCumulativeCost ?? inferredPriorCumulativeCost ?? 0;
+	let priorCumulativeCost = previousSnapshot;
+	for (const msg of allSummarizedMessages) {
+		if ("role" in msg && msg.role === "assistant" && msg.usage) {
+			const turnCost = calculateUsageCost(options.model, msg.usage);
+			if (Number.isFinite(turnCost) && turnCost > 0) {
+				priorCumulativeCost += turnCost;
+			}
+		}
+	}
+	priorCumulativeCost += summaryCallCost;
+	details.priorCumulativeCost = priorCumulativeCost;
 
-  // Self-eval against the post-filter input so the size ratio reflects
-  // what the LLM actually saw. Pass the prior summary too — when a
-  // multi-round compaction merges a large prior summary with a small
-  // new transcript, omitting it would make the merged output look
-  // larger than its input. The XML file-operations footer that we
-  // append below is deterministic and not a measure of summary quality,
-  // so it's evaluated against the raw LLM output.
-  details.evaluation = evaluateCompaction(
-    filteredToSummarize,
-    summary,
-    {
-      readFiles: details.readFiles,
-      modifiedFiles: details.modifiedFiles,
-    },
-    { previousSummary: effectivePreviousSummary },
-  );
+	// Self-eval against the post-filter input so the size ratio reflects
+	// what the LLM actually saw. Pass the prior summary too — when a
+	// multi-round compaction merges a large prior summary with a small
+	// new transcript, omitting it would make the merged output look
+	// larger than its input. The XML file-operations footer that we
+	// append below is deterministic and not a measure of summary quality,
+	// so it's evaluated against the raw LLM output.
+	details.evaluation = evaluateCompaction(
+		filteredToSummarize,
+		summary,
+		{
+			readFiles: details.readFiles,
+			modifiedFiles: details.modifiedFiles,
+		},
+		{ previousSummary: effectivePreviousSummary },
+	);
 
-  // Enrich summary with file-operation XML sections so future calls
-  // (and human readers) can quickly recover what files this branch
-  // has touched without re-parsing the prose.
-  const enrichedSummary = summary + formatFileOperations(details.readFiles, details.modifiedFiles);
+	// Enrich summary with file-operation XML sections so future calls
+	// (and human readers) can quickly recover what files this branch
+	// has touched without re-parsing the prose.
+	const enrichedSummary = summary + formatFileOperations(details.readFiles, details.modifiedFiles);
 
-  // Include summaryCallCost in summaryUsage so the persistence wrapper
-  // charges the same value that's in priorCumulativeCost. This uses the
-  // best available estimate: authoritative usage.cost when available,
-  // otherwise token-based pricing via calculateUsageCost. This keeps
-  // live tracker and persisted snapshot in sync even for mixed reporting.
-  const finalUsage: Usage | undefined =
-    bufferedUsages.length > 0
-      ? {
-          ...aggregatedUsage,
-          cost: summaryCallCost,
-        }
-      : undefined;
+	// Include summaryCallCost in summaryUsage so the persistence wrapper
+	// charges the same value that's in priorCumulativeCost. This uses the
+	// best available estimate: authoritative usage.cost when available,
+	// otherwise token-based pricing via calculateUsageCost. This keeps
+	// live tracker and persisted snapshot in sync even for mixed reporting.
+	const finalUsage: Usage | undefined =
+		bufferedUsages.length > 0
+			? {
+					...aggregatedUsage,
+					cost: summaryCallCost,
+				}
+			: undefined;
 
-  return {
-    summary: enrichedSummary,
-    keptMessages,
-    cutIndex: firstKeptIndex,
-    details,
-    summaryUsage: finalUsage,
-  };
+	return {
+		summary: enrichedSummary,
+		keptMessages,
+		cutIndex: firstKeptIndex,
+		details,
+		summaryUsage: finalUsage,
+	};
 }
 
 // ============================================================================
@@ -1300,11 +1231,8 @@ export async function compact(
  * Both `shouldCompact` and `createAutoCompactor` MUST agree on this clamp,
  * otherwise they disagree about whether compaction is needed.
  */
-export function effectiveReserveTokens(
-  contextWindow: number,
-  reserveTokens: number
-): number {
-  return Math.min(reserveTokens, Math.floor(contextWindow / 2));
+export function effectiveReserveTokens(contextWindow: number, reserveTokens: number): number {
+	return Math.min(reserveTokens, Math.floor(contextWindow / 2));
 }
 
 /**
@@ -1314,12 +1242,8 @@ export function effectiveReserveTokens(
  * model actually charges for, not the chars/4 overestimate. Falls back to
  * the heuristic when no assistant turn has reported usage yet.
  */
-export function shouldCompact(
-  messages: AgentMessage[],
-  contextWindow: number,
-  reserveTokens: number
-): boolean {
-  const currentTokens = measureContextTokens(messages).tokens;
-  const limit = contextWindow - effectiveReserveTokens(contextWindow, reserveTokens);
-  return currentTokens > limit;
+export function shouldCompact(messages: AgentMessage[], contextWindow: number, reserveTokens: number): boolean {
+	const currentTokens = measureContextTokens(messages).tokens;
+	const limit = contextWindow - effectiveReserveTokens(contextWindow, reserveTokens);
+	return currentTokens > limit;
 }

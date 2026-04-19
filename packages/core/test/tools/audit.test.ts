@@ -1,8 +1,8 @@
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AuditLogger, type AuditLogEntry } from "../../src/tools/audit.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { type AuditLogEntry, AuditLogger } from "../../src/tools/audit.js";
 
 describe("AuditLogger redaction", () => {
 	let logDir: string;
@@ -17,10 +17,7 @@ describe("AuditLogger redaction", () => {
 		const files = readdirSync(logDir).filter((f) => f.endsWith(".jsonl"));
 		const out: AuditLogEntry[] = [];
 		for (const f of files) {
-			const lines = readFileSync(join(logDir, f), "utf-8")
-				.trim()
-				.split("\n")
-				.filter(Boolean);
+			const lines = readFileSync(join(logDir, f), "utf-8").trim().split("\n").filter(Boolean);
 			for (const l of lines) out.push(JSON.parse(l));
 		}
 		return out;
@@ -34,8 +31,7 @@ describe("AuditLogger redaction", () => {
 			toolCallId: "t1",
 			durationMs: 10,
 			status: "success",
-			command:
-				"curl -H 'Authorization: Bearer REDACTED_GITHUB_TOKEN' https://api",
+			command: "curl -H 'Authorization: Bearer REDACTED_GITHUB_TOKEN' https://api",
 			error: "OPENAI_API_KEY=REDACTED_OPENAI_TOKEN was rejected",
 			metadata: {
 				envSnippet: "AWS_SECRET_ACCESS_KEY=AWS_SECRET_REDACTION_FIXTURE",
@@ -49,9 +45,7 @@ describe("AuditLogger redaction", () => {
 		expect(e.command).not.toContain("ghp_AAAA");
 		expect(e.command).toMatch(/Authorization:\s*Bearer\s+\[REDACTED\]/i);
 		expect(e.error).not.toContain("sk-FAILEDREQUEST");
-		expect((e.metadata as { envSnippet: string }).envSnippet).not.toContain(
-			"wJalrXUtnFEMI",
-		);
+		expect((e.metadata as { envSnippet: string }).envSnippet).not.toContain("wJalrXUtnFEMI");
 		expect((e.metadata as { safe: number }).safe).toBe(42);
 	});
 

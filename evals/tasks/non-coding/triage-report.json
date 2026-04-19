@@ -1,0 +1,6 @@
+{
+	"id": "noncoding-triage-report",
+	"prompt": "Turn these loose notes into a triage report with risk and recommendation.",
+	"mockAssistantText": "Triage report: summarize the issue, assess risk, list assumptions, and recommend a next action.",
+	"expectedContains": ["risk", "assumptions", "next action"]
+}

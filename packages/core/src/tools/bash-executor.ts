@@ -7,7 +7,7 @@
  * - By other components that need shell execution
  */
 
-import { createWriteStream, type WriteStream } from "node:fs";
+import { type WriteStream, createWriteStream } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { type BashOperations, createLocalBashOperations } from "./bash.js";
 import { redactSensitiveEnv, sanitizeOutput } from "./sanitize-output.js";
@@ -118,7 +118,8 @@ export async function executeBashWithOperations(
 		outputChunks.push(text);
 		outputBytes += text.length;
 		while (outputBytes > maxOutputBytes && outputChunks.length > 1) {
-			const removed = outputChunks.shift()!;
+			const removed = outputChunks.shift();
+			if (removed === undefined) break;
 			outputBytes -= removed.length;
 		}
 
@@ -138,11 +139,7 @@ export async function executeBashWithOperations(
 		}
 	};
 
-	const buildResult = (
-		exitCode: number | undefined,
-		cancelled: boolean,
-		timedOut: boolean,
-	): BashResult => {
+	const buildResult = (exitCode: number | undefined, cancelled: boolean, timedOut: boolean): BashResult => {
 		flushDecoder();
 
 		if (tempFileStream) {

@@ -2,9 +2,9 @@
  * Tests for SessionSelector component
  */
 
-import { describe, it, expect, vi } from "vitest";
-import { createSessionSelector, type SessionInfo } from "../../../../src/ui/components/selectors/session-selector.js";
 import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
+import { describe, expect, it, vi } from "vitest";
+import { type SessionInfo, createSessionSelector } from "../../../../src/ui/components/selectors/session-selector.js";
 
 // Simple theme without styling for testing
 const testTheme: SelectListTheme = {
@@ -74,7 +74,7 @@ describe("createSessionSelector", () => {
 			createSessionSelector(tui, [], {
 				theme: testTheme,
 				showNewSession: false,
-			})
+			}),
 		).toThrow("SessionSelector requires at least one item");
 	});
 
@@ -107,7 +107,7 @@ describe("createSessionSelector", () => {
 		expect(() =>
 			createSessionSelector(tui, collidingSessions, {
 				theme: testTheme,
-			})
+			}),
 		).toThrow(/collides with internal sentinel/);
 	});
 });
