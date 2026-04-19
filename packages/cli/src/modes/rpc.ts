@@ -1,5 +1,5 @@
 import * as readline from "node:readline";
-import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import type { PromptTemplate } from "@my-agent/core";
 
@@ -15,7 +15,7 @@ import type { PromptTemplate } from "@my-agent/core";
 
 export interface RpcConfig {
 	settings?: Settings;
-	oauthStorage?: OAuthStorage;
+	authStorage?: AuthStorage;
 	templates?: Map<string, PromptTemplate>;
 }
 

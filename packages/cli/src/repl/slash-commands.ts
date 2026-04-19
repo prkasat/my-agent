@@ -10,7 +10,7 @@
 
 import type { SessionInfo, SessionManager } from "@my-agent/core";
 import type { PromptTemplate } from "@my-agent/core";
-import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { handleLogin, handleLogout } from "../commands/login.js";
 import { exportFromSessionManager, getExportFilename } from "../commands/export.js";
@@ -57,9 +57,10 @@ export interface SlashSessionManager {
  */
 export interface SlashContext {
   session: SlashSessionManager;
-  oauthStorage?: OAuthStorage;
+  authStorage?: AuthStorage;
   templates?: Map<string, PromptTemplate>;
   settings?: Settings;
+  promptInput?: (message: string) => Promise<string>;
 }
 
 /**
@@ -70,7 +71,7 @@ function getHelpText(templates?: Map<string, PromptTemplate>): string {
   /help                Show this help
   /branch [name]       Fork the current session into a new branch (alias: /fork)
   /sessions            List sessions for this working directory
-  /login [provider]    Login via OAuth (anthropic, github-copilot)
+  /login [provider]    Login via OAuth (anthropic, openai-codex, github-copilot)
   /logout <provider>   Logout from a provider
   /export [path]       Export session to standalone HTML file
   /settings            Show current settings
@@ -142,7 +143,7 @@ export async function handleSlashCommand(
   const parts = parseCommandArgs(trimmed.slice(1));
   const cmd = (parts[0] || "").toLowerCase();
   const args = parts.slice(1);
-  const { session, oauthStorage, templates, settings } = ctx;
+  const { session, authStorage, templates, settings, promptInput } = ctx;
 
   switch (cmd) {
     case "help":
@@ -209,12 +210,12 @@ export async function handleSlashCommand(
     }
 
     case "login": {
-      if (!oauthStorage) {
-        return { action: "continue", output: "login: OAuth storage not initialized" };
+      if (!authStorage) {
+        return { action: "continue", output: "login: auth storage not initialized" };
       }
       const output: string[] = [];
       try {
-        await handleLogin(args[0], oauthStorage, (line) => output.push(line));
+        await handleLogin(args[0], authStorage, (line) => output.push(line), promptInput);
       } catch (err) {
         output.push(`login failed: ${(err as Error).message}`);
       }
@@ -222,12 +223,12 @@ export async function handleSlashCommand(
     }
 
     case "logout": {
-      if (!oauthStorage) {
-        return { action: "continue", output: "logout: OAuth storage not initialized" };
+      if (!authStorage) {
+        return { action: "continue", output: "logout: auth storage not initialized" };
       }
       const output: string[] = [];
       try {
-        await handleLogout(args[0], oauthStorage, (line) => output.push(line));
+        await handleLogout(args[0], authStorage, (line) => output.push(line));
       } catch (err) {
         output.push(`logout failed: ${(err as Error).message}`);
       }

@@ -9,7 +9,7 @@
 
 import * as readline from "node:readline";
 import { handleSlashCommand, type SlashSessionManager, type SlashContext } from "./slash-commands.js";
-import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import type { PromptTemplate } from "@my-agent/core";
 
@@ -32,8 +32,8 @@ export interface ReplDeps {
    * The optional signal allows cancellation via Ctrl+C.
    */
   runPrompt: (prompt: string, signal?: AbortSignal) => Promise<void>;
-  /** OAuth credential storage for /login and /logout. */
-  oauthStorage?: OAuthStorage;
+  /** Credential storage for /login and /logout. */
+  authStorage?: AuthStorage;
   /** Loaded prompt templates for template expansion. */
   templates?: Map<string, PromptTemplate>;
   /** Current settings for /settings and /model. */
@@ -56,6 +56,12 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
     output.write(`${line}\n`);
   };
 
+  const promptInput = async (message: string): Promise<string> => {
+    return await new Promise<string>((resolve) => {
+      rl.question(`${message} `, (answer) => resolve(answer));
+    });
+  };
+
   const templateCount = deps.templates?.size || 0;
   const templateNote = templateCount > 0 ? `, ${templateCount} templates` : "";
   writeLine(`my-agent REPL — type /help for commands${templateNote}, /quit to exit`);
@@ -67,9 +73,10 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
     if (line.startsWith("/")) {
       const ctx: SlashContext = {
         session: deps.getSession(),
-        oauthStorage: deps.oauthStorage,
+        authStorage: deps.authStorage,
         templates: deps.templates,
         settings: deps.settings,
+        promptInput,
       };
       const result = await handleSlashCommand(line, ctx);
 

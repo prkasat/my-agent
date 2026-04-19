@@ -24,12 +24,12 @@ import {
 } from "@my-agent/core";
 import { stream, getModel } from "@my-agent/ai";
 import type { Settings } from "../config/settings.js";
-import type { OAuthStorage } from "../config/oauth-storage.js";
+import type { AuthStorage } from "../config/auth-storage.js";
 
 export interface RuntimeConfig {
   cwd: string;
   settings: Settings;
-  oauthStorage: OAuthStorage;
+  authStorage: AuthStorage;
   session: SessionManager;
   signal?: AbortSignal;
 }
@@ -55,7 +55,7 @@ export async function runAgent(
     onTurnEnd?: () => void;
   } = {},
 ): Promise<RuntimeResult> {
-  const { cwd, settings, oauthStorage, session, signal } = config;
+  const { cwd, settings, authStorage, session, signal } = config;
 
   // Resolve model from settings
   const model = getModel(settings.model);
@@ -117,7 +117,7 @@ export async function runAgent(
         },
         sessionManager: session,
         streamFn: (m, ctx, opts) => stream(m, ctx, opts),
-        getApiKey: async (provider: string) => oauthStorage.resolveApiKey(provider),
+        getApiKey: async (provider: string) => authStorage.resolveApiKey(provider),
         signal,
       })
     : undefined;
@@ -127,7 +127,7 @@ export async function runAgent(
     streamFn: (m, ctx, opts) => stream(m, ctx, opts),
     streamOptions,
     convertToLlm: defaultConvertToLlm,
-    getApiKey: async (provider: string) => oauthStorage.resolveApiKey(provider),
+    getApiKey: async (provider: string) => authStorage.resolveApiKey(provider),
     transformContext: autoCompactor,
     maxTurns: settings.maxTurns,
     maxRetries: settings.retry.enabled ? settings.retry.maxRetries : 0,

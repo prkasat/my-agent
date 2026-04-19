@@ -14,8 +14,8 @@ import { startRpcServer } from "./modes/rpc.js";
 import { runAgent } from "./runtime/agent-runtime.js";
 import { SessionManager, loadPromptTemplates } from "@my-agent/core";
 import { loadSettings } from "./config/settings.js";
-import { OAuthStorage } from "./config/oauth-storage.js";
-import { getOAuthProvider, registerBuiltinOAuthProviders } from "@my-agent/ai";
+import { AuthStorage } from "./config/auth-storage.js";
+import { registerBuiltinOAuthProviders } from "@my-agent/ai";
 import * as path from "node:path";
 
 async function main(): Promise<void> {
@@ -31,7 +31,7 @@ async function main(): Promise<void> {
   // Load settings (user + project merged)
   const settings = await loadSettings(cwd);
 
-  // Register built-in OAuth providers (uses env vars for client IDs)
+  // Register built-in OAuth providers.
   registerBuiltinOAuthProviders();
 
   // Load prompt templates
@@ -40,17 +40,13 @@ async function main(): Promise<void> {
     globalDir,
   });
 
-  // Initialize OAuth storage with token refresh support
-  const oauthStorage = new OAuthStorage(async (providerId, refreshToken) => {
-    const provider = getOAuthProvider(providerId);
-    if (!provider) return null;
-    return provider.refreshToken(refreshToken);
-  });
-  await oauthStorage.load();
+  // Initialize credential storage.
+  const authStorage = new AuthStorage();
+  await authStorage.load();
 
   // RPC mode (after initialization so settings/OAuth are available)
   if (argv[0] === "--rpc") {
-    startRpcServer({ settings, oauthStorage, templates });
+    startRpcServer({ settings, authStorage, templates });
     return;
   }
 
@@ -67,7 +63,7 @@ async function main(): Promise<void> {
     try {
       result = await runAgent(
         prompt,
-        { cwd, settings, oauthStorage, session, signal: controller.signal },
+        { cwd, settings, authStorage, session, signal: controller.signal },
         {
           onText: (text) => process.stdout.write(text),
           onToolStart: (name) => process.stderr.write(`\n[${name}] `),
@@ -103,7 +99,7 @@ async function main(): Promise<void> {
     runPrompt: async (prompt, abortSignal) => {
       const result = await runAgent(
         prompt,
-        { cwd, settings, oauthStorage, session, signal: abortSignal },
+        { cwd, settings, authStorage, session, signal: abortSignal },
         {
           onText: (text) => process.stdout.write(text),
           onToolStart: (name) => process.stderr.write(`\n[${name}] `),
@@ -117,7 +113,7 @@ async function main(): Promise<void> {
       }
       process.stdout.write("\n");
     },
-    oauthStorage,
+    authStorage,
     templates,
     settings,
   });

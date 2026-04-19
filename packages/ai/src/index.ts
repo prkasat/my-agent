@@ -49,11 +49,19 @@ export {
 	registerOAuthProvider,
 	getOAuthProvider,
 	getOAuthProviders,
+	getOAuthApiKey,
 	createAnthropicOAuthProvider,
 	createGitHubCopilotOAuthProvider,
+	createOpenAICodexOAuthProvider,
 	registerBuiltinOAuthProviders,
 } from "./providers/oauth.js";
-export type { OAuthProvider, LoginResult, TokenResult } from "./providers/oauth.js";
+export type {
+	OAuthProvider,
+	OAuthCredentials,
+	OAuthAuthInfo,
+	OAuthPrompt,
+	OAuthLoginCallbacks,
+} from "./providers/oauth.js";
 
 // Register built-in providers on import
 import "./providers/index.js";
