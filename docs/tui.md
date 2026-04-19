@@ -3,8 +3,13 @@
 Start it with:
 
 ```bash
+node packages/cli/dist/main.js
+# or explicitly
 node packages/cli/dist/main.js --tui
 ```
+
+Interactive TTY runs now default to the TUI.
+Use `--repl` to force the plain-text fallback.
 
 `--tui` requires an interactive TTY.
 
@@ -24,6 +29,8 @@ flowchart TB
 ## Current flows
 
 - prompt entry with a full-screen editor
+- slash-command autocomplete with `Tab`
+- prompt history with Up/Down
 - streaming assistant output
 - tool execution rows with args, durations, and output
 - diff viewer blocks for edit-like tool results
@@ -100,7 +107,9 @@ The footer updates from runtime profile data:
 
 ## Notes
 
+- interactive TTY launches the TUI by default
 - Ctrl+C aborts the active run, cancels an in-flight login, or exits when idle
+- F1 opens help, F2 model selector, F3 session selector, F4 tree selector, F5 login selector
 - login progress is streamed into the message pane during OAuth flows
 - theme selection persists through the normal settings path
 - diff blocks are rendered inline for edit-like tool results

@@ -15,6 +15,9 @@ npm run lint
 node packages/cli/dist/main.js
 ```
 
+In an interactive terminal this launches the TUI by default.
+Use `--repl` if you want the plain-text fallback.
+
 If no authenticated model is available, startup explains exactly what to do next.
 
 ## Happy paths
@@ -80,10 +83,13 @@ node packages/cli/dist/main.js --profile "say hello"
 ## TUI mode
 
 ```bash
+node packages/cli/dist/main.js
+# or explicitly
 node packages/cli/dist/main.js --tui
 ```
 
 `--tui` requires an interactive TTY.
+Use `--repl` to force the plain-text fallback.
 
 ## Exit codes
 

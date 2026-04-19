@@ -1,5 +1,12 @@
 import * as path from "node:path";
 import {
+	type AutocompleteItem,
+	CombinedAutocompleteProvider,
+	Key,
+	type SlashCommand,
+	matchesKey,
+} from "@mariozechner/pi-tui";
+import {
 	type AskDecision,
 	type LoadResourcePackagesResult,
 	type PermissionAskContext,
@@ -7,17 +14,19 @@ import {
 	SessionManager,
 	type SessionTreeNode,
 	type SkillDefinition,
+	getToolPath,
 } from "@my-agent/core";
 import { handleLogin, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { saveSettings } from "../config/settings.js";
-import { handleSlashCommand } from "../repl/slash-commands.js";
+import { handleSlashCommand, listSlashCommandSuggestions } from "../repl/slash-commands.js";
 import { runAgent } from "../runtime/agent-runtime.js";
 import {
 	formatModelResolutionError,
 	getModelProviderForKey,
 	listModelAvailability,
+	resolveConfiguredModel,
 } from "../runtime/model-registry.js";
 import { trace } from "../runtime/trace.js";
 import {
@@ -94,6 +103,25 @@ class DismissibleOverlay extends Box {
 	handleInput(): void {
 		this.onDismiss();
 	}
+}
+
+function filterAutocompleteItems(items: AutocompleteItem[], prefix: string): AutocompleteItem[] {
+	const query = prefix.trim().toLowerCase();
+	if (!query) return items;
+
+	const ranked = items
+		.map((item) => {
+			const value = item.value.toLowerCase();
+			const label = item.label.toLowerCase();
+			const prefixMatch = value.startsWith(query) || label.startsWith(query);
+			const containsMatch = value.includes(query) || label.includes(query);
+			const score = prefixMatch ? 2 : containsMatch ? 1 : 0;
+			return { item, score };
+		})
+		.filter((entry) => entry.score > 0)
+		.sort((a, b) => b.score - a.score || a.item.value.localeCompare(b.item.value));
+
+	return ranked.map((entry) => entry.item);
 }
 
 export async function runTuiApp(options: TuiOptions): Promise<void> {
@@ -213,6 +241,92 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		}
 		return items;
 	};
+
+	const slashCommands: SlashCommand[] = [
+		{ name: "help", description: "Show the help overlay" },
+		{ name: "quit", description: "Exit the TUI" },
+		{ name: "sessions", description: "Open the session selector" },
+		{
+			name: "tree",
+			description: "Show the current session tree or switch branches",
+			getArgumentCompletions: async (prefix) => {
+				const items = flattenTree(session.getTree()).map((item) => ({
+					value: `switch ${item.value}`,
+					label: item.label,
+					description: item.description,
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
+		{
+			name: "login",
+			description: "Login with an OAuth provider",
+			getArgumentCompletions: async (prefix) => {
+				const items = options.authStorage.getOAuthProviders().map((provider) => ({
+					value: provider.id,
+					label: provider.id,
+					description: provider.name,
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
+		{
+			name: "logout",
+			description: "Logout from an OAuth provider",
+			getArgumentCompletions: async (prefix) => {
+				const providers = await options.authStorage.listProviders();
+				const items = providers.map((providerId) => ({
+					value: providerId,
+					label: providerId,
+					description: "Logged-in provider",
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
+		{
+			name: "model",
+			description: "Show or change the current model",
+			getArgumentCompletions: async (prefix) => {
+				const availability = await listModelAvailability(options.authStorage);
+				const items = availability.map((entry) => ({
+					value: entry.key,
+					label: entry.key,
+					description: entry.available
+						? `${entry.model.provider} · ready`
+						: `${entry.model.provider} · ${entry.reason ?? "unavailable"}`,
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
+		{
+			name: "theme",
+			description: "Show or change the current theme",
+			getArgumentCompletions: async (prefix) => {
+				const items = [...options.themes.themes.values()].map((themeOption) => ({
+					value: themeOption.name,
+					label: themeOption.name,
+					description: themeOption.source,
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
+		{ name: "settings", description: "Show current settings" },
+		{ name: "extensions", description: "Show configured extensions" },
+		{ name: "packages", description: "Show loaded resource packages" },
+		{ name: "skills", description: "List loaded skills" },
+		{ name: "templates", description: "List prompt templates" },
+		{ name: "export", description: "Export the current session" },
+	];
+	for (const command of listSlashCommandSuggestions({ templates: options.templates, skills: options.skills })) {
+		const name = command.value.startsWith("/") ? command.value.slice(1) : command.value;
+		if (name.length === 0 || name.includes(" ")) continue;
+		if (!slashCommands.some((entry) => entry.name === name)) {
+			slashCommands.push({ name, description: command.description });
+		}
+	}
+	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(slashCommands, options.cwd, getToolPath("fd")));
+	editor.setAutocompleteMaxVisible(8);
+	footer.setStatusText(options.safeMode ? "safe-mode · Tab autocomplete · F1 help" : "Tab autocomplete · F1 help");
 
 	const runPrompt = async (prompt: string): Promise<void> => {
 		trace("runtime", "tui.prompt.start", { promptLength: prompt.length });
@@ -509,6 +623,11 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			[
 				"my-agent TUI",
 				"",
+				"Prompting:",
+				"  Type in the editor below and press Enter to send.",
+				"  Tab autocompletes slash commands and common arguments.",
+				"  Up/Down cycle prompt history.",
+				"",
 				"Slash commands:",
 				"  /help",
 				"  /login [provider]",
@@ -521,7 +640,14 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				"  /extensions",
 				"  /quit",
 				"",
-				"Ctrl+C aborts the current run or exits when idle.",
+				"Shortcuts:",
+				"  F1           Help",
+				"  F2           Model selector",
+				"  F3           Session selector",
+				"  F4           Tree selector",
+				"  F5           Login selector",
+				"  Ctrl+C       Abort run / exit when idle",
+				"",
 				"Press any key to dismiss.",
 			].join("\n"),
 			() => {
@@ -603,10 +729,31 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		const text = value.trim();
 		editor.setText("");
 		if (!text) return;
+		editor.addToHistory(text);
 		void handleCommand(text);
 	};
 
 	tui.addInputListener((data) => {
+		if (matchesKey(data, Key.f1)) {
+			showHelpOverlay();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.f2)) {
+			void openModelSelector();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.f3)) {
+			void openSessionSelector();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.f4)) {
+			openTreeSelector();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.f5)) {
+			openProviderSelector();
+			return { consume: true };
+		}
 		if (data === "\u0003") {
 			if (activeController) {
 				activeController.abort();
@@ -623,7 +770,15 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		return undefined;
 	});
 
-	appendSystem(`theme: ${selectedTheme.name}`);
+	appendSystem(`my-agent TUI · theme ${selectedTheme.name}`);
+	appendSystem("Type your task in the editor below. Tab autocompletes slash commands, models, themes, and tree ids.");
+	appendSystem("Use /help for commands. F1 opens help. Ctrl+C aborts a run or exits when idle.");
+	try {
+		const resolved = await resolveConfiguredModel(options.settings, options.authStorage);
+		appendSystem(`ready: ${resolved.key} via ${resolved.model.provider}`);
+	} catch {
+		appendSystem("no model connected yet — use /login or set OPENROUTER_API_KEY, then /model");
+	}
 	if (options.safeMode) {
 		appendSystem("safe-mode enabled");
 	}

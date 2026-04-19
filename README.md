@@ -8,7 +8,7 @@ Private-first terminal agent for coding and task-specific workflows.
 - Anthropic OAuth auth
 - OpenAI Codex / ChatGPT subscription OAuth auth
 - auth-aware model registry and fallback selection
-- one-shot CLI, REPL, and JSONL RPC mode
+- full-screen TUI by default in interactive terminals, plus REPL fallback and JSONL RPC mode
 - session persistence, branching, export, and replay
 - runtime permission checks for risky tools
 - trusted local extensions with tools, commands, and middleware
@@ -24,10 +24,16 @@ npm run build
 npm test
 ```
 
-Start the agent:
+Start the agent (interactive TTY defaults to the TUI):
 
 ```bash
 node packages/cli/dist/main.js
+```
+
+Force the plain-text REPL fallback:
+
+```bash
+node packages/cli/dist/main.js --repl
 ```
 
 Authenticate with OpenRouter:
@@ -37,7 +43,7 @@ export OPENROUTER_API_KEY=...
 node packages/cli/dist/main.js
 ```
 
-Or log in from the REPL:
+Or log in from the TUI/REPL:
 
 ```text
 /login anthropic
@@ -51,6 +57,7 @@ node packages/cli/dist/main.js --help
 node packages/cli/dist/main.js --doctor
 node packages/cli/dist/main.js --list-models
 node packages/cli/dist/main.js --safe-mode
+node packages/cli/dist/main.js --repl
 node packages/cli/dist/main.js --tui
 node packages/cli/dist/main.js --trace
 node packages/cli/dist/main.js --profile "say hello"

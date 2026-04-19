@@ -4,7 +4,8 @@
  * my-agent CLI entry point.
  *
  * Three modes:
- *   - default (no args): interactive REPL with /branch, /sessions, /help
+ *   - default (no args, interactive TTY): full-screen TUI
+ *   - --repl: plain-text REPL fallback
  *   - "<prompt>": one-shot run, prints the agent's reply, exits
  *   - --rpc: stay attached and speak JSONL on stdin/stdout (host process driver)
  */
@@ -30,6 +31,7 @@ import { runRepl } from "./repl/repl.js";
 import { formatRuntimeProfile, runAgent } from "./runtime/agent-runtime.js";
 import { formatModelResolutionError, listModelAvailability, resolveConfiguredModel } from "./runtime/model-registry.js";
 import { getTraceFilePath, initializeTracing, trace } from "./runtime/trace.js";
+import { resolveInteractiveUiMode } from "./startup/ui-mode.js";
 import { runTuiApp } from "./tui/app.js";
 import { loadThemes } from "./ui/theme-loader.js";
 
@@ -41,6 +43,7 @@ function printReplStartup(options: {
 	resolvedModel?: { key: string; provider: string };
 	modelError?: unknown;
 	safeMode: boolean;
+	interactive: boolean;
 	templateCount: number;
 	skillsCount: number;
 	packageCount: number;
@@ -73,7 +76,11 @@ function printReplStartup(options: {
 	);
 	lines.push(chalk.dim("Data lives in ~/.my-agent (auth, sessions, prompts, extensions, packages, themes)."));
 	lines.push(
-		chalk.dim("Type a task at the › prompt below. Tab completes slash commands. Use /help for a command index."),
+		chalk.dim(
+			options.interactive
+				? "Type a task at the › prompt below. Tab completes slash commands. Use /help for a command index."
+				: "Plain-text fallback mode. Use /help in the REPL or pass a prompt for one-shot mode.",
+		),
 	);
 	if (options.traceFilePath) {
 		lines.push(`${chalk.dim("Trace")} ${options.traceFilePath}`);
@@ -207,7 +214,12 @@ async function main(): Promise<void> {
 		return;
 	}
 
-	if (argv.includes("--tui")) {
+	const interactiveUiMode = resolveInteractiveUiMode({
+		argv,
+		stdinIsTTY: Boolean(process.stdin.isTTY),
+		stdoutIsTTY: Boolean(process.stdout.isTTY),
+	});
+	if (interactiveUiMode === "tui" && promptArgs.length === 0) {
 		trace("runtime", "cli.ready", { mode: "tui", durationMs: Date.now() - cliStartedAt });
 		if (!process.stdin.isTTY || !process.stdout.isTTY) {
 			throw new Error("--tui requires an interactive TTY");
@@ -312,6 +324,7 @@ async function main(): Promise<void> {
 		resolvedModel: replResolvedModel,
 		modelError: replModelError,
 		safeMode,
+		interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
 		templateCount: templates.size,
 		skillsCount: skills.skills.size,
 		packageCount: resources.packages.length,
@@ -460,10 +473,11 @@ function printUsage(): void {
 	process.stdout.write(`my-agent — interactive coding assistant
 
 Usage:
-  my-agent                Start interactive REPL
+  my-agent                Start the full-screen TUI (interactive TTY default)
+  my-agent --repl         Start the plain-text REPL fallback
   my-agent "<prompt>"     One-shot prompt
   my-agent --rpc          JSONL RPC mode for host integrations
-  my-agent --tui          Start the full-screen TUI shell
+  my-agent --tui          Force the full-screen TUI shell
   my-agent --doctor       Run startup diagnostics
   my-agent --list-models  List models visible with current auth state
   my-agent --safe-mode    Disable extension loading for this run
