@@ -58,6 +58,21 @@ describe("ExtensionRunner — registration & lifecycle", () => {
 		expect(runner.has("a")).toBe(false);
 	});
 
+	it("survives deactivate errors so shutdown-time extension crashes do not brick teardown", async () => {
+		const runner = new ExtensionRunner({ log: silentLog });
+		await runner.load(
+			makeDefinition({
+				metadata: { id: "crashy", name: "Crashy", version: "1.0.0" },
+				activate: () => {},
+				deactivate: () => {
+					throw new Error("shutdown boom");
+				},
+			}),
+		);
+		await expect(runner.unload("crashy")).resolves.toBeUndefined();
+		expect(runner.has("crashy")).toBe(false);
+	});
+
 	it("reload preserves state via onBeforeReload/onAfterReload", async () => {
 		const runner = new ExtensionRunner({ log: silentLog });
 		let captured: unknown;

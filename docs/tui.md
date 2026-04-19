@@ -100,7 +100,8 @@ The footer updates from runtime profile data:
 
 ## Notes
 
-- Ctrl+C aborts the active run, or exits when idle
+- Ctrl+C aborts the active run, cancels an in-flight login, or exits when idle
+- login progress is streamed into the message pane during OAuth flows
 - theme selection persists through the normal settings path
 - diff blocks are rendered inline for edit-like tool results
 - branch context can be switched from the tree selector without leaving the TUI

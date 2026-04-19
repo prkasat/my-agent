@@ -203,6 +203,10 @@ async function startLocalCallbackServer(options: {
 	};
 }
 
+function reportProgress(callbacks: OAuthLoginCallbacks, message: string): void {
+	callbacks.onProgress?.(message);
+}
+
 async function waitForAuthorizationCode(
 	callbacks: OAuthLoginCallbacks,
 	server: CallbackServerInfo | null,
@@ -232,6 +236,10 @@ async function waitForAuthorizationCode(
 					})
 			: undefined;
 
+		reportProgress(
+			callbacks,
+			server ? "Waiting for the browser callback or manual code input..." : "Waiting for manual authorization input...",
+		);
 		const callbackResult = server ? await server.waitForCode() : null;
 
 		if (manualError) throw manualError;
@@ -258,6 +266,7 @@ async function waitForAuthorizationCode(
 		}
 
 		if (!code) {
+			reportProgress(callbacks, "Prompting for manual authorization input...");
 			const input = await callbacks.onPrompt(fallbackPrompt);
 			const parsed = parseAuthorizationInput(input);
 			if (expectedState && parsed.state && parsed.state !== expectedState) {
@@ -271,6 +280,7 @@ async function waitForAuthorizationCode(
 		}
 
 		if (!code) throw new Error("Missing authorization code");
+		reportProgress(callbacks, "Authorization code received.");
 		return code;
 	} finally {
 		callbacks.signal?.removeEventListener("abort", onAbort);
@@ -296,6 +306,7 @@ export function createAnthropicOAuthProvider(clientId: string = DEFAULT_ANTHROPI
 		usesCallbackServer: true,
 
 		async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+			reportProgress(callbacks, "Preparing Anthropic OAuth login...");
 			const state = createState();
 			const params = new URLSearchParams({
 				client_id: clientId,
@@ -312,6 +323,7 @@ export function createAnthropicOAuthProvider(clientId: string = DEFAULT_ANTHROPI
 			});
 
 			try {
+				reportProgress(callbacks, "Opening Anthropic authorization page...");
 				callbacks.onAuth({
 					url: `https://console.anthropic.com/oauth/authorize?${params}`,
 					instructions: "Complete the login in your browser. If the callback fails, paste the full redirect URL.",
@@ -324,6 +336,7 @@ export function createAnthropicOAuthProvider(clientId: string = DEFAULT_ANTHROPI
 					state,
 				);
 
+				reportProgress(callbacks, "Exchanging Anthropic authorization code for tokens...");
 				const response = await fetch("https://console.anthropic.com/oauth/token", {
 					method: "POST",
 					headers: { "Content-Type": "application/json" },
@@ -389,6 +402,7 @@ export function createGitHubCopilotOAuthProvider(clientId: string): OAuthProvide
 		name: "GitHub Copilot",
 
 		async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+			reportProgress(callbacks, "Preparing GitHub device login...");
 			const response = await fetch("https://github.com/login/device/code", {
 				method: "POST",
 				headers: {
@@ -413,6 +427,7 @@ export function createGitHubCopilotOAuthProvider(clientId: string): OAuthProvide
 				url: verificationUrl,
 				instructions: `Open the URL and enter code: ${userCode}`,
 			});
+			reportProgress(callbacks, "Waiting for GitHub device authorization...");
 
 			while (!callbacks.signal?.aborted) {
 				await new Promise((resolve) => setTimeout(resolve, intervalSeconds * 1000));
@@ -433,6 +448,7 @@ export function createGitHubCopilotOAuthProvider(clientId: string): OAuthProvide
 
 				const tokenData = (await tokenResponse.json()) as Record<string, unknown>;
 				if (tokenData.error === "authorization_pending") continue;
+				reportProgress(callbacks, "GitHub authorization confirmed. Exchanging device code for tokens...");
 				if (tokenData.error) {
 					throw new Error(String(tokenData.error_description ?? tokenData.error));
 				}
@@ -506,6 +522,7 @@ export function createOpenAICodexOAuthProvider(
 		usesCallbackServer: true,
 
 		async login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+			reportProgress(callbacks, "Preparing OpenAI Codex OAuth login...");
 			const { verifier, challenge } = await generatePKCE();
 			const state = createState();
 			const url = new URL(OPENAI_CODEX_AUTHORIZE_URL);
@@ -527,6 +544,7 @@ export function createOpenAICodexOAuthProvider(
 			});
 
 			try {
+				reportProgress(callbacks, "Opening OpenAI authorization page...");
 				callbacks.onAuth({
 					url: url.toString(),
 					instructions:
@@ -540,6 +558,7 @@ export function createOpenAICodexOAuthProvider(
 					state,
 				);
 
+				reportProgress(callbacks, "Exchanging OpenAI authorization code for tokens...");
 				const response = await fetch(OPENAI_CODEX_TOKEN_URL, {
 					method: "POST",
 					headers: { "Content-Type": "application/x-www-form-urlencoded" },

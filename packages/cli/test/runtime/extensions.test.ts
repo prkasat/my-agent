@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../../src/config/auth-storage.js";
 import { getDefaultSettings } from "../../src/config/settings.js";
 import { runAgent } from "../../src/runtime/agent-runtime.js";
+import { loadExtensionsForRun } from "../../src/runtime/extensions.js";
 
 function createFauxLLM(responses: AssistantMessage[]) {
 	let callIndex = 0;
@@ -201,5 +202,60 @@ describe("extension runtime", () => {
 
 		expect(result.error).toBeUndefined();
 		expect(result.profile.totalDurationMs).toBeGreaterThanOrEqual(0);
+	});
+
+	it("guards host UI adapter failures so extension UI cannot brick a run", async () => {
+		const extensionPath = path.join(tmpDir, "ui-extension.mjs");
+		await fs.writeFile(
+			extensionPath,
+			`import { Type } from "@sinclair/typebox";
+       export default {
+         metadata: { id: "ui-ext", name: "UI", version: "1.0.0" },
+         activate(ctx) {
+           ctx.ui.notify("hello from extension");
+           ctx.registerTool({
+             name: "ui_echo",
+             description: "Echo through UI-safe extension",
+             parameters: Type.Object({ value: Type.String() }),
+             async execute(_id, params) {
+               return { content: [{ type: "text", text: params.value }] };
+             },
+           });
+         },
+       };
+      `,
+			"utf-8",
+		);
+
+		const settings = getDefaultSettings();
+		settings.extensions = [extensionPath];
+		settings.permissionMode = "auto";
+
+		const runtime = await loadExtensionsForRun({
+			cwd: tmpDir,
+			globalDir: path.join(tmpDir, ".my-agent"),
+			settings,
+			sessionId: "session-ui-safe",
+			getAgentContext: () => null,
+			ui: {
+				async select() {
+					throw new Error("select exploded");
+				},
+				async confirm() {
+					throw new Error("confirm exploded");
+				},
+				async input() {
+					throw new Error("input exploded");
+				},
+				notify() {
+					throw new Error("notify exploded");
+				},
+			},
+		});
+
+		expect(runtime?.warnings).toEqual([]);
+		expect(runtime?.loadedIds).toEqual(["ui-ext"]);
+		expect(runtime?.runner.getAllTools().map((tool) => tool.name)).toEqual(["ui_echo"]);
+		await runtime?.dispose();
 	});
 });

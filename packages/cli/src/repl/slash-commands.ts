@@ -19,7 +19,7 @@ import type {
 } from "@my-agent/core";
 import { expandSkill, expandTemplate, findSkillByCommand, getSkillHelp, getTemplateHelp } from "@my-agent/core";
 import { exportFromSessionManager, getExportFilename } from "../commands/export.js";
-import { handleLogin, handleLogout } from "../commands/login.js";
+import { handleLogin, handleLogout, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { inspectExtensions, runExtensionCommand } from "../runtime/extensions.js";
@@ -82,6 +82,8 @@ export interface SlashContext {
 	disableExtensions?: boolean;
 	persistSettings?: (settings: Partial<Settings>, scope?: "user" | "project") => Promise<void>;
 	promptInput?: (message: string) => Promise<string>;
+	printLine?: (line: string) => void;
+	loginSignal?: AbortSignal;
 }
 
 /**
@@ -187,6 +189,8 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 		disableExtensions,
 		persistSettings,
 		promptInput,
+		printLine,
+		loginSignal,
 	} = ctx;
 
 	switch (cmd) {
@@ -295,12 +299,16 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 				return { action: "continue", output: "login: auth storage not initialized" };
 			}
 			const output: string[] = [];
+			const emit = (line: string): void => {
+				output.push(line);
+				printLine?.(line);
+			};
 			try {
-				await handleLogin(args[0], authStorage, (line) => output.push(line), promptInput);
+				await handleLogin(args[0], authStorage, emit, promptInput, loginSignal);
 			} catch (err) {
-				output.push(`login failed: ${(err as Error).message}`);
+				emit(isLoginCancelledError(err) ? "Login cancelled." : `login failed: ${(err as Error).message}`);
 			}
-			return { action: "continue", output: output.join("\n") };
+			return { action: "continue", output: printLine ? undefined : output.join("\n") };
 		}
 
 		case "logout": {
@@ -308,12 +316,16 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 				return { action: "continue", output: "logout: auth storage not initialized" };
 			}
 			const output: string[] = [];
+			const emit = (line: string): void => {
+				output.push(line);
+				printLine?.(line);
+			};
 			try {
-				await handleLogout(args[0], authStorage, (line) => output.push(line));
+				await handleLogout(args[0], authStorage, emit);
 			} catch (err) {
-				output.push(`logout failed: ${(err as Error).message}`);
+				emit(`logout failed: ${(err as Error).message}`);
 			}
-			return { action: "continue", output: output.join("\n") };
+			return { action: "continue", output: printLine ? undefined : output.join("\n") };
 		}
 
 		case "extensions": {

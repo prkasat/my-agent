@@ -189,10 +189,16 @@ export function createOpenAICompatibleStream(config: OpenAICompatibleConfig) {
 					// Include retry hint for rate limits
 					const isRateLimit = response.status === 429;
 					const retryAfter = response.headers.get("retry-after");
+					const authHint =
+						response.status === 401 || response.status === 403
+							? config.providerName === "openrouter"
+								? " Set OPENROUTER_API_KEY again or update the stored openrouter credential."
+								: " Re-authenticate this provider and retry."
+							: "";
 					const errorMsg =
 						isRateLimit && retryAfter
-							? `${config.providerName} API ${response.status}: ${error} (retry after ${retryAfter}s)`
-							: `${config.providerName} API ${response.status}: ${error}`;
+							? `${config.providerName} API ${response.status}: ${error} (retry after ${retryAfter}s)${authHint}`
+							: `${config.providerName} API ${response.status}: ${error}${authHint}`;
 					stream.push({ type: "error", error: errorMsg });
 					return;
 				}

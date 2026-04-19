@@ -9,6 +9,8 @@ This repo already carries a meaningful amount of failure-path test coverage. Thi
 | broken settings file | back up file, fall back to defaults | `packages/cli/test/config/settings.test.ts` |
 | broken auth file | back up file, recover with empty store | `packages/cli/test/config/auth-storage.test.ts` |
 | expired OAuth credential | refresh under lock when resolving API key | `packages/cli/test/config/auth-storage.test.ts` |
+| invalid OAuth refresh token | drop stale credential and require `/login` again | `packages/cli/test/config/auth-storage.test.ts` |
+| concurrent auth writers | preserve disjoint updates / single refresh winner under file lock | `packages/cli/test/config/auth-storage.test.ts` |
 | retryable provider errors | retry with backoff | `packages/ai/test/retry.test.ts` |
 | aborted run | abort cleanly without corrupting session structure | `packages/core/test/agent-loop.test.ts`, `packages/cli/test/rpc.test.ts` |
 | session write failure / disk full | roll back in-memory/on-disk state where possible | `packages/core/test/session/session-manager.test.ts`, `packages/core/test/session/auto-compact.test.ts` |
@@ -16,6 +18,8 @@ This repo already carries a meaningful amount of failure-path test coverage. Thi
 | broken extension | skip with warning instead of crashing the run | `packages/cli/test/runtime/extensions.test.ts` |
 | incompatible extension API | skip with warning | `packages/core/test/extensions/api-version.test.ts`, `packages/cli/test/runtime/extensions.test.ts` |
 | missing helper in offline mode | return clear error instead of hanging | `packages/core/test/tools/tools-manager.test.ts` |
+| tool timeout | surface a clear timeout failure | `packages/core/test/tools/bash.test.ts` |
+| extension shutdown crash | log and continue unload/teardown | `packages/core/test/extensions/runner.test.ts` |
 
 ## Provider failure recipes
 
@@ -82,6 +86,14 @@ Expected behavior:
 - skip the extension
 - include the declared `apiVersion` and host version in the warning
 
+### Extension dispatch / middleware / shutdown crashes
+
+Expected behavior:
+
+- dispatch-time and middleware exceptions are accounted for by extension failure policy
+- shutdown-time `deactivate()` errors are logged but do not brick teardown
+- host UI adapter exceptions are downgraded to warnings with safe defaults instead of crashing the app
+
 ## Operator playbook
 
 When validating a risky change, run this set:
@@ -106,5 +118,4 @@ The repo now documents and covers the main local failure modes, but the followin
 
 - provider 5xx and malformed stream fixtures per provider path
 - explicit network interruption fixtures
-- more systematic extension crash matrices across startup/dispatch/shutdown
 - live-provider chaos runs during long dogfooding sessions

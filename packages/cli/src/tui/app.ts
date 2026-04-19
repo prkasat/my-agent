@@ -8,7 +8,7 @@ import {
 	type SessionTreeNode,
 	type SkillDefinition,
 } from "@my-agent/core";
-import { handleLogin } from "../commands/login.js";
+import { handleLogin, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { saveSettings } from "../config/settings.js";
@@ -128,6 +128,8 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 
 	let session = options.session;
 	let activeController: AbortController | null = null;
+	let loginController: AbortController | null = null;
+	let cancelActivePromptInput: (() => void) | null = null;
 	let stopping = false;
 	let resolveStopped: (() => void) | undefined;
 	const pendingToolViews = new Map<string, ToolExecution>();
@@ -144,20 +146,22 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 
 	const promptInput = async (message: string): Promise<string> => {
 		return await new Promise<string>((resolve) => {
+			let settled = false;
+			const finish = (value: string) => {
+				if (settled) return;
+				settled = true;
+				cancelActivePromptInput = null;
+				handle.hide();
+				tui.setFocus(editor);
+				resolve(value);
+			};
 			const dialog = new InputDialog(
 				message,
-				(value) => {
-					handle.hide();
-					tui.setFocus(editor);
-					resolve(value);
-				},
-				() => {
-					handle.hide();
-					tui.setFocus(editor);
-					resolve("");
-				},
+				(value) => finish(value),
+				() => finish(""),
 			);
 			const handle = tui.showOverlay(dialog, { anchor: "center", width: "70%", maxHeight: 8 });
+			cancelActivePromptInput = () => finish("");
 			tui.setFocus(dialog as any);
 		});
 	};
@@ -482,13 +486,21 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	};
 
 	const login = async (providerId: string): Promise<void> => {
-		const lines: string[] = [];
+		const controller = new AbortController();
+		loginController = controller;
 		try {
-			await handleLogin(providerId, options.authStorage, (line) => lines.push(line), promptInput);
+			await handleLogin(providerId, options.authStorage, appendSystem, promptInput, controller.signal);
 		} catch (error) {
-			lines.push(`login failed: ${error instanceof Error ? error.message : String(error)}`);
+			appendSystem(
+				isLoginCancelledError(error)
+					? "Login cancelled."
+					: `login failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		} finally {
+			if (loginController === controller) {
+				loginController = null;
+			}
 		}
-		appendSystem(lines.join("\n"));
 	};
 
 	const showHelpOverlay = (): void => {
@@ -543,6 +555,10 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			return;
 		}
 
+		const slashLoginController = trimmed === "/login" || trimmed.startsWith("/login ") ? new AbortController() : null;
+		if (slashLoginController) {
+			loginController = slashLoginController;
+		}
 		const result = await handleSlashCommand(trimmed, {
 			session,
 			authStorage: options.authStorage,
@@ -555,7 +571,12 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			disableExtensions: options.safeMode,
 			persistSettings: (next, scope) => saveSettings(next, scope ?? "project", options.cwd),
 			promptInput,
+			printLine: appendSystem,
+			loginSignal: slashLoginController?.signal,
 		});
+		if (slashLoginController && loginController === slashLoginController) {
+			loginController = null;
+		}
 
 		if (!result) {
 			await runPrompt(text);
@@ -589,6 +610,9 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		if (data === "\u0003") {
 			if (activeController) {
 				activeController.abort();
+			} else if (loginController) {
+				cancelActivePromptInput?.();
+				loginController.abort();
 			} else if (!stopping) {
 				stopping = true;
 				tui.stop();

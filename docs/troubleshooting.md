@@ -31,6 +31,16 @@ Move the file aside and log in again:
 mv ~/.my-agent/auth.json ~/.my-agent/auth.json.bak
 ```
 
+## Expired or invalid OAuth login
+
+The runtime now treats unrecoverable refresh failures as stale credentials:
+
+- the stored provider login is dropped
+- the current command surfaces an actionable re-login message
+- you can run `/login anthropic` or `/login openai-codex` immediately without restarting
+
+If a provider returns `401` or `403`, re-authenticate and retry.
+
 ## Broken extension or package
 
 Start in safe mode:
@@ -55,6 +65,10 @@ Use `--replay` to inspect what is still recoverable.
 ## External helper tools
 
 If helper binaries are missing or offline mode is enabled, tool discovery may fall back to system binaries or fail with a clear error.
+
+## Login cancellation
+
+In REPL and TUI flows, `Ctrl+C` cancels an in-flight login instead of forcing a full restart.
 
 ## Debugging loop
 

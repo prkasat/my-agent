@@ -244,9 +244,11 @@ export function createOpenAICodexStream(config?: { baseUrl?: string; providerNam
 
 				if (!response.ok) {
 					const errorText = await response.text().catch(() => "");
+					const authHint =
+						response.status === 401 || response.status === 403 ? " Run /login openai-codex again and retry." : "";
 					eventStream.push({
 						type: "error",
-						error: `openai-codex API ${response.status}: ${errorText || response.statusText}`,
+						error: `openai-codex API ${response.status}: ${errorText || response.statusText}${authHint}`,
 					});
 					return;
 				}

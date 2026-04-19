@@ -133,13 +133,26 @@ export class AuthStorage {
 		await fs.chmod(this.authFile, 0o600);
 	}
 
-	private async save(): Promise<void> {
+	private async withLock<T>(callback: () => Promise<T>): Promise<T> {
 		const lockAcquired = await this.acquireLock();
-		try {
-			await this.saveUnlocked();
-		} finally {
-			if (lockAcquired) await this.releaseLock();
+		if (!lockAcquired) {
+			throw new Error(`Could not acquire auth storage lock: ${this.lockFile}`);
 		}
+		try {
+			return await callback();
+		} finally {
+			await this.releaseLock();
+		}
+	}
+
+	private async mutateCredentials(
+		mutator: (credentials: Map<string, Credential>) => void | Promise<void>,
+	): Promise<void> {
+		await this.withLock(async () => {
+			await this.load();
+			await mutator(this.credentials);
+			await this.saveUnlocked();
+		});
 	}
 
 	async get(providerId: string): Promise<Credential | undefined> {
@@ -148,15 +161,15 @@ export class AuthStorage {
 	}
 
 	async set(providerId: string, credential: Credential): Promise<void> {
-		await this.ensureLoaded();
-		this.credentials.set(providerId, credential);
-		await this.save();
+		await this.mutateCredentials((credentials) => {
+			credentials.set(providerId, credential);
+		});
 	}
 
 	async remove(providerId: string): Promise<void> {
-		await this.ensureLoaded();
-		this.credentials.delete(providerId);
-		await this.save();
+		await this.mutateCredentials((credentials) => {
+			credentials.delete(providerId);
+		});
 	}
 
 	async setApiKey(providerId: string, key: string): Promise<void> {
@@ -197,9 +210,10 @@ export class AuthStorage {
 		}
 
 		trace("auth", "login.start", { providerId });
+		callbacks.onProgress?.("Waiting for provider authorization...");
 		const credentials = await provider.login(callbacks as OAuthLoginCallbacks);
-		this.credentials.set(providerId, { type: "oauth", ...credentials });
-		await this.save();
+		callbacks.onProgress?.("Saving credentials...");
+		await this.set(providerId, { type: "oauth", ...credentials });
 		trace("auth", "login.success", { providerId, expiresAt: credentials.expiresAt });
 	}
 
@@ -239,8 +253,7 @@ export class AuthStorage {
 	}
 
 	private async refreshOAuthCredentialWithLock(providerId: string): Promise<string | undefined> {
-		const lockAcquired = await this.acquireLock();
-		try {
+		return await this.withLock(async () => {
 			await this.load();
 			const latest = this.credentials.get(providerId);
 			if (!latest || latest.type !== "oauth") {
@@ -259,22 +272,43 @@ export class AuthStorage {
 				}
 			}
 
-			const refreshed = await getOAuthApiKey(providerId, oauthCreds);
-			if (!refreshed) {
-				trace("auth", "refresh.missing", { providerId });
-				return undefined;
-			}
+			try {
+				const refreshed = await getOAuthApiKey(providerId, oauthCreds);
+				if (!refreshed) {
+					trace("auth", "refresh.missing", { providerId });
+					return undefined;
+				}
 
-			this.credentials.set(providerId, { type: "oauth", ...refreshed.newCredentials });
-			await this.saveUnlocked();
-			trace("auth", "refresh.success", { providerId, expiresAt: refreshed.newCredentials.expiresAt });
-			return refreshed.apiKey;
-		} finally {
-			if (lockAcquired) await this.releaseLock();
-		}
+				this.credentials.set(providerId, { type: "oauth", ...refreshed.newCredentials });
+				await this.saveUnlocked();
+				trace("auth", "refresh.success", { providerId, expiresAt: refreshed.newCredentials.expiresAt });
+				return refreshed.apiKey;
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				if (isUnrecoverableRefreshError(message)) {
+					this.credentials.delete(providerId);
+					await this.saveUnlocked();
+					trace("auth", "refresh.invalidated", { providerId, error: message });
+					throw new Error(`Stored login for ${providerId} is no longer valid. Run /login ${providerId} again.`);
+				}
+				trace("auth", "refresh.error", { providerId, error: message });
+				throw error;
+			}
+		});
 	}
 
 	getOAuthProviders() {
 		return getOAuthProviders();
 	}
+}
+
+function isUnrecoverableRefreshError(message: string): boolean {
+	const normalized = message.toLowerCase();
+	return (
+		normalized.includes("invalid_grant") ||
+		normalized.includes("invalid refresh") ||
+		normalized.includes("refresh failed: 400") ||
+		normalized.includes("refresh failed: 401") ||
+		normalized.includes("refresh failed: 403")
+	);
 }

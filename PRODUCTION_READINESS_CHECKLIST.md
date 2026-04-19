@@ -130,9 +130,9 @@ The agent is considered ready only when all of the following are true:
 
 ### 3.5 Auth UX
 - [x] Login selector UI exists in the TUI.
-- [ ] Login progress/status is visible.
-- [ ] Cancellation during login is handled cleanly.
-- [ ] Expired/invalid credentials are recoverable without restarting.
+- [x] Login progress/status is visible.
+- [x] Cancellation during login is handled cleanly.
+- [x] Expired/invalid credentials are recoverable without restarting.
 
 ---
 
@@ -312,7 +312,7 @@ The agent is considered ready only when all of the following are true:
 
 ### 9.4 Extension UI readiness
 - [x] Extensions can surface UI through a supported adapter.
-- [ ] Extension UI errors cannot brick the app.
+- [x] Extension UI errors cannot brick the app.
 - [x] Extension-generated commands/tools are visible in the UI.
 
 ### 9.5 TUI quality bar
@@ -473,7 +473,7 @@ The agent is considered ready only when all of the following are true:
 - [x] Prompt/skill/package loading is tested.
 
 ### 15.2 End-to-end coverage
-- [ ] One-shot CLI path is tested.
+- [x] One-shot CLI path is tested.
 - [x] REPL startup path is tested.
 - [x] Login flows are tested.
 - [x] Model selection flows are tested.
@@ -686,12 +686,12 @@ These are valuable, but should not block the strong private-first v1 unless they
 - [ ] network interruption can be simulated.
 
 ### 22.2 Runtime failures
-- [ ] tool timeouts can be simulated.
+- [x] tool timeouts can be simulated.
 - [x] tool cancellation can be simulated.
-- [ ] concurrent auth/session writes can be simulated.
+- [x] concurrent auth/session writes can be simulated.
 - [x] partial session writes can be simulated.
 - [x] disk-full conditions can be simulated.
-- [ ] extension crashes during startup, dispatch, tool middleware, and shutdown can be simulated.
+- [x] extension crashes during startup, dispatch, tool middleware, and shutdown can be simulated.
 
 ### 22.3 Recovery discipline
 - [x] The expected recovery behavior for each injected failure is documented.

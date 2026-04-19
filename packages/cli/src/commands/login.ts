@@ -1,9 +1,38 @@
 import { exec } from "node:child_process";
 import type { AuthStorage } from "../config/auth-storage.js";
 
+export function isLoginCancelledError(error: unknown): boolean {
+	if (!(error instanceof Error)) return false;
+	const message = error.message.toLowerCase();
+	return message.includes("login cancelled") || message.includes("login aborted") || message.includes("aborted");
+}
+
 function openBrowser(url: string): void {
 	const openCmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
 	exec(`${openCmd} "${url}"`);
+}
+
+async function promptWithAbort(
+	promptInput: (message: string) => Promise<string>,
+	message: string,
+	signal?: AbortSignal,
+): Promise<string> {
+	if (!signal) return await promptInput(message);
+	if (signal.aborted) throw new Error("Login cancelled");
+	return await new Promise<string>((resolve, reject) => {
+		const onAbort = () => reject(new Error("Login cancelled"));
+		signal.addEventListener("abort", onAbort, { once: true });
+		promptInput(message).then(
+			(value) => {
+				signal.removeEventListener("abort", onAbort);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbort);
+				reject(error);
+			},
+		);
+	});
 }
 
 export async function handleLogin(
@@ -33,28 +62,35 @@ export async function handleLogin(
 
 	print(`Logging in to ${provider.name}...`);
 
-	await storage.login(providerId, {
-		signal,
-		onAuth: (info) => {
-			print(`Open this URL to authenticate:\n${info.url}`);
-			if (info.instructions) {
-				print(info.instructions);
-			}
-			try {
-				openBrowser(info.url);
-				print("Opened browser for authentication.");
-			} catch {
-				print("Could not open browser automatically.");
-			}
-		},
-		onPrompt: async (prompt) => {
-			if (!promptInput) {
-				throw new Error(prompt.message);
-			}
-			return promptInput(prompt.message);
-		},
-		onProgress: (message) => print(message),
-	});
+	try {
+		await storage.login(providerId, {
+			signal,
+			onAuth: (info) => {
+				print(`Open this URL to authenticate:\n${info.url}`);
+				if (info.instructions) {
+					print(info.instructions);
+				}
+				try {
+					openBrowser(info.url);
+					print("Opened browser for authentication.");
+				} catch {
+					print("Could not open browser automatically.");
+				}
+			},
+			onPrompt: async (prompt) => {
+				if (!promptInput) {
+					throw new Error(prompt.message);
+				}
+				return await promptWithAbort(promptInput, prompt.message, signal);
+			},
+			onProgress: (message) => print(message),
+		});
+	} catch (error) {
+		if (isLoginCancelledError(error)) {
+			throw new Error("Login cancelled");
+		}
+		throw error;
+	}
 
 	print(`Logged in to ${provider.name} successfully!`);
 }

@@ -121,4 +121,102 @@ describe("AuthStorage", () => {
 			refreshToken: "refreshed-refresh-token",
 		});
 	});
+
+	it("preserves disjoint credential updates from concurrent storage instances", async () => {
+		const oauthProviderId = `test-oauth-concurrent-${Date.now()}`;
+		const authFile = path.join(tmpDir, "auth.json");
+		const a = new AuthStorage(authFile);
+		const b = new AuthStorage(authFile);
+		await Promise.all([a.load(), b.load()]);
+
+		await Promise.all([
+			a.setApiKey("openrouter", "stored-openrouter-key"),
+			b.set(oauthProviderId, {
+				type: "oauth",
+				accessToken: "oauth-access-token",
+				refreshToken: "oauth-refresh-token",
+				expiresAt: Date.now() + 60_000,
+			}),
+		]);
+
+		const storage = new AuthStorage(authFile);
+		await storage.load();
+		expect(await storage.get("openrouter")).toMatchObject({ type: "api_key", key: "stored-openrouter-key" });
+		expect(await storage.get(oauthProviderId)).toMatchObject({
+			type: "oauth",
+			accessToken: "oauth-access-token",
+			refreshToken: "oauth-refresh-token",
+		});
+	});
+
+	it("refreshes an expired OAuth credential only once across concurrent storage instances", async () => {
+		const providerId = `test-oauth-refresh-lock-${Date.now()}`;
+		let refreshCalls = 0;
+		registerOAuthProvider({
+			id: providerId,
+			name: "Refresh Lock OAuth",
+			async login() {
+				throw new Error("not used");
+			},
+			async refreshToken(credentials) {
+				refreshCalls += 1;
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				return {
+					...credentials,
+					accessToken: "refreshed-once",
+					refreshToken: "refreshed-refresh-token",
+					expiresAt: Date.now() + 60_000,
+				} satisfies OAuthCredentials;
+			},
+			getApiKey(credentials) {
+				return credentials.accessToken;
+			},
+		});
+
+		const authFile = path.join(tmpDir, "auth.json");
+		const seed = new AuthStorage(authFile);
+		await seed.set(providerId, {
+			type: "oauth",
+			accessToken: "expired-access-token",
+			refreshToken: "expired-refresh-token",
+			expiresAt: Date.now() - 1_000,
+		});
+
+		const a = new AuthStorage(authFile);
+		const b = new AuthStorage(authFile);
+		await Promise.all([a.load(), b.load()]);
+
+		const [first, second] = await Promise.all([a.resolveApiKey(providerId), b.resolveApiKey(providerId)]);
+		expect(first).toBe("refreshed-once");
+		expect(second).toBe("refreshed-once");
+		expect(refreshCalls).toBe(1);
+	});
+
+	it("drops invalid stored OAuth credentials after an unrecoverable refresh failure", async () => {
+		const providerId = `test-oauth-invalid-refresh-${Date.now()}`;
+		registerOAuthProvider({
+			id: providerId,
+			name: "Invalid Refresh OAuth",
+			async login() {
+				throw new Error("not used");
+			},
+			async refreshToken() {
+				throw new Error("OpenAI token refresh failed: 401 invalid_grant");
+			},
+			getApiKey(credentials) {
+				return credentials.accessToken;
+			},
+		});
+
+		const storage = new AuthStorage(path.join(tmpDir, "auth.json"));
+		await storage.set(providerId, {
+			type: "oauth",
+			accessToken: "expired-access-token",
+			refreshToken: "expired-refresh-token",
+			expiresAt: Date.now() - 1_000,
+		});
+
+		await expect(storage.resolveApiKey(providerId)).rejects.toThrow(`Run /login ${providerId} again`);
+		expect(await storage.get(providerId)).toBeUndefined();
+	});
 });

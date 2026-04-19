@@ -88,50 +88,61 @@ export async function runRepl(deps: ReplDeps): Promise<void> {
 		if (!line) continue;
 
 		if (line.startsWith("/")) {
-			const ctx: SlashContext = {
-				session: deps.getSession(),
-				authStorage: deps.authStorage,
-				templates: deps.templates,
-				skills: deps.skills,
-				settings: deps.settings,
-				resources: deps.resources,
-				themes: deps.themes,
-				globalDir: deps.globalDir,
-				disableExtensions: deps.disableExtensions,
-				persistSettings: deps.persistSettings,
-				promptInput,
-			};
-			const result = await handleSlashCommand(line, ctx);
+			const controller = new AbortController();
+			const onSigint = () => controller.abort();
+			process.on("SIGINT", onSigint);
+			try {
+				const ctx: SlashContext = {
+					session: deps.getSession(),
+					authStorage: deps.authStorage,
+					templates: deps.templates,
+					skills: deps.skills,
+					settings: deps.settings,
+					resources: deps.resources,
+					themes: deps.themes,
+					globalDir: deps.globalDir,
+					disableExtensions: deps.disableExtensions,
+					persistSettings: deps.persistSettings,
+					promptInput,
+					printLine: writeLine,
+					loginSignal: controller.signal,
+				};
+				const result = await handleSlashCommand(line, ctx);
 
-			if (result?.action === "switch-session") {
-				try {
-					await deps.switchSession(result.sessionPath);
+				if (result?.action === "switch-session") {
+					try {
+						await deps.switchSession(result.sessionPath);
+						if (result.output) writeLine(result.output);
+					} catch (err) {
+						writeLine(`branch failed: ${(err as Error).message}`);
+					}
+					continue;
+				}
+
+				if (result?.action === "prompt") {
+					// Template expansion — run the expanded prompt through the agent
 					if (result.output) writeLine(result.output);
-				} catch (err) {
-					writeLine(`branch failed: ${(err as Error).message}`);
-				}
-				continue;
-			}
-
-			if (result?.action === "prompt") {
-				// Template expansion — run the expanded prompt through the agent
-				if (result.output) writeLine(result.output);
-				const controller = new AbortController();
-				const onSigint = () => controller.abort();
-				process.on("SIGINT", onSigint);
-				try {
-					await deps.runPrompt(result.prompt, controller.signal, promptInput);
-				} catch (err) {
-					writeLine(`error: ${(err as Error).message}`);
-				} finally {
+					const promptController = new AbortController();
+					const onPromptSigint = () => promptController.abort();
 					process.off("SIGINT", onSigint);
+					process.on("SIGINT", onPromptSigint);
+					try {
+						await deps.runPrompt(result.prompt, promptController.signal, promptInput);
+					} catch (err) {
+						writeLine(`error: ${(err as Error).message}`);
+					} finally {
+						process.off("SIGINT", onPromptSigint);
+						process.on("SIGINT", onSigint);
+					}
+					continue;
 				}
-				continue;
-			}
 
-			if (result?.output) writeLine(result.output);
-			if (result?.action === "quit") break;
-			continue;
+				if (result?.output) writeLine(result.output);
+				if (result?.action === "quit") break;
+				continue;
+			} finally {
+				process.off("SIGINT", onSigint);
+			}
 		}
 
 		const controller = new AbortController();

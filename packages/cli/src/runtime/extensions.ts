@@ -14,6 +14,49 @@ import {
 } from "@my-agent/core";
 import type { Settings } from "../config/settings.js";
 
+interface ExtensionLog {
+	debug(msg: string, data?: unknown): void;
+	info(msg: string, data?: unknown): void;
+	warn(msg: string, data?: unknown): void;
+	error(msg: string, data?: unknown): void;
+}
+
+function createSafeExtensionUI(ui: ExtensionUI, log: ExtensionLog): ExtensionUI {
+	return {
+		async select(items, options) {
+			try {
+				return await ui.select(items, options);
+			} catch (error) {
+				log.warn("Extension UI select failed; returning null instead of crashing the host.", error);
+				return null;
+			}
+		},
+		async confirm(message, options) {
+			try {
+				return await ui.confirm(message, options);
+			} catch (error) {
+				log.warn("Extension UI confirm failed; returning default value instead of crashing the host.", error);
+				return options?.defaultValue ?? false;
+			}
+		},
+		async input(message, options) {
+			try {
+				return await ui.input(message, options);
+			} catch (error) {
+				log.warn("Extension UI input failed; returning default value instead of crashing the host.", error);
+				return options?.defaultValue ?? null;
+			}
+		},
+		notify(message, level) {
+			try {
+				ui.notify(message, level);
+			} catch (error) {
+				log.warn("Extension UI notify failed; ignoring instead of crashing the host.", error);
+			}
+		},
+	};
+}
+
 export interface LoadedExtensions {
 	runner: ExtensionRunner;
 	loadedIds: string[];
@@ -44,18 +87,20 @@ export async function loadExtensionsForRun(options: {
 	]);
 	if (entries.length === 0) return undefined;
 
+	const log: ExtensionLog = options.log ?? {
+		debug: () => {},
+		info: () => {},
+		warn: (msg: string, data?: unknown) => console.warn(msg, data ?? ""),
+		error: (msg: string, data?: unknown) => console.error(msg, data ?? ""),
+	};
+
 	const runner = new ExtensionRunner({
 		sessionId: options.sessionId,
 		storageRoot: path.join(options.globalDir, "extension-storage"),
-		ui: options.ui ?? noopUI,
+		ui: createSafeExtensionUI(options.ui ?? noopUI, log),
 		actions: options.actions ?? noopActions,
 		getAgentContext: options.getAgentContext,
-		log: options.log ?? {
-			debug: () => {},
-			info: () => {},
-			warn: (msg, data) => console.warn(msg, data ?? ""),
-			error: (msg, data) => console.error(msg, data ?? ""),
-		},
+		log,
 	});
 
 	const loadedIds: string[] = [];
@@ -67,7 +112,7 @@ export async function loadExtensionsForRun(options: {
 			if (declaredApiVersion && !isExtensionApiCompatible(declaredApiVersion, EXTENSION_API_VERSION)) {
 				const warning = `Skipping extension ${definition.metadata.id}: apiVersion ${declaredApiVersion} is incompatible with host ${EXTENSION_API_VERSION}`;
 				warnings.push(warning);
-				(options.log ?? console).warn(warning, { entry });
+				log.warn(warning, { entry });
 				continue;
 			}
 			await runner.load(definition);
@@ -75,7 +120,7 @@ export async function loadExtensionsForRun(options: {
 		} catch (error) {
 			const warning = `Skipping extension ${entry}: ${error instanceof Error ? error.message : String(error)}`;
 			warnings.push(warning);
-			(options.log ?? console).warn(warning);
+			log.warn(warning);
 		}
 	}
 

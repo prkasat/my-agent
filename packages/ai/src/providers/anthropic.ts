@@ -431,10 +431,12 @@ export function createAnthropicStream(config: AnthropicConfig = {}) {
 					const error = await response.text();
 					const isRateLimit = response.status === 429;
 					const retryAfter = response.headers.get("retry-after");
+					const authHint =
+						response.status === 401 || response.status === 403 ? " Run /login anthropic again and retry." : "";
 					const errorMsg =
 						isRateLimit && retryAfter
-							? `anthropic API ${response.status}: ${error} (retry after ${retryAfter}s)`
-							: `anthropic API ${response.status}: ${error}`;
+							? `anthropic API ${response.status}: ${error} (retry after ${retryAfter}s)${authHint}`
+							: `anthropic API ${response.status}: ${error}${authHint}`;
 					stream.push({ type: "error", error: errorMsg });
 					return;
 				}
