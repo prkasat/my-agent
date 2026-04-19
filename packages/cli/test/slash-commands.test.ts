@@ -134,6 +134,38 @@ describe("handleSlashCommand", () => {
 		expect(result?.output).toMatch(/not available/);
 	});
 
+	it("/tree shows the current session tree when available", async () => {
+		const result = await handleSlashCommand("/tree", {
+			...makeContext({
+				getTree: () => [
+					{
+						entry: {
+							id: "root",
+							type: "message",
+							parentId: null,
+							timestamp: new Date().toISOString(),
+							message: { role: "user", content: "hi" },
+						} as any,
+						children: [
+							{
+								entry: {
+									id: "child",
+									type: "message",
+									parentId: "root",
+									timestamp: new Date().toISOString(),
+									message: { role: "assistant", content: [{ type: "text", text: "hello" }] },
+								} as any,
+								children: [],
+							},
+						],
+					},
+				],
+			}),
+		});
+		expect(result?.output).toMatch(/root/);
+		expect(result?.output).toMatch(/child/);
+	});
+
 	it("/extensions reports configured extension paths", async () => {
 		const result = await handleSlashCommand("/extensions", {
 			...makeContext(),

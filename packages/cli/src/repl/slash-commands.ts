@@ -14,6 +14,7 @@ import type {
 	PromptTemplate,
 	SessionInfo,
 	SessionManager,
+	SessionTreeNode,
 	SkillDefinition,
 } from "@my-agent/core";
 import { expandSkill, expandTemplate, findSkillByCommand, getSkillHelp, getTemplateHelp } from "@my-agent/core";
@@ -54,6 +55,8 @@ export interface SlashSessionManager {
 	forkSession(leafId?: string): string | undefined;
 	/** List all sessions for this cwd. */
 	listSessionsForCwd?(): Promise<SessionInfo[]>;
+	/** Get the current session tree. */
+	getTree?(): SessionTreeNode[];
 	/** Get entries for export. */
 	getEntries?(): SessionManager["getEntries"] extends () => infer R ? R : never;
 	/** Get header for export. */
@@ -85,6 +88,7 @@ function getHelpText(templates?: Map<string, PromptTemplate>, skills?: Map<strin
   /help                Show this help
   /branch [name]       Fork the current session into a new branch (alias: /fork)
   /sessions            List sessions for this working directory
+  /tree                Show the current session tree
   /login [provider]    Login via OAuth (anthropic, openai-codex, github-copilot)
   /logout <provider>   Logout from a provider
   /extensions          Show configured extension paths
@@ -240,6 +244,22 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 					output: `sessions failed: ${(err as Error).message}`,
 				};
 			}
+		}
+
+		case "tree": {
+			if (!session.getTree) {
+				return { action: "continue", output: "tree: not available in this build" };
+			}
+			const lines: string[] = [];
+			const walk = (nodes: SessionTreeNode[], prefix = ""): void => {
+				for (const [index, node] of nodes.entries()) {
+					const isLast = index === nodes.length - 1;
+					lines.push(`${prefix}${isLast ? "└─" : "├─"} ${node.entry.id} (${node.entry.type})`);
+					walk(node.children, `${prefix}${isLast ? "  " : "│ "}`);
+				}
+			};
+			walk(session.getTree());
+			return { action: "continue", output: lines.length > 0 ? lines.join("\n") : "tree: empty session" };
 		}
 
 		case "login": {

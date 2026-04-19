@@ -388,6 +388,7 @@ REPL slash commands:
   /help                Show all commands and templates
   /branch [name]       Fork session into new branch
   /sessions            List sessions for this directory
+  /tree                Show the current session tree
   /login [provider]    OAuth login (anthropic, openai-codex, github-copilot)
   /logout <provider>   OAuth logout
   /extensions          Show configured extension paths
