@@ -29,6 +29,18 @@ export interface ToolExecutionTheme {
 	error: (text: string) => string;
 	/** Style for collapsed indicator */
 	collapsed: (text: string) => string;
+	/** Optional border style for framed tool cards */
+	border?: (text: string) => string;
+	/** Optional section-header style for Input / Output / Error blocks */
+	sectionTitle?: (text: string) => string;
+	/** Optional background for pending tool cards */
+	pendingBackground?: (text: string) => string;
+	/** Optional background for running tool cards */
+	runningBackground?: (text: string) => string;
+	/** Optional background for successful tool cards */
+	successBackground?: (text: string) => string;
+	/** Optional background for failed tool cards */
+	errorBackground?: (text: string) => string;
 }
 
 /**
@@ -59,6 +71,10 @@ export interface UserMessageTheme {
 	label: (text: string) => string;
 	/** Style for user message text */
 	text: (text: string) => string;
+	/** Optional framed-title style */
+	title?: (text: string) => string;
+	/** Optional border style for the message card */
+	border?: (text: string) => string;
 	/** Background color for user message */
 	background?: (text: string) => string;
 }
@@ -71,8 +87,32 @@ export interface AssistantMessageTheme {
 	label: (text: string) => string;
 	/** Default text style */
 	text: (text: string) => string;
+	/** Optional framed-title style */
+	title?: (text: string) => string;
+	/** Optional border style for the message card */
+	border?: (text: string) => string;
 	/** Background color for assistant message */
 	background?: (text: string) => string;
+}
+
+/**
+ * Theme for compact system/status messages
+ */
+export interface SystemMessageTheme {
+	/** Generic label style */
+	label?: (text: string) => string;
+	/** Generic body-text style */
+	text?: (text: string) => string;
+	/** Generic border/accent style */
+	border?: (text: string) => string;
+	/** Optional full-line background */
+	background?: (text: string) => string;
+	/** Variant styles */
+	info?: (text: string) => string;
+	success?: (text: string) => string;
+	warning?: (text: string) => string;
+	error?: (text: string) => string;
+	muted?: (text: string) => string;
 }
 
 /**
@@ -99,6 +139,7 @@ export interface DiffViewerTheme {
 export interface AgentTheme {
 	toolExecution: ToolExecutionTheme;
 	footer: FooterTheme;
+	systemMessage: SystemMessageTheme;
 	userMessage: UserMessageTheme;
 	assistantMessage: AssistantMessageTheme;
 	diffViewer: DiffViewerTheme;
@@ -151,43 +192,69 @@ export const defaultEditorTheme: EditorTheme = Object.freeze({
  */
 export const defaultToolExecutionTheme: ToolExecutionTheme = Object.freeze({
 	pendingIcon: (text: string) => chalk.dim(text),
-	runningIcon: (text: string) => chalk.yellow(text),
-	successIcon: (text: string) => chalk.green(text),
-	errorIcon: (text: string) => chalk.red(text),
-	toolName: (text: string) => chalk.cyan(text),
+	runningIcon: (text: string) => chalk.yellowBright(text),
+	successIcon: (text: string) => chalk.greenBright(text),
+	errorIcon: (text: string) => chalk.redBright(text),
+	toolName: (text: string) => chalk.bold.cyanBright(text),
 	duration: (text: string) => chalk.dim(text),
-	output: (text: string) => chalk.dim(text),
-	error: (text: string) => chalk.red(text),
-	collapsed: (text: string) => chalk.dim(text),
+	output: (text: string) => chalk.whiteBright(text),
+	error: (text: string) => chalk.redBright(text),
+	collapsed: (text: string) => chalk.gray(text),
+	border: (text: string) => chalk.hex("#3b82f6")(text),
+	sectionTitle: (text: string) => chalk.bold.white(text),
+	pendingBackground: (text: string) => chalk.bgHex("#08131b")(text),
+	runningBackground: (text: string) => chalk.bgHex("#1a1408")(text),
+	successBackground: (text: string) => chalk.bgHex("#0c1710")(text),
+	errorBackground: (text: string) => chalk.bgHex("#1b0a0a")(text),
 });
 
 /**
  * Default footer theme (frozen to prevent mutation)
  */
 export const defaultFooterTheme: FooterTheme = Object.freeze({
-	background: (text: string) => chalk.bgGray(text),
-	model: (text: string) => chalk.bold(text),
-	mode: (text: string) => chalk.cyan(text),
-	cost: (text: string) => chalk.yellow(text),
-	tokens: (text: string) => chalk.dim(text),
-	thinking: (text: string) => chalk.magenta(text),
-	separator: (text: string) => chalk.dim(text),
+	background: (text: string) => chalk.bgBlackBright.white(text),
+	model: (text: string) => chalk.bold.white(text),
+	mode: (text: string) => chalk.cyanBright(text),
+	cost: (text: string) => chalk.yellowBright(text),
+	tokens: (text: string) => chalk.gray(text),
+	thinking: (text: string) => chalk.magentaBright(text),
+	separator: (text: string) => chalk.gray(text),
+});
+
+/**
+ * Default system-message theme (frozen to prevent mutation)
+ */
+export const defaultSystemMessageTheme: SystemMessageTheme = Object.freeze({
+	label: (text: string) => chalk.bold(text),
+	text: (text: string) => text,
+	border: (text: string) => chalk.hex("#4b5563")(text),
+	info: (text: string) => chalk.cyanBright(text),
+	success: (text: string) => chalk.greenBright(text),
+	warning: (text: string) => chalk.yellowBright(text),
+	error: (text: string) => chalk.redBright(text),
+	muted: (text: string) => chalk.gray(text),
 });
 
 /**
  * Default user message theme (frozen to prevent mutation)
  */
 export const defaultUserMessageTheme: UserMessageTheme = Object.freeze({
-	label: (text: string) => chalk.bold.blue(text),
+	label: (text: string) => chalk.bold.blueBright(text),
+	title: (text: string) => chalk.bold.blueBright(text),
+	border: (text: string) => chalk.blueBright(text),
 	text: (text: string) => text,
+	background: (text: string) => chalk.bgHex("#081321")(text),
 });
 
 /**
  * Default assistant message theme (frozen to prevent mutation)
  */
 export const defaultAssistantMessageTheme: AssistantMessageTheme = Object.freeze({
-	label: (text: string) => chalk.bold.green(text),
+	label: (text: string) => chalk.bold.greenBright(text),
+	title: (text: string) => chalk.bold.greenBright(text),
+	border: (text: string) => chalk.greenBright(text),
 	text: (text: string) => text,
+	background: (text: string) => chalk.bgHex("#0a160f")(text),
 });
 
 /**
@@ -208,6 +275,7 @@ export const defaultDiffViewerTheme: DiffViewerTheme = Object.freeze({
 export const defaultAgentTheme: AgentTheme = Object.freeze({
 	toolExecution: defaultToolExecutionTheme,
 	footer: defaultFooterTheme,
+	systemMessage: defaultSystemMessageTheme,
 	userMessage: defaultUserMessageTheme,
 	assistantMessage: defaultAssistantMessageTheme,
 	diffViewer: defaultDiffViewerTheme,
@@ -242,6 +310,7 @@ export function createTheme(overrides: Partial<AgentTheme>): AgentTheme {
 	return {
 		toolExecution: { ...defaultToolExecutionTheme, ...overrides.toolExecution },
 		footer: { ...defaultFooterTheme, ...overrides.footer },
+		systemMessage: { ...defaultSystemMessageTheme, ...overrides.systemMessage },
 		userMessage: { ...defaultUserMessageTheme, ...overrides.userMessage },
 		assistantMessage: { ...defaultAssistantMessageTheme, ...overrides.assistantMessage },
 		diffViewer: { ...defaultDiffViewerTheme, ...overrides.diffViewer },

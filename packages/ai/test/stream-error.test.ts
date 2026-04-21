@@ -53,4 +53,32 @@ describe("EventStream error handling", () => {
 		expect(events).toHaveLength(4);
 		await expect(stream.result()).rejects.toThrow("Connection reset");
 	});
+
+	it("does not surface terminal error events as unhandled rejections when only iterating", async () => {
+		const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+			(e) => e.type === "done" || e.type === "error",
+			(e) => {
+				if (e.type === "done") return e.message;
+				throw new Error((e as { error?: string }).error || "Stream error");
+			},
+		);
+
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+		try {
+			stream.push({ type: "start", message: { role: "assistant", content: [] } });
+			stream.push({ type: "error", error: "boom" });
+
+			for await (const _event of stream) {
+				// Consume the iterator only; do not await result().
+			}
+			await new Promise((resolve) => setImmediate(resolve));
+			expect(unhandled).toHaveLength(0);
+		} finally {
+			process.off("unhandledRejection", onUnhandled);
+		}
+	});
 });

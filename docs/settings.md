@@ -40,7 +40,7 @@ Settings are merged in this order:
 |---|---|
 | `model` | configured model key |
 | `provider` | normalized from model when possible |
-| `thinkingLevel` | reasoning intensity hint for supported providers |
+| `thinkingLevel` | thinking intensity hint for supported providers |
 | `compaction.*` | context-management policy |
 | `retry.*` | transient-provider retry policy |
 | `extensions` | local extension entries |
@@ -72,6 +72,7 @@ That means persisted settings can keep their provider/model story aligned even i
 
 - `/model <name>` persists to project settings
 - `/theme <name>` persists to project settings
+- `/thinking <level>` persists to project settings
 
 ## Corruption recovery
 

@@ -502,6 +502,7 @@ REPL slash commands:
   /settings            Show current settings
   /model               Show current model
   /theme               Show current theme
+  /thinking [level]    Show/set thinking level (off|minimal|low|medium|high|xhigh)
   /templates           List available prompt templates
   /quit                Exit
 

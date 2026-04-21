@@ -18,16 +18,16 @@ describe("UserMessage", () => {
 		const lines = msg.render(40);
 
 		expect(lines.length).toBeGreaterThan(0);
-		expect(lines[0]).toContain("You:");
-		expect(lines[0]).toContain("Hello world");
+		expect(lines[0]).toContain("You");
+		expect(lines.join("\n")).toContain("Hello world");
 	});
 
 	it("renders empty message with just label", () => {
 		const msg = new UserMessage("", { theme: testTheme });
 		const lines = msg.render(40);
 
-		expect(lines.length).toBe(1);
-		expect(lines[0]).toContain("You:");
+		expect(lines.length).toBeGreaterThanOrEqual(3);
+		expect(lines[0]).toContain("You");
 	});
 
 	it("wraps long text correctly", () => {
@@ -59,7 +59,7 @@ describe("UserMessage", () => {
 		const msg = new UserMessage("Test", { theme: testTheme, label: "Human" });
 		const lines = msg.render(40);
 
-		expect(lines[0]).toContain("Human:");
+		expect(lines[0]).toContain("Human");
 	});
 
 	it("caches rendered output", () => {
@@ -80,7 +80,7 @@ describe("UserMessage", () => {
 
 		// Should return different array after update
 		expect(lines1).not.toBe(lines2);
-		expect(lines2[0]).toContain("Updated");
+		expect(lines2.join("\n")).toContain("Updated");
 	});
 
 	it("respects padding options", () => {
@@ -91,10 +91,9 @@ describe("UserMessage", () => {
 		});
 		const lines = msg.render(40);
 
-		// Should have top/bottom padding lines
-		expect(lines.length).toBe(3);
-		// First and last should be padding (all spaces)
-		expect(lines[0].trim()).toBe("");
-		expect(lines[2].trim()).toBe("");
+		expect(lines.length).toBeGreaterThanOrEqual(5);
+		expect(lines[0]).toContain("╭");
+		expect(lines[1]).toContain("│");
+		expect(lines[lines.length - 1]).toContain("╯");
 	});
 });

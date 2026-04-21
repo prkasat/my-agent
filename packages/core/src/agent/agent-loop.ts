@@ -246,6 +246,7 @@ async function runLoop(
 				stream.push({
 					type: "agent_end",
 					reason: assistantMessage.stopReason === "aborted" ? "aborted" : "error",
+					...(assistantMessage.errorMessage ? { error: assistantMessage.errorMessage } : {}),
 				});
 				return;
 			}
@@ -438,12 +439,25 @@ async function streamAssistantResponse(
 				stampUsageCost(context.model, event.message);
 				agentStream.push({ type: "message_end", message: event.message });
 				break;
-			case "error":
-				if (event.message) {
-					stampUsageCost(context.model, event.message);
-					agentStream.push({ type: "message_end", message: event.message });
-				}
-				return event.message || null;
+			case "error": {
+				// Providers often model terminal failures as an `error` event plus a
+				// rejected stream result. The agent loop consumes the iterator but not
+				// necessarily `result()`, so explicitly drain the terminal promise to
+				// prevent an unhandled rejection while still surfacing the error.
+				void llmStream.result().catch(() => {});
+				const message =
+					event.message ??
+					({
+						role: "assistant",
+						content: [],
+						stopReason: signal.aborted ? "aborted" : "error",
+						errorMessage: event.error,
+						timestamp: Date.now(),
+					} satisfies AssistantMessage);
+				stampUsageCost(context.model, message);
+				agentStream.push({ type: "message_end", message });
+				return message;
+			}
 		}
 	}
 

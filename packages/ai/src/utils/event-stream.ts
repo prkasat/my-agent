@@ -25,6 +25,12 @@ export class EventStream<TEvent, TResult> implements AsyncIterable<TEvent> {
 			this.resolveResult = resolve;
 			this.rejectResult = reject;
 		});
+		// Streams are often consumed via `for await` without ever awaiting
+		// `result()`. Attach a no-op rejection handler immediately so a
+		// terminal `error` event does not surface as an unhandled rejection
+		// while preserving the original promise semantics for callers that do
+		// await `result()` later.
+		void this.resultPromise.catch(() => {});
 	}
 
 	/**

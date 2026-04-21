@@ -332,6 +332,34 @@ describe("handleSlashCommand", () => {
 		expect(persistCalls[0]).toEqual({ model: "claude-opus-4" });
 	});
 
+	it("/thinking updates the thinking level", async () => {
+		const persistCalls: Array<Record<string, unknown>> = [];
+		const settings = {
+			model: "openrouter-auto",
+			provider: "openrouter",
+			thinkingLevel: "medium",
+			compaction: { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 },
+			retry: { enabled: true, maxRetries: 3, baseDelayMs: 2000, maxDelayMs: 60000 },
+			extensions: [],
+			packages: [],
+			skills: [],
+			theme: "default",
+			enabledModels: ["*"],
+			maxTurns: 50,
+			permissionMode: "ask",
+		};
+		const result = await handleSlashCommand("/thinking high", {
+			...makeContext(),
+			settings,
+			persistSettings: async (next) => {
+				persistCalls.push(next as Record<string, unknown>);
+			},
+		});
+		expect(result?.output).toMatch(/high/);
+		expect(settings.thinkingLevel).toBe("high");
+		expect(persistCalls[0]).toEqual({ thinkingLevel: "high" });
+	});
+
 	it("/theme lists loaded themes", async () => {
 		const result = await handleSlashCommand("/theme", {
 			...makeContext(),

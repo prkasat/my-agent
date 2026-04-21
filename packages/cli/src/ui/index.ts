@@ -41,12 +41,14 @@ export {
 	type AgentTheme,
 	type ToolExecutionTheme,
 	type FooterTheme,
+	type SystemMessageTheme,
 	type UserMessageTheme,
 	type AssistantMessageTheme,
 	type DiffViewerTheme,
 	defaultAgentTheme,
 	defaultToolExecutionTheme,
 	defaultFooterTheme,
+	defaultSystemMessageTheme,
 	defaultUserMessageTheme,
 	defaultAssistantMessageTheme,
 	defaultDiffViewerTheme,
@@ -75,6 +77,17 @@ export {
 	type FooterOptions,
 	type AgentMode,
 } from "./components/footer.js";
+
+export {
+	SystemMessage,
+	type SystemMessageOptions,
+	type SystemMessageVariant,
+} from "./components/system-message.js";
+
+export {
+	TimelineMarker,
+	type TimelineMarkerOptions,
+} from "./components/timeline-marker.js";
 
 export {
 	UserMessage,
@@ -106,6 +119,13 @@ export {
 	type SessionSelectorOptions,
 	type SessionSelectorResult,
 } from "./components/selectors/session-selector.js";
+
+export {
+	createTreeSelector,
+	type TreeSelectorComponentOptions,
+	type TreeSelectorOptions,
+	TreeSelectorComponent,
+} from "./components/selectors/tree-selector.js";
 
 // Keybindings
 export {

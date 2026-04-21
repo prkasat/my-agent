@@ -100,7 +100,7 @@ describe("StreamingMessage", () => {
 		msg.appendToken("Response");
 		const lines = msg.render(40);
 
-		expect(lines[0]).toContain("Assistant:");
+		expect(lines[0]).toContain("Assistant");
 	});
 
 	it("handles empty content gracefully", () => {
@@ -146,11 +146,10 @@ describe("StreamingMessage", () => {
 		msg.finalize();
 		const finalizedLines = msg.render(60);
 
-		// Label should be on its own line in both modes
-		expect(streamingLines[0]).toContain("Assistant:");
-		expect(finalizedLines[0]).toContain("Assistant:");
-		// Content should start on line 2 in both modes (label on separate line)
-		expect(streamingLines.length).toBeGreaterThan(1);
+		expect(streamingLines[0]).toContain("Assistant");
+		expect(finalizedLines[0]).toContain("Assistant");
+		expect(streamingLines.length).toBeGreaterThan(2);
+		expect(finalizedLines.length).toBeGreaterThan(2);
 	});
 
 	it("resets to initial state", () => {
@@ -203,6 +202,28 @@ describe("StreamingMessage", () => {
 		const lines2 = msg.render(40);
 
 		expect(lines1).not.toBe(lines2);
+	});
+
+	it("supports collapsible thinking blocks", () => {
+		const msg = new StreamingMessage({
+			markdownTheme: testMarkdownTheme,
+			messageTheme: testMessageTheme,
+			label: "Thinking",
+			collapsible: true,
+			collapsed: true,
+			collapsedPreviewLines: 1,
+		});
+
+		msg.appendToken("Line one\nLine two\nLine three");
+		let lines = msg.render(60);
+		expect(lines[0]).toContain("[+]");
+		expect(lines.join("\n")).toContain("Line one");
+
+		msg.toggleCollapsed();
+		lines = msg.render(60);
+		expect(msg.getCollapsed()).toBe(false);
+		expect(lines[0]).toContain("[-]");
+		expect(lines.join("\n")).toContain("Line three");
 	});
 
 	it("calls onInvalidate callback on changes", () => {

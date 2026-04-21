@@ -5,17 +5,9 @@
  * After finalization, switches to full markdown parsing.
  */
 
-import {
-	type Component,
-	type DefaultTextStyle,
-	Markdown,
-	type MarkdownTheme,
-	Text,
-	truncateToWidth,
-	visibleWidth,
-	wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+import { type Component, type DefaultTextStyle, Markdown, type MarkdownTheme } from "@mariozechner/pi-tui";
 import type { AssistantMessageTheme } from "../theme.js";
+import { getPanelContentWidth, renderPanel, wrapStyledText } from "./panel.js";
 
 export interface StreamingMessageOptions {
 	/** Markdown theme for rendering finalized content */
@@ -28,6 +20,12 @@ export interface StreamingMessageOptions {
 	paddingY?: number;
 	/** Label to show before the message (e.g., "Assistant") */
 	label?: string;
+	/** Whether the panel can be collapsed */
+	collapsible?: boolean;
+	/** Initial collapsed state */
+	collapsed?: boolean;
+	/** Number of preview lines to show while collapsed */
+	collapsedPreviewLines?: number;
 	/** Optional callback when content changes (for TUI invalidation) */
 	onInvalidate?: () => void;
 }
@@ -42,6 +40,7 @@ export class StreamingMessage implements Component {
 	private rawText = "";
 	private isStreaming = true;
 	private markdown: Markdown;
+	private collapsed: boolean;
 	private options: Required<Omit<StreamingMessageOptions, "onInvalidate" | "label">> &
 		Pick<StreamingMessageOptions, "onInvalidate" | "label">;
 
@@ -62,8 +61,12 @@ export class StreamingMessage implements Component {
 			paddingX: options.paddingX ?? 1,
 			paddingY: options.paddingY ?? 0,
 			label: options.label,
+			collapsible: options.collapsible ?? false,
+			collapsed: options.collapsed ?? false,
+			collapsedPreviewLines: Math.max(1, options.collapsedPreviewLines ?? 2),
 			onInvalidate: options.onInvalidate,
 		};
+		this.collapsed = this.options.collapsible ? this.options.collapsed : false;
 
 		// Build defaultTextStyle from assistant theme
 		const defaultTextStyle: DefaultTextStyle = {};
@@ -77,13 +80,7 @@ export class StreamingMessage implements Component {
 
 		// Markdown is used after finalization for full parsing
 		// Pass the defaultTextStyle so assistant theme applies
-		this.markdown = new Markdown(
-			"",
-			this.options.paddingX,
-			this.options.paddingY,
-			this.options.markdownTheme,
-			defaultTextStyle,
-		);
+		this.markdown = new Markdown("", 0, 0, this.options.markdownTheme, defaultTextStyle);
 	}
 
 	/**
@@ -128,6 +125,21 @@ export class StreamingMessage implements Component {
 		return this.isStreaming;
 	}
 
+	getCollapsed(): boolean {
+		return this.collapsed;
+	}
+
+	setCollapsed(collapsed: boolean): void {
+		if (!this.options.collapsible || this.collapsed === collapsed) return;
+		this.collapsed = collapsed;
+		this.invalidate();
+	}
+
+	toggleCollapsed(): void {
+		if (!this.options.collapsible) return;
+		this.setCollapsed(!this.collapsed);
+	}
+
 	/**
 	 * Finalize the message, switching from streaming to markdown mode
 	 */
@@ -149,6 +161,7 @@ export class StreamingMessage implements Component {
 	reset(): void {
 		this.rawText = "";
 		this.isStreaming = true;
+		this.collapsed = this.options.collapsible ? this.options.collapsed : false;
 		this.markdown.setText("");
 		this.dirty = true;
 		this.cachedWidth = undefined;
@@ -157,65 +170,54 @@ export class StreamingMessage implements Component {
 	}
 
 	render(width: number): string[] {
-		// Check cache validity
 		if (!this.dirty && this.cachedWidth === width && this.cachedLines) {
 			return this.cachedLines;
 		}
 
-		const lines: string[] = [];
 		const theme = this.options.messageTheme;
-		const padding = " ".repeat(this.options.paddingX);
-		const contentWidth = Math.max(1, width - this.options.paddingX * 2);
+		const contentWidth = getPanelContentWidth(width, this.options.paddingX);
+		const bodyLines = this.collapsed ? this.renderCollapsedBody(contentWidth) : this.renderExpandedBody(contentWidth);
+		const lines = renderPanel({
+			width,
+			title: this.renderTitle(),
+			titleStyle: theme.title ?? theme.label,
+			borderStyle: theme.border ?? theme.label,
+			backgroundStyle: theme.background,
+			paddingX: this.options.paddingX,
+			paddingY: this.options.paddingY,
+			lines: bodyLines,
+		});
 
-		// Add label if present (only on first render line)
-		const hasLabel = Boolean(this.options.label);
-		const labelText = hasLabel ? `${this.options.label}: ` : "";
-		const label = hasLabel ? theme.label(labelText) : "";
-		const labelWidth = hasLabel ? visibleWidth(labelText) : 0;
-
-		// Add label on its own line if present (consistent between streaming and finalized)
-		if (hasLabel) {
-			lines.push(this.composeLine(padding, label, "", width, theme.background));
-		}
-
-		if (this.isStreaming) {
-			// During streaming, use simple text wrapping for correctness
-			if (this.rawText && this.rawText.trim() !== "") {
-				const styledText = theme.text(this.rawText);
-				const wrappedLines = wrapTextWithAnsi(styledText, contentWidth);
-
-				for (const wrappedLine of wrappedLines) {
-					lines.push(this.composeLine(padding, "", wrappedLine || "", width, theme.background));
-				}
-			}
-		} else {
-			// After finalization, use full markdown rendering
-			const markdownLines = this.markdown.render(width);
-			lines.push(...markdownLines);
-		}
-
-		// Update cache
 		this.cachedWidth = width;
 		this.cachedLines = lines;
 		this.dirty = false;
-
 		return lines;
 	}
 
-	/**
-	 * Compose a line with prefix and content, then truncate and pad to width
-	 */
-	private composeLine(
-		padding: string,
-		prefix: string,
-		content: string,
-		width: number,
-		bgFn?: (text: string) => string,
-	): string {
-		const composed = `${padding}${prefix}${content}`;
-		// Truncate to ensure we don't exceed width, pad to fill
-		const truncated = truncateToWidth(composed, width, "...", true);
-		return bgFn ? bgFn(truncated) : truncated;
+	private renderTitle(): string | undefined {
+		if (!this.options.label) return undefined;
+		if (!this.options.collapsible) return this.options.label;
+		return `${this.options.label} ${this.collapsed ? "[+]" : "[-]"}`;
+	}
+
+	private renderExpandedBody(contentWidth: number): string[] {
+		const theme = this.options.messageTheme;
+		return this.isStreaming ? wrapStyledText(this.rawText, contentWidth, theme.text) : this.markdown.render(contentWidth);
+	}
+
+	private renderCollapsedBody(contentWidth: number): string[] {
+		const theme = this.options.messageTheme;
+		const source = this.rawText.trim();
+		if (!source) {
+			return [theme.text("thinking hidden")];
+		}
+		const wrappedLines = wrapStyledText(source, contentWidth, theme.text);
+		const previewLines = wrappedLines.slice(0, this.options.collapsedPreviewLines);
+		const hiddenCount = Math.max(0, wrappedLines.length - previewLines.length);
+		if (hiddenCount > 0) {
+			previewLines.push(theme.text(`... ${hiddenCount} more line${hiddenCount === 1 ? "" : "s"}`));
+		}
+		return previewLines;
 	}
 
 	invalidate(): void {

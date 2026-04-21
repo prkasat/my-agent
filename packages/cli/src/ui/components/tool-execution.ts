@@ -2,8 +2,9 @@
  * ToolExecution - Shows tool execution progress with collapsible output
  */
 
-import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth } from "@mariozechner/pi-tui";
 import type { ToolExecutionTheme } from "../theme.js";
+import { getPanelContentWidth, renderPanel } from "./panel.js";
 
 export type ToolStatus = "pending" | "running" | "success" | "error";
 
@@ -43,6 +44,8 @@ export interface ToolExecutionOptions {
 	showInput?: boolean;
 	/** Maximum lines for input display (default: 5) */
 	maxInputLines?: number;
+	/** Maximum output/error preview lines while collapsed (default: 2) */
+	maxCollapsedPreviewLines?: number;
 	/** Callback when content changes */
 	onInvalidate?: () => void;
 }
@@ -91,6 +94,7 @@ export class ToolExecution implements Component {
 			autoExpandOnError: options.autoExpandOnError ?? true,
 			showInput: options.showInput ?? true,
 			maxInputLines: Math.max(0, options.maxInputLines ?? 5),
+			maxCollapsedPreviewLines: Math.max(1, options.maxCollapsedPreviewLines ?? 2),
 			onInvalidate: options.onInvalidate,
 		};
 	}
@@ -187,42 +191,31 @@ export class ToolExecution implements Component {
 			return this.cachedLines;
 		}
 
-		const lines: string[] = [];
 		const theme = this.options.theme;
-		const padding = " ".repeat(this.options.paddingX);
-		const contentWidth = Math.max(1, width - this.options.paddingX * 2);
+		const contentWidth = getPanelContentWidth(width, this.options.paddingX);
+		const lines = renderPanel({
+			width,
+			title: this.renderHeaderTitle(contentWidth, theme),
+			titleStyle: theme.toolName,
+			borderStyle: this.getBorderStyle(theme),
+			backgroundStyle: this.getBackgroundStyle(theme),
+			paddingX: this.options.paddingX,
+			paddingY: 0,
+			lines: this.renderBody(contentWidth, theme),
+		});
 
-		// Header line: [status icon] tool_name (duration) [+/-]
-		const headerLine = this.renderHeader(contentWidth, theme);
-		lines.push(this.composeLine(padding, headerLine, width));
-
-		// Expanded content
-		if (this.state.expanded) {
-			const expandedLines = this.renderExpandedContent(contentWidth, theme);
-			for (const line of expandedLines) {
-				lines.push(this.composeLine(padding, line, width));
-			}
-		}
-
-		// Update cache
 		this.cachedWidth = width;
 		this.cachedLines = lines;
 		this.dirty = false;
-
 		return lines;
 	}
 
-	private renderHeader(contentWidth: number, theme: ToolExecutionTheme): string {
-		const icon = this.getStyledIcon(theme);
-		const name = theme.toolName(this.state.name);
+	private renderHeaderTitle(contentWidth: number, theme: ToolExecutionTheme): string {
+		const target = this.getPrimaryTargetSummary();
 		const duration = this.getDurationText(theme);
 		const expandIndicator = this.hasExpandableContent() ? theme.collapsed(this.state.expanded ? " [-]" : " [+]") : "";
-
-		// Compose header without truncation first to measure
-		const headerContent = `${icon} ${name}${duration}${expandIndicator}`;
-
-		// Truncate to fit content width
-		return truncateToWidth(headerContent, contentWidth, "...");
+		const title = target ? `${this.state.name} — ${target}` : this.state.name;
+		return truncateToWidth(`${title}${duration}${expandIndicator}`, contentWidth, "...");
 	}
 
 	private getDurationText(theme: ToolExecutionTheme): string {
@@ -257,35 +250,42 @@ export class ToolExecution implements Component {
 		return this.options.showInput && Object.keys(this.state.input).length > 0;
 	}
 
-	private renderExpandedContent(contentWidth: number, theme: ToolExecutionTheme): string[] {
-		const lines: string[] = [];
-		const indentWidth = 2;
-		const indent = "  ";
-		const availableWidth = Math.max(1, contentWidth - indentWidth);
+	private renderBody(contentWidth: number, theme: ToolExecutionTheme): string[] {
+		const lines: string[] = [this.getStatusLine(contentWidth, theme)];
+		if (!this.state.expanded) {
+			const summaryLines = this.renderCollapsedSummary(contentWidth, theme);
+			if (summaryLines.length > 0) {
+				lines.push(...summaryLines);
+			}
+			return lines;
+		}
 
-		// Show input parameters if enabled
+		const indent = "  ";
+		const availableWidth = Math.max(1, contentWidth - indent.length);
+		const sectionTitle = theme.sectionTitle ?? theme.collapsed;
+
 		if (this.options.showInput && Object.keys(this.state.input).length > 0) {
-			lines.push(theme.collapsed(`${indent}Input:`));
+			lines.push("");
+			lines.push(sectionTitle("Input"));
 			const inputLines = this.renderInput(availableWidth, theme);
 			for (const line of inputLines) {
-				lines.push(`${indent}  ${line}`);
+				lines.push(`${indent}${line}`);
 			}
 		}
 
-		// Show output or error based on status
 		if (this.state.status === "success" && this.state.output) {
-			if (lines.length > 0) lines.push(""); // separator
-			lines.push(theme.collapsed(`${indent}Output:`));
-			const outputLines = this.renderContent(this.state.output, availableWidth - 2, theme.output);
+			lines.push("");
+			lines.push(sectionTitle("Output"));
+			const outputLines = this.renderContent(this.state.output, availableWidth, theme.output);
 			for (const line of outputLines) {
-				lines.push(`${indent}  ${line}`);
+				lines.push(`${indent}${line}`);
 			}
 		} else if (this.state.status === "error" && this.state.error) {
-			if (lines.length > 0) lines.push(""); // separator
-			lines.push(theme.collapsed(`${indent}Error:`));
-			const errorLines = this.renderContent(this.state.error, availableWidth - 2, theme.error);
+			lines.push("");
+			lines.push(sectionTitle("Error"));
+			const errorLines = this.renderContent(this.state.error, availableWidth, theme.error);
 			for (const line of errorLines) {
-				lines.push(`${indent}  ${line}`);
+				lines.push(`${indent}${line}`);
 			}
 		}
 
@@ -343,6 +343,100 @@ export class ToolExecution implements Component {
 		return lines;
 	}
 
+	private renderCollapsedSummary(contentWidth: number, theme: ToolExecutionTheme): string[] {
+		const lines: string[] = [];
+		const inputSummary = this.summarizeInput(contentWidth, theme);
+		if (inputSummary) lines.push(inputSummary);
+
+		if (this.state.status === "running") {
+			lines.push(theme.collapsed(truncateToWidth("Waiting for result…", contentWidth, "...")));
+			return lines;
+		}
+		if (this.state.status === "success") {
+			lines.push(...this.summarizeText(this.state.output, contentWidth, theme.output, "Result", theme));
+		}
+		if (this.state.status === "error") {
+			lines.push(...this.summarizeText(this.state.error, contentWidth, theme.error, "Error", theme));
+		}
+		return lines;
+	}
+
+	private getPrimaryTargetSummary(): string | undefined {
+		const preferredKeys = ["path", "command", "pattern", "glob"];
+		for (const key of preferredKeys) {
+			const value = this.state.input[key];
+			if (typeof value === "string" && value.trim().length > 0) {
+				const normalized = value.replace(/\s+/g, " ").trim();
+				return normalized.length > 36 ? `${normalized.slice(0, 35)}…` : normalized;
+			}
+		}
+		return undefined;
+	}
+
+	private summarizeInput(contentWidth: number, theme: ToolExecutionTheme): string | undefined {
+		const entries = Object.entries(this.state.input);
+		if (entries.length === 0) return undefined;
+
+		const priority = ["path", "command", "pattern", "glob", "limit", "offset", "timeout"];
+		entries.sort((a, b) => {
+			const ai = priority.indexOf(a[0]);
+			const bi = priority.indexOf(b[0]);
+			return (ai === -1 ? priority.length : ai) - (bi === -1 ? priority.length : bi) || a[0].localeCompare(b[0]);
+		});
+
+		const summary = entries
+			.slice(0, 3)
+			.map(([key, value]) => `${key}=${this.formatSummaryValue(value)}`)
+			.join(" · ");
+		const suffix = entries.length > 3 ? ` · +${entries.length - 3} more` : "";
+		return theme.collapsed(truncateToWidth(`Args: ${summary}${suffix}`, contentWidth, "..."));
+	}
+
+	private summarizeText(
+		text: string,
+		contentWidth: number,
+		styleFn: (text: string) => string,
+		label: string,
+		theme: ToolExecutionTheme,
+	): string[] {
+		if (!text) return [];
+		const rawLines = text
+			.split("\n")
+			.map((line) => line.trimEnd())
+			.filter((line) => line.length > 0);
+		if (rawLines.length === 0) return [];
+
+		const previewLines = rawLines.slice(0, this.options.maxCollapsedPreviewLines);
+		const lines: string[] = [];
+		for (const [index, line] of previewLines.entries()) {
+			const prefix = index === 0 ? `${label}: ` : "  ";
+			lines.push(styleFn(truncateToWidth(`${prefix}${line}`, contentWidth, "...")));
+		}
+
+		const remaining = rawLines.length - previewLines.length;
+		if (remaining > 0) {
+			lines.push(theme.collapsed(truncateToWidth(`... ${remaining} more lines`, contentWidth, "...")));
+		}
+		return lines;
+	}
+
+	private formatSummaryValue(value: unknown): string {
+		if (typeof value === "string") {
+			const normalized = value.replace(/\s+/g, " ").trim();
+			return JSON.stringify(normalized.length > 40 ? `${normalized.slice(0, 39)}…` : normalized);
+		}
+		if (typeof value === "number" || typeof value === "boolean") {
+			return String(value);
+		}
+		if (Array.isArray(value)) {
+			return `[${value.length} items]`;
+		}
+		if (value && typeof value === "object") {
+			return "{…}";
+		}
+		return String(value);
+	}
+
 	private formatDuration(ms: number): string {
 		if (ms < 1000) {
 			return `${ms}ms`;
@@ -359,11 +453,48 @@ export class ToolExecution implements Component {
 	/**
 	 * Compose a line, truncating and padding to exact width
 	 */
-	private composeLine(padding: string, content: string, width: number): string {
-		const composed = `${padding}${content}`;
-		// Truncate to ensure we don't exceed width, then pad
-		const truncated = truncateToWidth(composed, width, "...", true);
-		return truncated;
+	private getStatusLine(contentWidth: number, theme: ToolExecutionTheme): string {
+		const icon = this.getStyledIcon(theme);
+		let statusText = "Queued";
+		if (this.state.status === "running") statusText = "Running…";
+		if (this.state.status === "success") statusText = "Completed";
+		if (this.state.status === "error") statusText = "Failed";
+		const statusStyle =
+			this.state.status === "pending"
+				? theme.pendingIcon
+				: this.state.status === "running"
+					? theme.runningIcon
+					: this.state.status === "success"
+						? theme.successIcon
+						: theme.errorIcon;
+		return truncateToWidth(`${icon} ${statusStyle(statusText)}`, contentWidth, "...");
+	}
+
+	private getBorderStyle(theme: ToolExecutionTheme): (text: string) => string {
+		if (theme.border) return theme.border;
+		switch (this.state.status) {
+			case "pending":
+				return theme.pendingIcon;
+			case "running":
+				return theme.runningIcon;
+			case "success":
+				return theme.successIcon;
+			case "error":
+				return theme.errorIcon;
+		}
+	}
+
+	private getBackgroundStyle(theme: ToolExecutionTheme): ((text: string) => string) | undefined {
+		switch (this.state.status) {
+			case "pending":
+				return theme.pendingBackground;
+			case "running":
+				return theme.runningBackground;
+			case "success":
+				return theme.successBackground;
+			case "error":
+				return theme.errorBackground;
+		}
 	}
 
 	private markDirty(): void {

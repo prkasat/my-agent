@@ -33,6 +33,14 @@ describe("ToolExecution", () => {
 		expect(lines[0]).toContain("test-tool");
 	});
 
+	it("surfaces the primary target in the header", () => {
+		const tool = new ToolExecution("read", { path: "src/app.ts", offset: 1 }, { theme: testTheme });
+		const lines = tool.render(80);
+
+		expect(lines[0]).toContain("read");
+		expect(lines[0]).toContain("src/app.ts");
+	});
+
 	it("transitions to running state", () => {
 		const tool = new ToolExecution("test-tool", {}, { theme: testTheme });
 		tool.setRunning();
@@ -95,8 +103,20 @@ describe("ToolExecution", () => {
 		const lines = tool.render(80);
 
 		const content = lines.join("\n");
-		expect(content).toContain("Input:");
+		expect(content).toContain("Input");
 		expect(content).toContain("key");
+	});
+
+	it("shows argument and result summaries even when collapsed", () => {
+		const tool = new ToolExecution("read", { path: "src/app.ts", offset: 1 }, { theme: testTheme });
+		tool.setRunning();
+		tool.setSuccess("Read file src/app.ts\n\n[20 more lines in file]", 12);
+		const lines = tool.render(80);
+
+		const content = lines.join("\n");
+		expect(content).toContain("Args:");
+		expect(content).toContain("src/app.ts");
+		expect(content).toContain("Result:");
 	});
 
 	it("shows output when expanded after success", () => {
@@ -107,7 +127,7 @@ describe("ToolExecution", () => {
 		const lines = tool.render(80);
 
 		const content = lines.join("\n");
-		expect(content).toContain("Output:");
+		expect(content).toContain("Output");
 		expect(content).toContain("Success output");
 	});
 
@@ -119,7 +139,7 @@ describe("ToolExecution", () => {
 		const lines = tool.render(80);
 
 		const content = lines.join("\n");
-		expect(content).toContain("Error:");
+		expect(content).toContain("Error");
 		expect(content).toContain("Error details");
 	});
 

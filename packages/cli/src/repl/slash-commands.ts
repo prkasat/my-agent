@@ -22,6 +22,12 @@ import { exportFromSessionManager, getExportFilename } from "../commands/export.
 import { handleLogin, handleLogout, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
+import {
+	THINKING_LEVELS,
+	getNextThinkingLevel,
+	getThinkingLevelDescription,
+	isThinkingLevel,
+} from "../config/thinking-levels.js";
 import { inspectExtensions, runExtensionCommand } from "../runtime/extensions.js";
 import { getModelProviderForKey, listModelAvailability } from "../runtime/model-registry.js";
 import type { LoadThemesResult } from "../ui/theme-loader.js";
@@ -132,6 +138,12 @@ const BUILTIN_SLASH_COMMANDS: SlashCommandListing[] = [
 		name: "theme",
 		usage: "/theme [name]",
 		description: "Show or set the current theme",
+		section: "Configuration",
+	},
+	{
+		name: "thinking",
+		usage: "/thinking [level]",
+		description: "Show or set the current thinking level",
 		section: "Configuration",
 	},
 	{ name: "settings", usage: "/settings", description: "Show current settings", section: "Configuration" },
@@ -584,6 +596,42 @@ export async function handleSlashCommand(input: string, ctx: SlashContext): Prom
 				await persistSettings?.({ theme: selected.name }, "project");
 			}
 			return { action: "continue", output: `current theme: ${selected.name}` };
+		}
+
+		case "thinking": {
+			if (!settings) {
+				return { action: "continue", output: "thinking: settings not loaded" };
+			}
+			if (!args[0]) {
+				return {
+					action: "continue",
+					output: [
+						`current thinking level: ${settings.thinkingLevel}`,
+						`available: ${THINKING_LEVELS.join(", ")}`,
+						"tip: /thinking high",
+					].join("\n"),
+				};
+			}
+			const requested = args[0].toLowerCase();
+			let nextLevel: (typeof THINKING_LEVELS)[number];
+			if (requested === "next") {
+				nextLevel = getNextThinkingLevel(settings.thinkingLevel, 1);
+			} else if (requested === "prev" || requested === "previous") {
+				nextLevel = getNextThinkingLevel(settings.thinkingLevel, -1);
+			} else if (isThinkingLevel(requested)) {
+				nextLevel = requested;
+			} else {
+				return {
+					action: "continue",
+					output: `unknown thinking level: ${args[0]} (expected one of: ${THINKING_LEVELS.join(", ")})`,
+				};
+			}
+			settings.thinkingLevel = nextLevel;
+			await persistSettings?.({ thinkingLevel: nextLevel }, "project");
+			return {
+				action: "continue",
+				output: `current thinking level: ${nextLevel} — ${getThinkingLevelDescription(nextLevel)}`,
+			};
 		}
 
 		case "templates": {

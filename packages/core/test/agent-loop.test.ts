@@ -80,6 +80,56 @@ describe("Agent Loop", () => {
 		expect(messages).toHaveLength(2); // user + assistant
 	});
 
+	it("propagates provider error events as recoverable agent_end errors", async () => {
+		const llm = () => {
+			const stream = new EventStream<AssistantMessageEvent, AssistantMessage>(
+				(e) => e.type === "done" || e.type === "error",
+				(e) => {
+					if (e.type === "done") return e.message;
+					throw new Error(e.error);
+				},
+			);
+
+			queueMicrotask(() => {
+				stream.push({ type: "start", message: { role: "assistant", content: [] } });
+				stream.push({ type: "text_delta", text: "partial" });
+				stream.push({ type: "error", error: "provider exploded" });
+			});
+
+			return stream;
+		};
+
+		const events: AgentEvent[] = [];
+		const loop = agentLoop(
+			[{ role: "user", content: "Hi" }],
+			{
+				systemPrompt: "You are helpful.",
+				messages: [],
+				tools: [],
+				model: { id: "test", name: "Test", provider: "test" } as any,
+			},
+			{
+				streamFn: llm,
+				convertToLlm: defaultConvertToLlm,
+			},
+		);
+
+		for await (const event of loop) {
+			events.push(event);
+		}
+
+		const end = events.find((event) => event.type === "agent_end") as
+			| { type: "agent_end"; reason: string; error?: string }
+			| undefined;
+		expect(end?.reason).toBe("error");
+		expect(end?.error).toBe("provider exploded");
+
+		const messages = await loop.result();
+		const last = messages[messages.length - 1] as AssistantMessage;
+		expect(last.stopReason).toBe("error");
+		expect(last.errorMessage).toBe("provider exploded");
+	});
+
 	it("should execute tool calls and loop back for final response", async () => {
 		const llm = createFauxLLM([
 			// First: LLM requests a tool call

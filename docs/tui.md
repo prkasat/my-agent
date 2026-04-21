@@ -31,8 +31,10 @@ flowchart TB
 - prompt entry with a full-screen editor
 - slash-command autocomplete with `Tab`
 - prompt history with Up/Down
+- turn markers for each model/tool cycle
 - streaming assistant output
-- tool execution rows with args, durations, and output
+- collapsible thinking blocks
+- tool execution rows with args, durations, summaries, and output
 - diff viewer blocks for edit-like tool results
 - permission approval overlay
 - model selector overlay
@@ -49,6 +51,7 @@ flowchart TB
 - `/sessions`
 - `/tree`
 - `/theme [name]`
+- `/thinking [level]`
 - `/skills`
 - `/packages`
 - `/extensions`
@@ -109,8 +112,13 @@ The footer updates from runtime profile data:
 
 - interactive TTY launches the TUI by default
 - Ctrl+C aborts the active run, cancels an in-flight login, or exits when idle
-- F1 opens help, F2 model selector, F3 session selector, F4 tree selector, F5 login selector
+- F1 opens help, F2 model selector, F3 session selector, F4 tree selector, F5 login selector, F6 thinking selector
+- Shift+Tab cycles thinking levels
+- Ctrl+O expands/collapses tool output blocks
+- Ctrl+T expands/collapses thinking blocks
 - login progress is streamed into the message pane during OAuth flows
+- runtime and provider errors are surfaced inline instead of dumping raw stack traces into the terminal UI
+- fatal TUI failures restore terminal state before exiting so the shell is usable immediately afterward
 - theme selection persists through the normal settings path
 - diff blocks are rendered inline for edit-like tool results
 - branch context can be switched from the tree selector without leaving the TUI

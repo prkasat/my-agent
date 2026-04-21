@@ -196,6 +196,7 @@ function compileDeclarativeTheme(
 	const compiled = createTheme({
 		toolExecution: compileSection(raw.toolExecution as Record<string, unknown> | undefined),
 		footer: compileSection(raw.footer as Record<string, unknown> | undefined),
+		systemMessage: compileSection(raw.systemMessage as Record<string, unknown> | undefined),
 		userMessage: compileSection(raw.userMessage as Record<string, unknown> | undefined),
 		assistantMessage: compileSection(raw.assistantMessage as Record<string, unknown> | undefined),
 		diffViewer: compileSection(raw.diffViewer as Record<string, unknown> | undefined),

@@ -15,7 +15,7 @@ import type { KeyId, KeybindingDefinitions } from "@mariozechner/pi-tui";
 export const AGENT_KEYBINDINGS: KeybindingDefinitions = {
 	// Tool execution controls
 	"agent.tool.expand": {
-		defaultKeys: "enter",
+		defaultKeys: "ctrl+o",
 		description: "Expand/collapse tool output",
 	},
 	"agent.tool.expandAll": {
@@ -105,6 +105,12 @@ export const AGENT_KEYBINDINGS: KeybindingDefinitions = {
 	"agent.copy.codeBlock": {
 		defaultKeys: "ctrl+shift+k",
 		description: "Copy code block under cursor",
+	},
+
+	// Thinking blocks
+	"agent.thinking.toggle": {
+		defaultKeys: "ctrl+t",
+		description: "Expand/collapse thinking blocks",
 	},
 
 	// Help

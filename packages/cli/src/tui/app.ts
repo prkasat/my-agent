@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import {
 	type AutocompleteItem,
 	CombinedAutocompleteProvider,
@@ -11,6 +10,7 @@ import {
 	type LoadResourcePackagesResult,
 	type PermissionAskContext,
 	type PromptTemplate,
+	type SessionEntry,
 	SessionManager,
 	type SessionTreeNode,
 	type SkillDefinition,
@@ -20,6 +20,13 @@ import { handleLogin, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { saveSettings } from "../config/settings.js";
+import {
+	THINKING_LEVELS,
+	type ThinkingLevel,
+	getNextThinkingLevel,
+	getThinkingLevelDescription,
+	isThinkingLevel,
+} from "../config/thinking-levels.js";
 import { handleSlashCommand, listSlashCommandSuggestions } from "../repl/slash-commands.js";
 import { runAgent } from "../runtime/agent-runtime.js";
 import {
@@ -38,16 +45,20 @@ import {
 	SelectList,
 	Spacer,
 	StreamingMessage,
+	SystemMessage,
+	type SystemMessageVariant,
 	TUI,
 	Text,
+	TimelineMarker,
 	ToolExecution,
 	UserMessage,
 	createModelSelector,
 	createSessionSelector,
+	createTreeSelector,
 	defaultAgentTheme,
 	parseMultiDiff,
 } from "../ui/index.js";
-import { type LoadThemesResult, loadThemes, resolveThemeSelection } from "../ui/theme-loader.js";
+import { type LoadThemesResult, resolveThemeSelection } from "../ui/theme-loader.js";
 
 export interface TuiOptions {
 	cwd: string;
@@ -154,22 +165,111 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	tui.addChild(footer);
 	tui.setFocus(editor);
 
+	const refreshFooterStatus = (): void => {
+		const prefixes = [options.safeMode ? "safe-mode" : undefined, `thinking: ${options.settings.thinkingLevel}`].filter(
+			Boolean,
+		);
+		const prefixText = prefixes.length > 0 ? `${prefixes.join(" · ")} · ` : "";
+		footer.setStatusText(`${prefixText}Tab autocomplete · F1 help`);
+	};
+
+	const thinkingMessageTheme = {
+		...theme.assistantMessage,
+		text: (text: string) => (theme.systemMessage.muted ?? ((value: string) => value))(text),
+		border: theme.footer.thinking,
+		title: theme.footer.thinking,
+		background: theme.toolExecution.pendingBackground ?? theme.assistantMessage.background,
+	};
+
 	let session = options.session;
 	let activeController: AbortController | null = null;
 	let loginController: AbortController | null = null;
 	let cancelActivePromptInput: (() => void) | null = null;
 	let stopping = false;
+	let tuiStopped = false;
 	let resolveStopped: (() => void) | undefined;
 	const pendingToolViews = new Map<string, ToolExecution>();
+	const allToolViews: ToolExecution[] = [];
+	const allThinkingViews: StreamingMessage[] = [];
 
-	const appendSystem = (text: string): void => {
-		messages.addChild(new Text(text, 1, 0));
+	const safeStop = (): void => {
+		if (tuiStopped) return;
+		tuiStopped = true;
+		try {
+			tui.stop();
+		} catch {
+			// Ignore cleanup errors while restoring the terminal.
+		}
+	};
+
+	const appendRich = (component: { invalidate?: () => void }): void => {
+		const lastChild = messages.children[messages.children.length - 1];
+		if (lastChild && !(lastChild instanceof Spacer)) {
+			messages.addChild(new Spacer(1));
+		}
+		messages.addChild(component as any);
 		tui.requestRender();
 	};
 
-	const appendUser = (text: string): void => {
-		messages.addChild(new UserMessage(text, { theme: theme.userMessage, onInvalidate: () => tui.requestRender() }));
+	const removeRich = (component: { invalidate?: () => void }): void => {
+		const index = messages.children.indexOf(component as any);
+		if (index === -1) return;
+		const previous = index > 0 ? messages.children[index - 1] : undefined;
+		messages.removeChild(component as any);
+		if (previous instanceof Spacer) {
+			messages.removeChild(previous);
+		}
 		tui.requestRender();
+	};
+
+	const appendSystem = (text: string, variant: SystemMessageVariant = "info"): void => {
+		messages.addChild(
+			new SystemMessage(text, {
+				theme: theme.systemMessage,
+				variant,
+				onInvalidate: () => tui.requestRender(),
+			}),
+		);
+		tui.requestRender();
+	};
+
+	const toggleAllToolExpansion = (): void => {
+		if (allToolViews.length === 0) return;
+		const shouldExpand = allToolViews.some((view) => !view.getState().expanded);
+		for (const view of allToolViews) {
+			view.setExpanded(shouldExpand);
+		}
+		tui.requestRender();
+	};
+
+	const toggleAllThinkingBlocks = (): void => {
+		if (allThinkingViews.length === 0) return;
+		const shouldCollapse = allThinkingViews.some((view) => !view.getCollapsed());
+		for (const view of allThinkingViews) {
+			view.setCollapsed(shouldCollapse);
+		}
+		tui.requestRender();
+	};
+
+	const reportError = (error: unknown, context?: string): void => {
+		const message = formatModelResolutionError(error);
+		appendSystem(context ? `${context}: ${message}` : message, "error");
+	};
+
+	const invokeSafely = (task: () => Promise<void> | void, context?: string): void => {
+		void Promise.resolve()
+			.then(task)
+			.catch((error) => {
+				trace("runtime", "tui.handler.error", {
+					context: context ?? "async-handler",
+					error: error instanceof Error ? error.message : String(error),
+				});
+				reportError(error, context);
+			});
+	};
+
+	const appendUser = (text: string): void => {
+		appendRich(new UserMessage(text, { theme: theme.userMessage, label: "", onInvalidate: () => tui.requestRender() }));
 	};
 
 	const promptInput = async (message: string): Promise<string> => {
@@ -224,20 +324,105 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		return typeof maybeDiff === "string" && maybeDiff.length > 0 ? maybeDiff : undefined;
 	};
 
-	const flattenTree = (
+	const normalizeTreePreview = (text: string): string =>
+		text
+			.replace(/[\r\n\t]+/g, " ")
+			.replace(/\s+/g, " ")
+			.trim();
+
+	const extractTreeTextPreview = (content: unknown, maxLength = 120): string => {
+		if (typeof content === "string") {
+			return normalizeTreePreview(content).slice(0, maxLength);
+		}
+		if (!Array.isArray(content)) return "";
+
+		let result = "";
+		for (const block of content) {
+			if (typeof block !== "object" || block === null) continue;
+			if ((block as { type?: unknown }).type === "text" && typeof (block as { text?: unknown }).text === "string") {
+				result += ` ${(block as { text: string }).text}`;
+			}
+		}
+
+		return normalizeTreePreview(result).slice(0, maxLength);
+	};
+
+	const getTreeAutocompletePreview = (entry: SessionEntry): string => {
+		switch (entry.type) {
+			case "message": {
+				switch (entry.message.role) {
+					case "user": {
+						const text = extractTreeTextPreview((entry.message as { content?: unknown }).content);
+						return `user: ${text || "(empty message)"}`;
+					}
+					case "assistant": {
+						const assistant = entry.message as { content?: unknown; errorMessage?: unknown; stopReason?: unknown };
+						const text = extractTreeTextPreview(assistant.content);
+						const fallback =
+							typeof assistant.errorMessage === "string" && assistant.errorMessage.trim().length > 0
+								? assistant.errorMessage.trim()
+								: assistant.stopReason === "aborted"
+									? "aborted"
+									: "(tool-only step)";
+						return `assistant: ${text || fallback}`;
+					}
+					case "toolResult": {
+						const toolMessage = entry.message as { toolName?: unknown; content?: unknown; isError?: unknown };
+						const toolName = typeof toolMessage.toolName === "string" ? toolMessage.toolName : "tool";
+						const text = extractTreeTextPreview(toolMessage.content);
+						const prefix = toolMessage.isError ? `[${toolName} error]` : `[${toolName}]`;
+						return text ? `${prefix} ${text}` : prefix;
+					}
+					default: {
+						const text = extractTreeTextPreview((entry.message as { content?: unknown }).content);
+						return text ? `${entry.message.role}: ${text}` : entry.message.role;
+					}
+				}
+			}
+			case "branch_summary":
+				return `branch summary: ${normalizeTreePreview(entry.summary)}`;
+			case "compaction":
+				return `compaction: ${normalizeTreePreview(entry.summary || `summarized ${Math.round(entry.tokensBefore / 1000)}k tokens`)}`;
+			case "settings_change": {
+				const changes = [
+					entry.model ? `model ${entry.model.modelId}` : undefined,
+					entry.thinkingLevel ? `thinking ${entry.thinkingLevel}` : undefined,
+				]
+					.filter(Boolean)
+					.join(" · ");
+				return `settings: ${changes || "updated"}`;
+			}
+			case "session_info":
+				return `session: ${entry.name?.trim() || "title updated"}`;
+			case "label":
+				return entry.label?.trim()
+					? `label: ${entry.label.trim()} → ${entry.targetId}`
+					: `label cleared from ${entry.targetId}`;
+			case "extension":
+				return `extension: ${entry.namespace}${entry.subtype ? `/${entry.subtype}` : ""}`;
+			default:
+				return "entry";
+		}
+	};
+
+	const buildTreeAutocompleteItems = (
 		nodes: SessionTreeNode[],
-		prefix = "",
+		currentLeafId: string | null,
+		ancestorIsLast: boolean[] = [],
 	): Array<{ value: string; label: string; description: string }> => {
 		const items: Array<{ value: string; label: string; description: string }> = [];
 		for (const [index, node] of nodes.entries()) {
 			const isLast = index === nodes.length - 1;
-			const branchPrefix = `${prefix}${isLast ? "└─" : "├─"}`;
+			const treePrefix = `${ancestorIsLast.map((value) => (value ? "  " : "│ ")).join("")}${isLast ? "└─" : "├─"}`;
+			const label = session.getLabel(node.entry.id);
+			const currentMarker = node.entry.id === currentLeafId ? "● " : "";
+			const preview = getTreeAutocompletePreview(node.entry);
 			items.push({
 				value: node.entry.id,
-				label: `${branchPrefix} ${node.entry.id}`,
-				description: node.entry.type,
+				label: `${treePrefix} ${currentMarker}${label ? `[${label}] ` : ""}${preview}`,
+				description: `${node.entry.id} · ${node.entry.type}${node.entry.id === currentLeafId ? " · current" : ""}`,
 			});
-			items.push(...flattenTree(node.children, `${prefix}${isLast ? "  " : "│ "}`));
+			items.push(...buildTreeAutocompleteItems(node.children, currentLeafId, [...ancestorIsLast, isLast]));
 		}
 		return items;
 	};
@@ -250,7 +435,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			name: "tree",
 			description: "Show the current session tree or switch branches",
 			getArgumentCompletions: async (prefix) => {
-				const items = flattenTree(session.getTree()).map((item) => ({
+				const items = buildTreeAutocompleteItems(session.getTree(), session.getLeafId()).map((item) => ({
 					value: `switch ${item.value}`,
 					label: item.label,
 					description: item.description,
@@ -310,6 +495,18 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				return filterAutocompleteItems(items, prefix);
 			},
 		},
+		{
+			name: "thinking",
+			description: "Show or change thinking level",
+			getArgumentCompletions: async (prefix) => {
+				const items = THINKING_LEVELS.map((level) => ({
+					value: level,
+					label: level,
+					description: getThinkingLevelDescription(level),
+				}));
+				return filterAutocompleteItems(items, prefix);
+			},
+		},
 		{ name: "settings", description: "Show current settings" },
 		{ name: "extensions", description: "Show configured extensions" },
 		{ name: "packages", description: "Show loaded resource packages" },
@@ -326,21 +523,102 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	}
 	editor.setAutocompleteProvider(new CombinedAutocompleteProvider(slashCommands, options.cwd, getToolPath("fd")));
 	editor.setAutocompleteMaxVisible(8);
-	footer.setStatusText(options.safeMode ? "safe-mode · Tab autocomplete · F1 help" : "Tab autocomplete · F1 help");
+	refreshFooterStatus();
 
 	const runPrompt = async (prompt: string): Promise<void> => {
 		trace("runtime", "tui.prompt.start", { promptLength: prompt.length });
 		appendUser(prompt);
-		const assistant = new StreamingMessage({
-			markdownTheme: theme.markdown,
-			messageTheme: theme.assistantMessage,
-			label: "Assistant",
-			onInvalidate: () => tui.requestRender(),
-		});
-		messages.addChild(assistant);
 		footer.setThinking(true);
 		activeController = new AbortController();
 		pendingToolViews.clear();
+
+		type TurnUiState = {
+			turnIndex: number;
+			marker?: TimelineMarker;
+			waiting?: SystemMessage;
+			thinking?: StreamingMessage;
+			assistant?: StreamingMessage;
+		};
+		let currentTurn: TurnUiState | null = null;
+
+		const clearWaiting = (turn = currentTurn): void => {
+			if (!turn?.waiting) return;
+			removeRich(turn.waiting);
+			turn.waiting = undefined;
+		};
+
+		const finalizeThinkingView = (turn = currentTurn): void => {
+			if (turn?.thinking?.getIsStreaming()) {
+				turn.thinking.finalize();
+			}
+		};
+
+		const finalizeAssistantView = (turn = currentTurn): void => {
+			if (turn?.assistant?.getIsStreaming()) {
+				turn.assistant.finalize();
+			}
+		};
+
+		const finalizeTurn = (turn = currentTurn): void => {
+			if (!turn) return;
+			clearWaiting(turn);
+			finalizeThinkingView(turn);
+			finalizeAssistantView(turn);
+			if (currentTurn === turn) currentTurn = null;
+			tui.requestRender();
+		};
+
+		const startTurn = (turnIndex: number): TurnUiState => {
+			finalizeTurn();
+			const marker = new TimelineMarker(`Turn ${turnIndex + 1}`, {
+				theme: theme.systemMessage,
+				onInvalidate: () => tui.requestRender(),
+			});
+			appendRich(marker);
+			const waiting = new SystemMessage("Thinking…", {
+				theme: theme.systemMessage,
+				variant: "muted",
+				onInvalidate: () => tui.requestRender(),
+			});
+			appendRich(waiting);
+			currentTurn = { turnIndex, marker, waiting };
+			footer.setThinking(true);
+			return currentTurn;
+		};
+
+		const ensureTurn = (): TurnUiState => currentTurn ?? startTurn(0);
+
+		const ensureThinkingView = (): StreamingMessage => {
+			const turn = ensureTurn();
+			clearWaiting(turn);
+			if (!turn.thinking) {
+				turn.thinking = new StreamingMessage({
+					markdownTheme: theme.markdown,
+					messageTheme: thinkingMessageTheme,
+					collapsible: true,
+					collapsedPreviewLines: 2,
+					onInvalidate: () => tui.requestRender(),
+				});
+				allThinkingViews.push(turn.thinking);
+				appendRich(turn.thinking);
+			}
+			return turn.thinking;
+		};
+
+		const ensureAssistantView = (): StreamingMessage => {
+			const turn = ensureTurn();
+			clearWaiting(turn);
+			finalizeThinkingView(turn);
+			if (!turn.assistant) {
+				turn.assistant = new StreamingMessage({
+					markdownTheme: theme.markdown,
+					messageTheme: theme.assistantMessage,
+					onInvalidate: () => tui.requestRender(),
+				});
+				appendRich(turn.assistant);
+			}
+			return turn.assistant;
+		};
 
 		try {
 			const result = await runAgent(
@@ -408,27 +686,45 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 					},
 				},
 				{
+					onTurnStart: (turnIndex) => {
+						startTurn(turnIndex);
+					},
 					onText: (text) => {
-						assistant.appendToken(text);
+						ensureAssistantView().appendToken(text);
+						footer.setThinking(false);
 						tui.requestRender();
 					},
-					onThinking: () => {
+					onThinking: (text) => {
 						footer.setThinking(true);
+						ensureThinkingView().appendToken(text);
+						tui.requestRender();
 					},
 					onTurnEnd: ({ costs }) => {
 						footer.setTokens(costs.totalInputTokens, costs.totalOutputTokens);
 						footer.setCost(costs.totalCost);
+						finalizeTurn();
+						footer.setThinking(false);
 					},
 					onToolStart: (toolName, toolCallId, args) => {
+						const turn = ensureTurn();
+						clearWaiting(turn);
+						finalizeThinkingView(turn);
 						const toolView = new ToolExecution(
 							toolName,
 							typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {},
-							{ theme: theme.toolExecution, onInvalidate: () => tui.requestRender() },
+							{
+								theme: theme.toolExecution,
+								maxExpandedLines: 40,
+								maxInputLines: 10,
+								maxCollapsedPreviewLines: 3,
+								onInvalidate: () => tui.requestRender(),
+							},
 						);
 						toolView.setRunning();
 						pendingToolViews.set(toolCallId, toolView);
-						messages.addChild(toolView);
-						tui.requestRender();
+						allToolViews.push(toolView);
+						appendRich(toolView);
+						footer.setThinking(false);
 					},
 					onToolEnd: (_toolName, isError, info) => {
 						const toolView = pendingToolViews.get(info.toolCallId);
@@ -447,7 +743,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 						if (diffText) {
 							const diffs = parseMultiDiff(diffText, toolView.getName());
 							if (diffs.length > 0) {
-								messages.addChild(
+								appendRich(
 									new MultiDiffViewer(diffs, {
 										theme: theme.diffViewer,
 										maxLinesPerHunk: 12,
@@ -461,19 +757,20 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				},
 			);
 
-			assistant.finalize();
+			finalizeTurn();
 			footer.setTokens(result.profile.costs.totalInputTokens, result.profile.costs.totalOutputTokens);
 			footer.setCost(result.profile.costs.totalCost);
 			if (result.error) {
-				appendSystem(`error: ${result.error}`);
+				appendSystem(result.error, "error");
 			}
 			if (result.aborted) {
-				appendSystem("aborted");
+				appendSystem("aborted", "warning");
 			}
 		} catch (error) {
 			trace("runtime", "tui.prompt.error", { error: error instanceof Error ? error.message : String(error) });
-			appendSystem(formatModelResolutionError(error));
+			reportError(error);
 		} finally {
+			finalizeTurn();
 			trace("runtime", "tui.prompt.end", { activeToolViews: pendingToolViews.size });
 			footer.setThinking(false);
 			activeController = null;
@@ -481,12 +778,43 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		}
 	};
 
+	const setThinkingLevel = async (level: ThinkingLevel): Promise<void> => {
+		options.settings.thinkingLevel = level;
+		await saveSettings({ thinkingLevel: level }, "project", options.cwd);
+		refreshFooterStatus();
+		appendSystem(`thinking level set to ${level} — ${getThinkingLevelDescription(level)}`, "success");
+	};
+
+	const openThinkingSelector = (): void => {
+		trace("runtime", "tui.overlay.open", { overlay: "thinking-selector" });
+		const items = THINKING_LEVELS.map((level) => ({
+			value: level,
+			label: level === options.settings.thinkingLevel ? `${level} (current)` : level,
+			description: getThinkingLevelDescription(level),
+		}));
+		const list = new SelectList(items, items.length, theme.selectList);
+		list.onSelect = (item) => {
+			handle.hide();
+			tui.setFocus(editor);
+			invokeSafely(async () => {
+				if (isThinkingLevel(item.value) && item.value !== options.settings.thinkingLevel) {
+					await setThinkingLevel(item.value);
+				}
+			}, "thinking selector");
+		};
+		list.onCancel = () => {
+			handle.hide();
+			tui.setFocus(editor);
+		};
+		const handle = tui.showOverlay(list, { anchor: "center", width: "60%", maxHeight: 10 });
+	};
+
 	const openModelSelector = async (): Promise<void> => {
 		trace("runtime", "tui.overlay.open", { overlay: "model-selector" });
 		const availability = await listModelAvailability(options.authStorage);
 		const available = availability.filter((entry) => entry.available);
 		if (available.length === 0) {
-			appendSystem("No authenticated models available. Use /login or set OPENROUTER_API_KEY.");
+			appendSystem("No authenticated models available. Use /login or set OPENROUTER_API_KEY.", "warning");
 			return;
 		}
 
@@ -501,13 +829,15 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			})),
 			{
 				theme: theme.selectList,
-				onSelect: async (model) => {
-					trace("runtime", "tui.model.select", { model: model.id });
-					options.settings.model = model.id;
-					options.settings.provider = getModelProviderForKey(model.id) ?? options.settings.provider;
-					await saveSettings({ model: model.id }, "project", options.cwd);
-					footer.setModel(model.id);
-					appendSystem(`model set to ${model.id}`);
+				onSelect: (model) => {
+					invokeSafely(async () => {
+						trace("runtime", "tui.model.select", { model: model.id });
+						options.settings.model = model.id;
+						options.settings.provider = getModelProviderForKey(model.id) ?? options.settings.provider;
+						await saveSettings({ model: model.id }, "project", options.cwd);
+						footer.setModel(model.id);
+						appendSystem(`model set to ${model.id}`, "success");
+					}, "model selection");
 				},
 			},
 		);
@@ -529,16 +859,18 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			})),
 			{
 				theme: theme.selectList,
-				onSelect: async (result) => {
-					if (result.kind === "new") {
-						trace("runtime", "tui.session.new", {});
-						session = SessionManager.create(options.cwd);
-						appendSystem(`new session ${session.getSessionId()}`);
-						return;
-					}
-					trace("runtime", "tui.session.switch", { sessionPath: result.session.id });
-					session = SessionManager.open(result.session.id);
-					appendSystem(`switched session -> ${result.session.id}`);
+				onSelect: (result) => {
+					invokeSafely(async () => {
+						if (result.kind === "new") {
+							trace("runtime", "tui.session.new", {});
+							session = SessionManager.create(options.cwd);
+							appendSystem(`new session ${session.getSessionId()}`, "success");
+							return;
+						}
+						trace("runtime", "tui.session.switch", { sessionPath: result.session.id });
+						session = SessionManager.open(result.session.id);
+						appendSystem(`switched session -> ${result.session.id}`, "success");
+					}, "session switch");
 				},
 			},
 		);
@@ -546,36 +878,34 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 
 	const openTreeSelector = (): void => {
 		trace("runtime", "tui.overlay.open", { overlay: "tree-selector" });
-		const items = flattenTree(session.getTree());
-		if (items.length === 0) {
-			appendSystem("tree: empty session");
+		const tree = session.getTree();
+		if (tree.length === 0) {
+			appendSystem("tree: empty session", "warning");
 			return;
 		}
-		const currentLeafId = session.getLeafId();
-		const list = new SelectList(
-			items.map((item) => ({
-				...item,
-				label: item.value === currentLeafId ? `${item.label} (current)` : item.label,
-			})),
-			items.length,
-			theme.selectList,
-		);
-		list.onSelect = (item) => {
-			handle.hide();
-			try {
-				trace("runtime", "tui.tree.switch", { entryId: item.value });
-				session.branch(item.value);
-				appendSystem(`branch context set to ${item.value}`);
-			} catch (error) {
-				appendSystem(`tree switch failed: ${error instanceof Error ? error.message : String(error)}`);
-			}
-			tui.setFocus(editor);
-		};
-		list.onCancel = () => {
-			handle.hide();
-			tui.setFocus(editor);
-		};
-		const handle = tui.showOverlay(list, { anchor: "center", width: "70%", maxHeight: 18 });
+		createTreeSelector(tui, tree, {
+			theme,
+			currentLeafId: session.getLeafId(),
+			getLabel: (entryId) => session.getLabel(entryId),
+			maxVisibleRows: 8,
+			maxDetailLines: 5,
+			width: "84%",
+			maxHeight: 24,
+			onSelect: (entryId) => {
+				try {
+					trace("runtime", "tui.tree.switch", { entryId });
+					session.branch(entryId);
+					appendSystem(`branch context set to ${entryId}`, "success");
+				} catch (error) {
+					reportError(error, "tree switch failed");
+				} finally {
+					tui.setFocus(editor);
+				}
+			},
+			onCancel: () => {
+				tui.setFocus(editor);
+			},
+		});
 	};
 
 	const openProviderSelector = (): void => {
@@ -586,11 +916,11 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			description: provider.id,
 		}));
 		const list = new SelectList(providers, providers.length, theme.selectList);
-		list.onSelect = async (item) => {
+		list.onSelect = (item) => {
 			handle.hide();
 			tui.setFocus(editor);
 			trace("runtime", "tui.login.start", { providerId: item.value });
-			await login(item.value);
+			invokeSafely(() => login(item.value), "login");
 		};
 		list.onCancel = () => {
 			handle.hide();
@@ -609,6 +939,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				isLoginCancelledError(error)
 					? "Login cancelled."
 					: `login failed: ${error instanceof Error ? error.message : String(error)}`,
+				isLoginCancelledError(error) ? "warning" : "error",
 			);
 		} finally {
 			if (loginController === controller) {
@@ -635,6 +966,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				"  /sessions",
 				"  /tree",
 				"  /theme [name]",
+				"  /thinking [level]",
 				"  /skills",
 				"  /packages",
 				"  /extensions",
@@ -646,6 +978,10 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				"  F3           Session selector",
 				"  F4           Tree selector",
 				"  F5           Login selector",
+				"  F6           Thinking selector",
+				"  Shift+Tab    Cycle thinking level",
+				"  Ctrl+O       Expand/collapse tool output",
+				"  Ctrl+T       Expand/collapse thinking blocks",
 				"  Ctrl+C       Abort run / exit when idle",
 				"",
 				"Press any key to dismiss.",
@@ -680,6 +1016,10 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			openProviderSelector();
 			return;
 		}
+		if (trimmed === "/thinking") {
+			openThinkingSelector();
+			return;
+		}
 
 		const slashLoginController = trimmed === "/login" || trimmed.startsWith("/login ") ? new AbortController() : null;
 		if (slashLoginController) {
@@ -709,6 +1049,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			return;
 		}
 
+		refreshFooterStatus();
 		if (result.output) appendSystem(result.output);
 		if (result.action === "prompt") {
 			await runPrompt(result.prompt);
@@ -720,7 +1061,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		}
 		if (result.action === "quit") {
 			stopping = true;
-			tui.stop();
+			safeStop();
 			resolveStopped?.();
 		}
 	};
@@ -730,8 +1071,28 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		editor.setText("");
 		if (!text) return;
 		editor.addToHistory(text);
-		void handleCommand(text);
+		invokeSafely(() => handleCommand(text), "command");
 	};
+
+	const exitFatal = (error: unknown, origin: string): void => {
+		trace("runtime", "tui.fatal", {
+			origin,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		safeStop();
+		process.stderr.write(`fatal (${origin}): ${formatModelResolutionError(error)}\n`);
+		process.exit(1);
+	};
+	const onUncaughtException = (error: Error) => exitFatal(error, "uncaughtException");
+	const onUnhandledRejection = (reason: unknown) => exitFatal(reason, "unhandledRejection");
+	const onSigterm = () => {
+		safeStop();
+		process.exit(143);
+	};
+
+	process.on("uncaughtException", onUncaughtException);
+	process.on("unhandledRejection", onUnhandledRejection);
+	process.on("SIGTERM", onSigterm);
 
 	tui.addInputListener((data) => {
 		if (matchesKey(data, Key.f1)) {
@@ -739,11 +1100,11 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.f2)) {
-			void openModelSelector();
+			invokeSafely(() => openModelSelector(), "model selector");
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.f3)) {
-			void openSessionSelector();
+			invokeSafely(() => openSessionSelector(), "session selector");
 			return { consume: true };
 		}
 		if (matchesKey(data, Key.f4)) {
@@ -754,6 +1115,24 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 			openProviderSelector();
 			return { consume: true };
 		}
+		if (matchesKey(data, Key.f6)) {
+			openThinkingSelector();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.shift("tab"))) {
+			invokeSafely(async () => {
+				await setThinkingLevel(getNextThinkingLevel(options.settings.thinkingLevel, 1));
+			}, "thinking cycle");
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("o"))) {
+			toggleAllToolExpansion();
+			return { consume: true };
+		}
+		if (matchesKey(data, Key.ctrl("t"))) {
+			toggleAllThinkingBlocks();
+			return { consume: true };
+		}
 		if (data === "\u0003") {
 			if (activeController) {
 				activeController.abort();
@@ -762,7 +1141,7 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 				loginController.abort();
 			} else if (!stopping) {
 				stopping = true;
-				tui.stop();
+				safeStop();
 				resolveStopped?.();
 			}
 			return { consume: true };
@@ -770,23 +1149,32 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 		return undefined;
 	});
 
-	appendSystem(`my-agent TUI · theme ${selectedTheme.name}`);
-	appendSystem("Type your task in the editor below. Tab autocompletes slash commands, models, themes, and tree ids.");
-	appendSystem("Use /help for commands. F1 opens help. Ctrl+C aborts a run or exits when idle.");
+	appendSystem(`my-agent TUI · theme ${selectedTheme.name}`, "muted");
+	appendSystem(
+		"Tab autocompletes slash commands, models, themes, tree ids, and thinking levels. F1 help · F6 thinking · Shift+Tab cycles thinking · Ctrl+O tools · Ctrl+T thinking.",
+		"muted",
+	);
 	try {
 		const resolved = await resolveConfiguredModel(options.settings, options.authStorage);
-		appendSystem(`ready: ${resolved.key} via ${resolved.model.provider}`);
+		appendSystem(`ready: ${resolved.key} via ${resolved.model.provider}`, "success");
 	} catch {
-		appendSystem("no model connected yet — use /login or set OPENROUTER_API_KEY, then /model");
+		appendSystem("no model connected yet — use /login or set OPENROUTER_API_KEY, then /model", "warning");
 	}
 	if (options.safeMode) {
-		appendSystem("safe-mode enabled");
+		appendSystem("safe-mode enabled", "warning");
 	}
 
-	tui.start();
-	await new Promise<void>((resolve) => {
-		resolveStopped = resolve;
-	});
+	try {
+		tui.start();
+		await new Promise<void>((resolve) => {
+			resolveStopped = resolve;
+		});
+	} finally {
+		process.off("uncaughtException", onUncaughtException);
+		process.off("unhandledRejection", onUnhandledRejection);
+		process.off("SIGTERM", onSigterm);
+		safeStop();
+	}
 }
 
 function requirePiTui(): typeof import("@mariozechner/pi-tui") {
