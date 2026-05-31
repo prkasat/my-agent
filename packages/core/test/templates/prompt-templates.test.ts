@@ -3,11 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-	type PromptTemplate,
 	expandTemplate,
 	getTemplateHelp,
 	loadPromptTemplates,
 	matchTemplate,
+	type PromptTemplate,
 } from "../../src/templates/prompt-templates.js";
 
 describe("expandTemplate", () => {

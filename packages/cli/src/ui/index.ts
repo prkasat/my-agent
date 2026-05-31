@@ -1,136 +1,121 @@
 /**
  * Agent TUI Components
  *
- * Provides agent-specific UI components built on top of @mariozechner/pi-tui.
+ * Provides agent-specific UI components built on top of @earendil-works/pi-tui.
  */
 
 // Re-export commonly used pi-tui types and utilities
 export {
+	Box,
 	type Component,
 	Container,
-	type Focusable,
-	isFocusable,
-	TUI,
-	type OverlayHandle,
-	type OverlayOptions,
 	CURSOR_MARKER,
-	visibleWidth,
-} from "@mariozechner/pi-tui";
-
-export {
-	Text,
-	Markdown,
-	type MarkdownTheme,
 	type DefaultTextStyle,
 	Editor,
 	type EditorOptions,
 	type EditorTheme,
-	SelectList,
+	type Focusable,
+	isFocusable,
+	Markdown,
+	type MarkdownTheme,
+	type OverlayHandle,
+	type OverlayOptions,
+	ProcessTerminal,
 	type SelectItem,
+	SelectList,
 	type SelectListTheme,
 	Spacer,
-	Box,
-	ProcessTerminal,
 	type Terminal,
+	Text,
+	TUI,
 	truncateToWidth,
+	visibleWidth,
 	wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
-
-// Theme system
+} from "@earendil-works/pi-tui";
 export {
-	type AgentTheme,
-	type ToolExecutionTheme,
-	type FooterTheme,
-	type SystemMessageTheme,
-	type UserMessageTheme,
-	type AssistantMessageTheme,
-	type DiffViewerTheme,
-	defaultAgentTheme,
-	defaultToolExecutionTheme,
-	defaultFooterTheme,
-	defaultSystemMessageTheme,
-	defaultUserMessageTheme,
-	defaultAssistantMessageTheme,
-	defaultDiffViewerTheme,
-	defaultMarkdownTheme,
-	defaultEditorTheme,
-	defaultSelectListTheme,
-	createTheme,
-} from "./theme.js";
-
-// Agent-specific components
-export {
-	StreamingMessage,
-	type StreamingMessageOptions,
-} from "./components/streaming-message.js";
-
-export {
-	ToolExecution,
-	type ToolExecutionState,
-	type ToolExecutionOptions,
-	type ToolStatus,
-} from "./components/tool-execution.js";
-
-export {
-	Footer,
-	type FooterData,
-	type FooterOptions,
-	type AgentMode,
-} from "./components/footer.js";
-
-export {
-	SystemMessage,
-	type SystemMessageOptions,
-	type SystemMessageVariant,
-} from "./components/system-message.js";
-
-export {
-	TimelineMarker,
-	type TimelineMarkerOptions,
-} from "./components/timeline-marker.js";
-
-export {
-	UserMessage,
-	type UserMessageOptions,
-} from "./components/user-message.js";
-
-export {
-	DiffViewer,
-	MultiDiffViewer,
-	type DiffViewerOptions,
 	type DiffData,
 	type DiffHunk,
+	DiffViewer,
+	type DiffViewerOptions,
 	type MultiDiffData,
+	MultiDiffViewer,
 	parseDiff,
 	parseMultiDiff,
 } from "./components/diff-viewer.js";
-
+export {
+	type AgentMode,
+	Footer,
+	type FooterData,
+	type FooterOptions,
+} from "./components/footer.js";
 // Selectors
 export {
+	COMMON_MODELS,
 	createModelSelector,
 	type ModelInfo,
 	type ModelSelectorOptions,
-	COMMON_MODELS,
 } from "./components/selectors/model-selector.js";
-
 export {
 	createSessionSelector,
 	type SessionInfo,
 	type SessionSelectorOptions,
 	type SessionSelectorResult,
 } from "./components/selectors/session-selector.js";
-
 export {
 	createTreeSelector,
+	TreeSelectorComponent,
 	type TreeSelectorComponentOptions,
 	type TreeSelectorOptions,
-	TreeSelectorComponent,
 } from "./components/selectors/tree-selector.js";
-
+// Agent-specific components
+export {
+	StreamingMessage,
+	type StreamingMessageOptions,
+} from "./components/streaming-message.js";
+export {
+	SystemMessage,
+	type SystemMessageOptions,
+	type SystemMessageVariant,
+} from "./components/system-message.js";
+export {
+	TimelineMarker,
+	type TimelineMarkerOptions,
+} from "./components/timeline-marker.js";
+export {
+	ToolExecution,
+	type ToolExecutionOptions,
+	type ToolExecutionState,
+	type ToolStatus,
+} from "./components/tool-execution.js";
+export {
+	UserMessage,
+	type UserMessageOptions,
+} from "./components/user-message.js";
 // Keybindings
 export {
 	AGENT_KEYBINDINGS,
+	getActionDescription,
 	getAgentKeybindingActions,
 	getDefaultKeyForAction,
-	getActionDescription,
 } from "./keybindings.js";
+// Theme system
+export {
+	type AgentTheme,
+	type AssistantMessageTheme,
+	createTheme,
+	type DiffViewerTheme,
+	defaultAgentTheme,
+	defaultAssistantMessageTheme,
+	defaultDiffViewerTheme,
+	defaultEditorTheme,
+	defaultFooterTheme,
+	defaultMarkdownTheme,
+	defaultSelectListTheme,
+	defaultSystemMessageTheme,
+	defaultToolExecutionTheme,
+	defaultUserMessageTheme,
+	type FooterTheme,
+	type SystemMessageTheme,
+	type ToolExecutionTheme,
+	type UserMessageTheme,
+} from "./theme.js";

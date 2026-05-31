@@ -1,13 +1,13 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import {
+	getOAuthApiKey,
+	getOAuthProvider,
+	getOAuthProviders,
 	type OAuthAuthInfo,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
 	type OAuthPrompt,
-	getOAuthApiKey,
-	getOAuthProvider,
-	getOAuthProviders,
 } from "@my-agent/ai";
 import { trace } from "../runtime/trace.js";
 
@@ -24,7 +24,7 @@ export type Credential = ApiKeyCredential | OAuthCredential;
 
 const AUTH_DIR = path.join(process.env.HOME || ".", ".my-agent");
 const AUTH_FILE = path.join(AUTH_DIR, "auth.json");
-const LOCK_FILE = `${AUTH_FILE}.lock`;
+const _LOCK_FILE = `${AUTH_FILE}.lock`;
 
 interface AuthFileData {
 	credentials?: Record<string, Credential>;
@@ -256,7 +256,7 @@ export class AuthStorage {
 		return await this.withLock(async () => {
 			await this.load();
 			const latest = this.credentials.get(providerId);
-			if (!latest || latest.type !== "oauth") {
+			if (latest?.type !== "oauth") {
 				return undefined;
 			}
 

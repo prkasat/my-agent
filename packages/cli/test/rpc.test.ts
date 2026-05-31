@@ -7,13 +7,13 @@ import {
 	type Context,
 	EventStream,
 	type Model,
-	type StreamOptions,
 	registerProvider,
+	type StreamOptions,
 } from "@my-agent/ai";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { AuthStorage } from "../src/config/auth-storage.js";
 import { getDefaultSettings } from "../src/config/settings.js";
-import { type RpcEvent, type RpcResponse, createRpcServer } from "../src/modes/rpc.js";
+import { createRpcServer, type RpcEvent, type RpcResponse } from "../src/modes/rpc.js";
 
 let currentStream: (
 	model: Model,

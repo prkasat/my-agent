@@ -2,7 +2,7 @@
  * Footer - Status bar displaying model, mode, tokens, and cost
  */
 
-import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { FooterTheme } from "../theme.js";
 
 export type AgentMode = "normal" | "plan" | "auto";
@@ -188,7 +188,7 @@ export class Footer implements Component {
 	 * Build the right side of the footer with progressive compaction for narrow terminals.
 	 * Returns the most compact format that fits.
 	 */
-	private buildRightSide(totalWidth: number, leftWidth: number, theme: FooterTheme, separator: string): string {
+	private buildRightSide(totalWidth: number, _leftWidth: number, theme: FooterTheme, separator: string): string {
 		const minLeftWidth = 10; // Minimum space for left side
 		const availableForRight = Math.max(1, totalWidth - minLeftWidth);
 

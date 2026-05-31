@@ -1,6 +1,7 @@
 {
 	"name": "@my-agent/core",
 	"version": "0.1.0",
+	"license": "MIT",
 	"type": "module",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
@@ -11,11 +12,8 @@
 	"dependencies": {
 		"@my-agent/ai": "*",
 		"@silvia-odwyer/photon-node": "^0.3.3",
-		"@sinclair/typebox": "^0.34.0",
-		"diff": "^8.0.4",
-		"strip-ansi": "^7.1.0"
-	},
-	"devDependencies": {
-		"@types/diff": "^7.0.2"
+		"@sinclair/typebox": "^0.34.49",
+		"diff": "^9.0.0",
+		"strip-ansi": "^7.2.0"
 	}
 }

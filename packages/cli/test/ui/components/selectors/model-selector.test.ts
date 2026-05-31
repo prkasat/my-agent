@@ -2,12 +2,12 @@
  * Tests for ModelSelector component
  */
 
-import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
+import type { SelectListTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
 import {
 	COMMON_MODELS,
-	type ModelInfo,
 	createModelSelector,
+	type ModelInfo,
 } from "../../../../src/ui/components/selectors/model-selector.js";
 
 // Simple theme without styling for testing

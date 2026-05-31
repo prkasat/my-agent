@@ -96,7 +96,7 @@ describe("regressions — middleware goes through runGuarded", () => {
 				},
 			}),
 		);
-		const out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
+		const _out = await runner.runToolMiddleware({ toolCallId: "c1", toolName: "bash", args: {} }, async () => ({
 			content: [{ type: "text", text: "ok" }],
 		}));
 		// After double-next, the middleware threw on the second call; the

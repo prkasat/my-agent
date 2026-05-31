@@ -2,7 +2,7 @@
  * UserMessage - Styled display of user input messages
  */
 
-import type { Component } from "@mariozechner/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import type { UserMessageTheme } from "../theme.js";
 import { getPanelContentWidth, renderPanel, wrapStyledText } from "./panel.js";
 

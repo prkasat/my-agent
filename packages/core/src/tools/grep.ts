@@ -11,9 +11,9 @@ import { wrapToolDefinition } from "./tool-definition.js";
 import { ensureTool } from "./tools-manager.js";
 import {
 	DEFAULT_MAX_BYTES,
+	formatSize,
 	GREP_MAX_LINE_LENGTH,
 	type TruncationResult,
-	formatSize,
 	truncateHead,
 	truncateLine,
 } from "./truncate.js";

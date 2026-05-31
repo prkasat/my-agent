@@ -1,5 +1,5 @@
-import { EventStream } from "@my-agent/ai";
 import type { AssistantMessage, Message, ToolCallContent, ToolResultMessage } from "@my-agent/ai";
+import { EventStream } from "@my-agent/ai";
 import { Value } from "@sinclair/typebox/value";
 import { calculateUsageCost } from "./cost-tracker.js";
 import type { AgentContext, AgentEvent, AgentLoopConfig, AgentMessage, AgentToolResult } from "./types.js";
@@ -393,7 +393,7 @@ async function streamAssistantResponse(
 	let llmMessages: Message[];
 	try {
 		llmMessages = config.convertToLlm(effectiveContext.messages);
-	} catch (err) {
+	} catch (_err) {
 		agentStream.push({ type: "agent_end", reason: "error" });
 		return null;
 	}

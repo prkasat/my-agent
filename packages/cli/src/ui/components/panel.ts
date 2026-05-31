@@ -1,4 +1,4 @@
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const identity = (text: string): string => text;
 
@@ -17,11 +17,7 @@ export function getPanelContentWidth(width: number, paddingX = 1): number {
 	return Math.max(1, width - 4 - Math.max(0, paddingX) * 2);
 }
 
-export function wrapStyledText(
-	text: string,
-	width: number,
-	style: (text: string) => string = identity,
-): string[] {
+export function wrapStyledText(text: string, width: number, style: (text: string) => string = identity): string[] {
 	const lines: string[] = [];
 	for (const paragraph of text.split("\n")) {
 		if (paragraph.length === 0) {

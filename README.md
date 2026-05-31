@@ -14,14 +14,20 @@ Private-first terminal agent for coding and task-specific workflows.
 - trusted local extensions with tools, commands, and middleware
 - prompt templates, skills, packages, and themes
 - structured tracing, replay, profiling, and mock eval harness
-- reusable TUI component/theme layer built on `@mariozechner/pi-tui`
+- reusable TUI component/theme layer built on `@earendil-works/pi-tui`
 
 ## Quick start
+
+Requirements:
+
+- Node.js 22.19.0 or newer
+- npm 10 or newer
 
 ```bash
 npm install
 npm run build
 npm test
+npm run lint
 ```
 
 Start the agent (interactive TTY defaults to the TUI):
@@ -126,6 +132,13 @@ Key docs:
 - `docs/security.md`
 - `docs/architecture.md`
 
+Project docs:
+
+- `CONTRIBUTING.md`
+- `SECURITY.md`
+- `CHANGELOG.md`
+- `LICENSE`
+
 ## Validation
 
 Current repo validation targets:
@@ -138,6 +151,14 @@ Current repo validation targets:
 ## Checklist
 
 The full target state is tracked in `PRODUCTION_READINESS_CHECKLIST.md`.
+
+## Contributing
+
+Contributions are welcome. Start with `CONTRIBUTING.md`, then run the validation commands listed above before opening a pull request.
+
+## License
+
+MIT. See `LICENSE`.
 
 ## Notes
 

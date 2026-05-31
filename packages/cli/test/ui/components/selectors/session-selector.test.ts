@@ -2,9 +2,9 @@
  * Tests for SessionSelector component
  */
 
-import type { SelectListTheme, TUI } from "@mariozechner/pi-tui";
+import type { SelectListTheme, TUI } from "@earendil-works/pi-tui";
 import { describe, expect, it, vi } from "vitest";
-import { type SessionInfo, createSessionSelector } from "../../../../src/ui/components/selectors/session-selector.js";
+import { createSessionSelector, type SessionInfo } from "../../../../src/ui/components/selectors/session-selector.js";
 
 // Simple theme without styling for testing
 const testTheme: SelectListTheme = {

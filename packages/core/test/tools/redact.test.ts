@@ -23,13 +23,16 @@ describe("redactSecrets", () => {
 	});
 
 	it("redacts AWS access keys, Google API keys, Stripe, Slack", () => {
-		const input =
-			"REDACTED_AWS_ACCESS_KEY REDACTED_GOOGLE_API_KEY REDACTED_STRIPE_TOKEN REDACTED_SLACK_TOKEN";
+		const awsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
+		const googleKey = ["AIza", "SyAbCdEfGhIjKlMnOpQrStUvWxYz0123456"].join("");
+		const stripeKey = ["sk", "live", "AAAAAAAAAAAAAAAAAAAAAAAA"].join("_");
+		const slackToken = ["xoxb", "1234567890", "AAAAAAAAAAAAAAAAAAAA"].join("-");
+		const input = `${awsKey} ${googleKey} ${stripeKey} ${slackToken}`;
 		const out = redactSecrets(input);
 		expect(out).not.toMatch(/AKIA[0-9A-Z]{16}/);
 		expect(out).not.toMatch(/AIza[A-Za-z0-9_-]{35}/);
 		expect(out).not.toMatch(/sk_live_[A-Za-z0-9]{20,}/);
-		expect(out).not.toMatch(/xoxb-1234567890-AAAA/);
+		expect(out).not.toContain(slackToken);
 	});
 
 	it("redacts JWTs without false-positiving on non-JWT base64", () => {

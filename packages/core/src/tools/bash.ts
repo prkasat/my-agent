@@ -23,7 +23,7 @@ import { getShellConfig, getShellEnv } from "./shell-utils.js";
 import { cleanupTempFile, getTempFilePath, preserveTempFile } from "./temp-file-manager.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, formatSize, truncateTail } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateTail } from "./truncate.js";
 
 const bashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),

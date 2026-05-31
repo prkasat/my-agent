@@ -3,8 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentMessage } from "../../src/agent/types.js";
-import { SessionManager, buildSessionContext } from "../../src/session/session-manager.js";
-import type { MessageEntry, SessionEntry, SettingsChangeEntry } from "../../src/session/types.js";
+import { buildSessionContext, SessionManager } from "../../src/session/session-manager.js";
+import type { MessageEntry, SessionEntry } from "../../src/session/types.js";
 
 function defined<T>(value: T | undefined | null): T {
 	expect(value).toBeDefined();
@@ -124,7 +124,7 @@ describe("SessionManager", () => {
 		it("should create branches by moving leaf", () => {
 			const manager = SessionManager.create("/test/cwd", tempDir);
 
-			const id1 = manager.appendMessage({ role: "user", content: "Hello", timestamp: Date.now() });
+			const _id1 = manager.appendMessage({ role: "user", content: "Hello", timestamp: Date.now() });
 			const id2 = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "Hi!" }],
@@ -173,7 +173,7 @@ describe("SessionManager", () => {
 			// - leaf is now D AFTER the appended summary entry
 			// - the branch_summary entry's parentId is D (it lives on the new branch)
 			const manager = SessionManager.create("/test/cwd", tempDir);
-			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+			const _a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
 			const b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
@@ -213,7 +213,7 @@ describe("SessionManager", () => {
 
 		it("Tier-1: navigateBranch with no summary just moves the leaf and returns the abandoned tail", () => {
 			const manager = SessionManager.create("/test/cwd", tempDir);
-			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+			const _a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
 			const b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
@@ -250,7 +250,7 @@ describe("SessionManager", () => {
 			// recorded. Otherwise the next user action commits to the new branch
 			// and the abandoned tail's context is silently lost.
 			const manager = SessionManager.create("/test/cwd", tempDir);
-			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+			const _a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
 			const b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
@@ -286,7 +286,7 @@ describe("SessionManager", () => {
 			// though the navigation was reported as failed. This test forces
 			// persistEntry to throw and asserts NO phantom state survives.
 			const manager = SessionManager.create("/test/cwd", tempDir);
-			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
+			const _a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
 			const b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
@@ -329,7 +329,7 @@ describe("SessionManager", () => {
 			// describe).
 			const manager = SessionManager.create("/test/cwd", tempDir);
 			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
-			const b = manager.appendMessage({
+			const _b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
 				stopReason: "stop",
@@ -491,7 +491,7 @@ describe("SessionManager", () => {
 			// No entries are abandoned.
 			const manager = SessionManager.create("/test/cwd", tempDir);
 			const a = manager.appendMessage({ role: "user", content: "A", timestamp: Date.now() });
-			const b = manager.appendMessage({
+			const _b = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "B" }],
 				stopReason: "stop",
@@ -516,7 +516,7 @@ describe("SessionManager", () => {
 				stopReason: "stop",
 				timestamp: Date.now(),
 			});
-			const id3 = manager.appendMessage({ role: "user", content: "3", timestamp: Date.now() });
+			const _id3 = manager.appendMessage({ role: "user", content: "3", timestamp: Date.now() });
 			const id4 = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "4" }],
@@ -545,10 +545,10 @@ describe("SessionManager", () => {
 			});
 
 			// Create two branches from id2
-			const id3 = manager.appendMessage({ role: "user", content: "Branch A", timestamp: Date.now() });
+			const _id3 = manager.appendMessage({ role: "user", content: "Branch A", timestamp: Date.now() });
 
 			manager.branch(id2);
-			const id4 = manager.appendMessage({ role: "user", content: "Branch B", timestamp: Date.now() });
+			const _id4 = manager.appendMessage({ role: "user", content: "Branch B", timestamp: Date.now() });
 
 			const tree = manager.getTree();
 
@@ -561,7 +561,7 @@ describe("SessionManager", () => {
 		it("should find all leaves", () => {
 			const manager = SessionManager.create("/test/cwd", tempDir);
 
-			const id1 = manager.appendMessage({ role: "user", content: "Root", timestamp: Date.now() });
+			const _id1 = manager.appendMessage({ role: "user", content: "Root", timestamp: Date.now() });
 			const id2 = manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "R1" }],
@@ -722,7 +722,7 @@ describe("SessionManager", () => {
 				stopReason: "stop",
 				timestamp: Date.now(),
 			});
-			const id3 = manager.appendMessage({ role: "user", content: "Continue", timestamp: Date.now() });
+			const _id3 = manager.appendMessage({ role: "user", content: "Continue", timestamp: Date.now() });
 			manager.appendMessage({
 				role: "assistant",
 				content: [{ type: "text", text: "R2" }],

@@ -1,5 +1,5 @@
-import { EventStream } from "@my-agent/ai";
 import type { AssistantMessage, AssistantMessageEvent, Model } from "@my-agent/ai";
+import { EventStream } from "@my-agent/ai";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentContext, AgentMessage } from "../../src/agent/types.js";
 import { createAutoCompactor, createAutoCompactorWithPersistence } from "../../src/session/auto-compact.js";

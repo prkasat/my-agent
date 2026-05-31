@@ -101,9 +101,9 @@ export function expandTemplate(template: PromptTemplate, args: string[]): string
 	text = text.replace(/\$@|\$ARGUMENTS/g, args.join(" "));
 
 	text = text.replace(/\$\{@:(\d+)(?::(\d+))?\}/g, (_, start, length) => {
-		const s = Number.parseInt(start) - 1;
+		const s = Number.parseInt(start, 10) - 1;
 		if (length !== undefined) {
-			return args.slice(s, s + Number.parseInt(length)).join(" ");
+			return args.slice(s, s + Number.parseInt(length, 10)).join(" ");
 		}
 		return args.slice(s).join(" ");
 	});

@@ -3,13 +3,12 @@
  */
 
 import {
-	type Component,
 	type OverlayHandle,
 	type SelectItem,
 	SelectList,
 	type SelectListTheme,
 	type TUI,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 
 export interface ModelInfo {
 	/** Model identifier */

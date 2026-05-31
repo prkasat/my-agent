@@ -6,6 +6,9 @@
 - `architecture.md` — system map, package boundaries, and runtime/component diagrams
 - `lifecycle.md` — end-to-end request, tool, session, auth, and extension lifecycles
 - `ui-state.md` — CLI/TUI state model, overlays, and interaction flows
+- `../CONTRIBUTING.md` — contributor setup, validation, and pull request expectations
+- `../SECURITY.md` — vulnerability reporting and supported security posture
+- `../CHANGELOG.md` — release notes and notable unreleased changes
 
 ## Product + platform
 

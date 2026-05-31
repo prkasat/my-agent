@@ -2,7 +2,7 @@
  * Tests for StreamingMessage component
  */
 
-import type { MarkdownTheme } from "@mariozechner/pi-tui";
+import type { MarkdownTheme } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { StreamingMessage } from "../../../src/ui/components/streaming-message.js";
 import type { AssistantMessageTheme } from "../../../src/ui/theme.js";

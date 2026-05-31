@@ -193,7 +193,7 @@ export class ExtensionLoader {
 		const withBuster = version > 0 ? `${url}?v=${version}` : url;
 		const mod = (await import(withBuster)) as Record<string, unknown>;
 		const def = (mod.default ?? mod.extension) as ExtensionDefinition | undefined;
-		if (!def || !def.metadata || typeof def.activate !== "function") {
+		if (!def?.metadata || typeof def.activate !== "function") {
 			throw new Error(`Module ${entry} does not export a valid ExtensionDefinition (default or "extension")`);
 		}
 		return def;

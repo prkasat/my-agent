@@ -50,7 +50,7 @@
 
 ## TUI dependency upgrade strategy
 
-When upgrading `@mariozechner/pi-tui` or major UI dependencies:
+When upgrading `@earendil-works/pi-tui` or major UI dependencies:
 
 1. build the repo
 2. run TUI-focused component tests

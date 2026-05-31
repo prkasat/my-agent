@@ -2,7 +2,13 @@
  * SessionSelector - Overlay for selecting and managing sessions
  */
 
-import { type OverlayHandle, type SelectItem, SelectList, type SelectListTheme, type TUI } from "@mariozechner/pi-tui";
+import {
+	type OverlayHandle,
+	type SelectItem,
+	SelectList,
+	type SelectListTheme,
+	type TUI,
+} from "@earendil-works/pi-tui";
 
 export interface SessionInfo {
 	/** Session identifier */

@@ -1,6 +1,7 @@
 {
 	"name": "@my-agent/ai",
 	"version": "0.1.0",
+	"license": "MIT",
 	"type": "module",
 	"main": "dist/index.js",
 	"types": "dist/index.d.ts",
@@ -9,6 +10,6 @@
 		"test": "vitest run"
 	},
 	"dependencies": {
-		"@sinclair/typebox": "^0.34.0"
+		"@sinclair/typebox": "^0.34.49"
 	}
 }

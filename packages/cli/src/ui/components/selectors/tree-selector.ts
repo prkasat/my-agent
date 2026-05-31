@@ -2,13 +2,13 @@ import {
 	type Focusable,
 	Input,
 	Key,
+	matchesKey,
 	type OverlayHandle,
 	type TUI,
-	matchesKey,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
-} from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-tui";
 import type { SessionEntry, SessionTreeNode } from "@my-agent/core";
 import type { AgentTheme } from "../../theme.js";
 import { getPanelContentWidth, renderPanel } from "../panel.js";

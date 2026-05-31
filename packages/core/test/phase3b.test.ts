@@ -3,7 +3,7 @@ import { defaultConvertToLlm } from "../src/agent/convert.js";
 import { CostTracker } from "../src/agent/cost-tracker.js";
 import { customMessageToLlm } from "../src/agent/custom-messages.js";
 import { BUILTIN_READ_TOOL_NAMES, createPermissionChecker } from "../src/agent/permissions.js";
-import { SAFETY_RULES, buildSystemPrompt } from "../src/agent/system-prompt.js";
+import { buildSystemPrompt } from "../src/agent/system-prompt.js";
 import type { BeforeToolCallContext } from "../src/agent/types.js";
 import { computeDiff } from "../src/tools/diff.js";
 

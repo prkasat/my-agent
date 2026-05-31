@@ -7,7 +7,7 @@
  * - By other components that need shell execution
  */
 
-import { type WriteStream, createWriteStream } from "node:fs";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { type BashOperations, createLocalBashOperations } from "./bash.js";
 import { redactSensitiveEnv, sanitizeOutput } from "./sanitize-output.js";

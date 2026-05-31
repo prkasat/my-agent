@@ -1,12 +1,4 @@
-import type {
-	AssistantMessage,
-	AssistantMessageEvent,
-	Context,
-	Message,
-	Model,
-	StreamOptions,
-	Usage,
-} from "../types.js";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model, StreamOptions, Usage } from "../types.js";
 import { EventStream } from "../utils/event-stream.js";
 
 /**

@@ -9,7 +9,7 @@ import type {
 import { SessionManager } from "@my-agent/core";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
-import { type RuntimeResult, formatRuntimeProfile, runAgent } from "../runtime/agent-runtime.js";
+import { formatRuntimeProfile, type RuntimeResult, runAgent } from "../runtime/agent-runtime.js";
 import { listModelAvailability, resolveConfiguredModel } from "../runtime/model-registry.js";
 import { trace } from "../runtime/trace.js";
 

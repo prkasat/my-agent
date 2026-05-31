@@ -7,7 +7,7 @@
  */
 
 import type { AgentContext } from "../agent/types.js";
-import { noopActions, noopUI } from "./context.js";
+import { noopActions } from "./context.js";
 import { MetricsTracker } from "./metrics.js";
 import { ExtensionRunner } from "./runner.js";
 import { MemoryExtensionStorage } from "./storage.js";

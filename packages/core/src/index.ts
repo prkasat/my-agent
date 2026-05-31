@@ -3,154 +3,226 @@
 // Agent loop
 export { agentLoop, agentLoopContinue } from "./agent/agent-loop.js";
 export { defaultConvertToLlm } from "./agent/convert.js";
-
-// System prompt
-export { buildSystemPrompt, BASE_INSTRUCTIONS, SAFETY_RULES } from "./agent/system-prompt.js";
-export type { SystemPromptConfig, ProjectContextFile } from "./agent/system-prompt.js";
-
-// Resource discovery
-export { discoverProjectContext } from "./agent/resource-discovery.js";
-export type { DiscoveryResult } from "./agent/resource-discovery.js";
-
-// Permissions
-export { createPermissionChecker, BUILTIN_READ_TOOL_NAMES } from "./agent/permissions.js";
-export type {
-	PermissionMode,
-	PermissionCheckerOptions,
-	AskDecision,
-	PermissionAskContext,
-} from "./agent/permissions.js";
-
+export type { SessionCosts, TurnCost } from "./agent/cost-tracker.js";
 // Cost tracking
 export { CostTracker } from "./agent/cost-tracker.js";
-export type { SessionCosts, TurnCost } from "./agent/cost-tracker.js";
-
+export type {
+	BashExecutionMessage,
+	BranchSummaryMessage,
+	CompactionSummaryMessage,
+	CustomMessage,
+	ExtensionMessage,
+} from "./agent/custom-messages.js";
 // Custom messages
 export { customMessageToLlm } from "./agent/custom-messages.js";
 export type {
-	CustomMessage,
-	BashExecutionMessage,
-	CompactionSummaryMessage,
-	BranchSummaryMessage,
-	ExtensionMessage,
-} from "./agent/custom-messages.js";
-
-// Infrastructure utilities
-export { killProcessTree, createTimeoutController } from "./tools/process-cleanup.js";
-export { withFileLock, withCrossProcessLock, acquireFileLock } from "./tools/file-mutation-queue.js";
-export { computeDiff } from "./tools/diff.js";
-export type { DiffResult } from "./tools/diff.js";
-
-// Output sanitization
-export { sanitizeOutput, sanitizeBuffer, redactSensitiveEnv } from "./tools/sanitize-output.js";
-
-// Shell utilities
-export { getShellConfig, getShellEnv, validateShell, clearShellConfigCache } from "./tools/shell-utils.js";
-export type { ShellConfig } from "./tools/shell-utils.js";
-
-// Tools manager (auto-download external tools)
-export { ensureTool, getToolPath, getToolsDir } from "./tools/tools-manager.js";
-export type { EnsureToolOptions, EnsureToolResult } from "./tools/tools-manager.js";
-
-// Temp file management
+	AskDecision,
+	PermissionAskContext,
+	PermissionCheckerOptions,
+	PermissionMode,
+} from "./agent/permissions.js";
+// Permissions
+export { BUILTIN_READ_TOOL_NAMES, createPermissionChecker } from "./agent/permissions.js";
+export type { DiscoveryResult } from "./agent/resource-discovery.js";
+// Resource discovery
+export { discoverProjectContext } from "./agent/resource-discovery.js";
+export type { ProjectContextFile, SystemPromptConfig } from "./agent/system-prompt.js";
+// System prompt
+export { BASE_INSTRUCTIONS, buildSystemPrompt, SAFETY_RULES } from "./agent/system-prompt.js";
+// Types
+export type {
+	AfterToolCallContext,
+	AfterToolCallResult,
+	AgentContext,
+	AgentEvent,
+	AgentLoopConfig,
+	AgentMessage,
+	AgentTool,
+	AgentToolResult,
+	BeforeToolCallContext,
+	BeforeToolCallResult,
+	CustomAgentMessage,
+} from "./agent/types.js";
+export type {
+	ExtensionActions,
+	ExtensionCommand,
+	ExtensionConfigSchema,
+	ExtensionContext,
+	ExtensionDefinition,
+	ExtensionEvent,
+	ExtensionEventBase,
+	ExtensionEventByType,
+	ExtensionEventHandler,
+	ExtensionEventType,
+	ExtensionFailureMode,
+	ExtensionManifest,
+	ExtensionMetadata,
+	ExtensionMetrics,
+	ExtensionRunnerOptions,
+	ExtensionStorage,
+	ExtensionUI,
+	LoaderOptions,
+	LogSink,
+	MetricsRecorder,
+	MockActions,
+	MockContext,
+	MockContextOptions,
+	MockUI,
+	StorageOptions,
+	StorageScope,
+	ToolInterceptResult,
+	ToolMiddleware,
+	ToolMiddlewareContext,
+	ToolResultModification,
+	UISelectItem,
+} from "./extensions/index.js";
+// Extension system
 export {
-	getTempFilePath,
-	markForCleanup,
-	preserveTempFile,
-	cleanupTempFile,
-	cleanupSessionTempFiles,
-	cleanupOldTempFiles,
-	getTempFileStats,
-} from "./tools/temp-file-manager.js";
-
+	activateForTest,
+	createMockActions,
+	createMockContext,
+	createMockUI,
+	ExtensionLoader,
+	ExtensionRunner,
+	FileExtensionStorage,
+	MemoryExtensionStorage,
+	MetricsTracker,
+	noopActions,
+	noopUI,
+} from "./extensions/index.js";
+export { EXTENSION_API_VERSION, isExtensionApiCompatible } from "./extensions/version.js";
+export type {
+	LoadResourcePackagesConfig,
+	LoadResourcePackagesResult,
+	ResourcePackage,
+	ResourcePackageManifest,
+} from "./resources/packages.js";
+// Resource packages
+export { loadResourcePackages } from "./resources/packages.js";
+export type { LoadSkillsConfig, LoadSkillsResult, SkillDefinition } from "./resources/skills.js";
+// Skills
+export { expandSkill, findSkillByCommand, getSkillHelp, loadSkills } from "./resources/skills.js";
+export type {
+	AutoCompactorOptions,
+	BranchSummaryDetails,
+	BranchSummaryEntry,
+	BranchSummaryResult,
+	CompactionCallback,
+	CompactionDetails,
+	CompactionEntry,
+	CompactionEvaluation,
+	CompactionResult,
+	CompactionSettings,
+	CompactOptions,
+	ExtensionEntry,
+	FileEntry,
+	GenerateBranchSummaryOptions,
+	MessageEntry,
+	SessionContext,
+	SessionEntry,
+	SessionEntryBase,
+	SessionHeader,
+	SessionInfo,
+	SessionInfoEntry,
+	SessionTreeNode,
+	SettingsChangeEntry,
+} from "./session/index.js";
+// Session persistence
+export {
+	buildSessionContext,
+	CURRENT_SESSION_VERSION,
+	calculateContextTokens,
+	collectEntriesForBranchSummary,
+	compact,
+	// Auto-compaction
+	createAutoCompactor,
+	createAutoCompactorWithPersistence,
+	DEFAULT_COMPACTION_SETTINGS,
+	estimateContextTokens,
+	// Compaction
+	estimateTokens,
+	evaluateCompaction,
+	extractFileOperations,
+	findCutPoint,
+	// Branch summarization
+	generateBranchSummary,
+	generateCompactionSummary,
+	measureContextTokens,
+	SessionManager,
+	shouldCompact,
+	shouldGenerateBranchSummary,
+} from "./session/index.js";
+export type { PromptTemplate, TemplateLoadConfig } from "./templates/prompt-templates.js";
+// Prompt templates
+export {
+	expandTemplate,
+	getTemplateHelp,
+	loadPromptTemplates,
+	matchTemplate,
+} from "./templates/prompt-templates.js";
+export type { AuditLogEntry, AuditLoggerConfig } from "./tools/audit.js";
 // Audit logging
 export {
 	AuditLogger,
-	ExecutionLogger,
-	getAuditLogger,
 	configureAuditLogger,
 	disableAuditLogging,
+	ExecutionLogger,
+	getAuditLogger,
 } from "./tools/audit.js";
-export type { AuditLogEntry, AuditLoggerConfig } from "./tools/audit.js";
-
-// Secret redaction (also reused by audit logger)
-export { redactSecrets, redactValue } from "./tools/redact.js";
-
-// Image resize utilities
-export { resizeImage, formatDimensionNote } from "./tools/image-resize.js";
-export type { ImageResizeOptions, ResizedImage } from "./tools/image-resize.js";
-
-// Standalone bash executor
-export { executeBash, executeBashWithOperations, exec } from "./tools/bash-executor.js";
+export type {
+	BashOperations,
+	BashSpawnContext,
+	BashSpawnHook,
+	BashToolDetails,
+	BashToolInput,
+	BashToolOptions,
+} from "./tools/bash.js";
+export { createBashTool, createBashToolDefinition, createLocalBashOperations } from "./tools/bash.js";
 export type { BashExecutorOptions, BashResult } from "./tools/bash-executor.js";
-
-// Tool definition layer
-export { wrapToolDefinition, wrapToolDefinitions, createToolDefinitionFromAgentTool } from "./tools/tool-definition.js";
-export type { ToolDefinition } from "./tools/tool-definition.js";
-
-// Truncation utilities
+// Standalone bash executor
+export { exec, executeBash, executeBashWithOperations } from "./tools/bash-executor.js";
+export type { DiffResult } from "./tools/diff.js";
+export { computeDiff } from "./tools/diff.js";
+export type { EditOperations, EditToolDetails, EditToolInput, EditToolOptions } from "./tools/edit.js";
+export { createEditTool, createEditToolDefinition } from "./tools/edit.js";
+export type { AppliedEditsResult, Edit, FuzzyMatchResult } from "./tools/edit-diff.js";
+// Edit diff utilities
 export {
-	truncateHead,
-	truncateTail,
-	truncateLine,
-	formatSize,
-	DEFAULT_MAX_LINES,
-	DEFAULT_MAX_BYTES,
-	GREP_MAX_LINE_LENGTH,
-} from "./tools/truncate.js";
-export type { TruncationResult, TruncationOptions } from "./tools/truncate.js";
-
+	applyEditsToNormalizedContent,
+	detectLineEnding,
+	fuzzyFindText,
+	generateDiffString,
+	normalizeForFuzzyMatch,
+	normalizeToLF,
+	restoreLineEndings,
+	stripBom,
+} from "./tools/edit-diff.js";
+export { acquireFileLock, withCrossProcessLock, withFileLock } from "./tools/file-mutation-queue.js";
+export type { FindOperations, FindToolDetails, FindToolInput, FindToolOptions } from "./tools/find.js";
+export { createFindTool, createFindToolDefinition } from "./tools/find.js";
+export type { GrepOperations, GrepToolDetails, GrepToolInput, GrepToolOptions } from "./tools/grep.js";
+export { createGrepTool, createGrepToolDefinition } from "./tools/grep.js";
+export type { ImageResizeOptions, ResizedImage } from "./tools/image-resize.js";
+// Image resize utilities
+export { formatDimensionNote, resizeImage } from "./tools/image-resize.js";
+export type { LsOperations, LsToolDetails, LsToolInput, LsToolOptions } from "./tools/ls.js";
+export { createLsTool, createLsToolDefinition } from "./tools/ls.js";
 // Path utilities
 export {
 	expandPath,
-	resolveToCwd,
-	resolveReadPath,
 	isPathWithinBoundary,
 	resolveAndValidatePath,
+	resolveReadPath,
+	resolveToCwd,
 } from "./tools/path-utils.js";
-
-// Edit diff utilities
-export {
-	fuzzyFindText,
-	normalizeForFuzzyMatch,
-	normalizeToLF,
-	detectLineEnding,
-	restoreLineEndings,
-	stripBom,
-	applyEditsToNormalizedContent,
-	generateDiffString,
-} from "./tools/edit-diff.js";
-export type { Edit, FuzzyMatchResult, AppliedEditsResult } from "./tools/edit-diff.js";
-
+// Infrastructure utilities
+export { createTimeoutController, killProcessTree } from "./tools/process-cleanup.js";
+export type { ReadOperations, ReadToolDetails, ReadToolInput, ReadToolOptions } from "./tools/read.js";
 // Tools
-export { createReadToolDefinition, createReadTool } from "./tools/read.js";
-export type { ReadToolInput, ReadToolDetails, ReadOperations, ReadToolOptions } from "./tools/read.js";
-
-export { createWriteToolDefinition, createWriteTool } from "./tools/write.js";
-export type { WriteToolInput, WriteOperations, WriteToolOptions } from "./tools/write.js";
-
-export { createEditToolDefinition, createEditTool } from "./tools/edit.js";
-export type { EditToolInput, EditToolDetails, EditOperations, EditToolOptions } from "./tools/edit.js";
-
-export { createBashToolDefinition, createBashTool, createLocalBashOperations } from "./tools/bash.js";
-export type {
-	BashToolInput,
-	BashToolDetails,
-	BashOperations,
-	BashToolOptions,
-	BashSpawnContext,
-	BashSpawnHook,
-} from "./tools/bash.js";
-
-export { createGrepToolDefinition, createGrepTool } from "./tools/grep.js";
-export type { GrepToolInput, GrepToolDetails, GrepOperations, GrepToolOptions } from "./tools/grep.js";
-
-export { createFindToolDefinition, createFindTool } from "./tools/find.js";
-export type { FindToolInput, FindToolDetails, FindOperations, FindToolOptions } from "./tools/find.js";
-
-export { createLsToolDefinition, createLsTool } from "./tools/ls.js";
-export type { LsToolInput, LsToolDetails, LsOperations, LsToolOptions } from "./tools/ls.js";
-
+export { createReadTool, createReadToolDefinition } from "./tools/read.js";
+// Secret redaction (also reused by audit logger)
+export { redactSecrets, redactValue } from "./tools/redact.js";
+export type { ToolName, ToolsOptions } from "./tools/registry.js";
 // Tool registry
 export {
 	createAllToolDefinitions,
@@ -161,143 +233,37 @@ export {
 	createReadOnlyTools,
 	getToolVersions,
 } from "./tools/registry.js";
-export type { ToolName, ToolsOptions } from "./tools/registry.js";
-
-// Types
-export type {
-	AgentEvent,
-	AgentContext,
-	AgentLoopConfig,
-	AgentMessage,
-	CustomAgentMessage,
-	AgentTool,
-	AgentToolResult,
-	BeforeToolCallContext,
-	BeforeToolCallResult,
-	AfterToolCallContext,
-	AfterToolCallResult,
-} from "./agent/types.js";
-
-// Session persistence
+// Output sanitization
+export { redactSensitiveEnv, sanitizeBuffer, sanitizeOutput } from "./tools/sanitize-output.js";
+export type { ShellConfig } from "./tools/shell-utils.js";
+// Shell utilities
+export { clearShellConfigCache, getShellConfig, getShellEnv, validateShell } from "./tools/shell-utils.js";
+// Temp file management
 export {
-	SessionManager,
-	buildSessionContext,
-	CURRENT_SESSION_VERSION,
-	DEFAULT_COMPACTION_SETTINGS,
-	// Compaction
-	estimateTokens,
-	estimateContextTokens,
-	measureContextTokens,
-	calculateContextTokens,
-	findCutPoint,
-	extractFileOperations,
-	generateCompactionSummary,
-	evaluateCompaction,
-	compact,
-	shouldCompact,
-	// Auto-compaction
-	createAutoCompactor,
-	createAutoCompactorWithPersistence,
-	// Branch summarization
-	generateBranchSummary,
-	shouldGenerateBranchSummary,
-	collectEntriesForBranchSummary,
-} from "./session/index.js";
-
-// Extension system
+	cleanupOldTempFiles,
+	cleanupSessionTempFiles,
+	cleanupTempFile,
+	getTempFilePath,
+	getTempFileStats,
+	markForCleanup,
+	preserveTempFile,
+} from "./tools/temp-file-manager.js";
+export type { ToolDefinition } from "./tools/tool-definition.js";
+// Tool definition layer
+export { createToolDefinitionFromAgentTool, wrapToolDefinition, wrapToolDefinitions } from "./tools/tool-definition.js";
+export type { EnsureToolOptions, EnsureToolResult } from "./tools/tools-manager.js";
+// Tools manager (auto-download external tools)
+export { ensureTool, getToolPath, getToolsDir } from "./tools/tools-manager.js";
+export type { TruncationOptions, TruncationResult } from "./tools/truncate.js";
+// Truncation utilities
 export {
-	ExtensionRunner,
-	ExtensionLoader,
-	FileExtensionStorage,
-	MemoryExtensionStorage,
-	MetricsTracker,
-	noopUI,
-	noopActions,
-	createMockContext,
-	createMockUI,
-	createMockActions,
-	activateForTest,
-} from "./extensions/index.js";
-export { EXTENSION_API_VERSION, isExtensionApiCompatible } from "./extensions/version.js";
-
-export type {
-	ExtensionEvent,
-	ExtensionEventType,
-	ExtensionEventBase,
-	ExtensionEventByType,
-	ExtensionEventHandler,
-	ExtensionDefinition,
-	ExtensionMetadata,
-	ExtensionManifest,
-	ExtensionContext,
-	ExtensionConfigSchema,
-	ExtensionCommand,
-	ExtensionUI,
-	ExtensionActions,
-	ExtensionStorage,
-	ExtensionMetrics,
-	ExtensionFailureMode,
-	StorageScope,
-	UISelectItem,
-	ToolInterceptResult,
-	ToolResultModification,
-	ToolMiddleware,
-	ToolMiddlewareContext,
-	MetricsRecorder,
-	ExtensionRunnerOptions,
-	LogSink,
-	LoaderOptions,
-	StorageOptions,
-	MockContext,
-	MockUI,
-	MockActions,
-	MockContextOptions,
-} from "./extensions/index.js";
-
-export type {
-	SessionHeader,
-	SessionEntryBase,
-	MessageEntry,
-	SettingsChangeEntry,
-	CompactionEntry,
-	BranchSummaryEntry,
-	SessionInfoEntry,
-	ExtensionEntry,
-	SessionEntry,
-	FileEntry,
-	CompactionDetails,
-	CompactionEvaluation,
-	BranchSummaryDetails,
-	SessionTreeNode,
-	SessionContext,
-	SessionInfo,
-	CompactionSettings,
-	CompactionResult,
-	CompactOptions,
-	AutoCompactorOptions,
-	CompactionCallback,
-	BranchSummaryResult,
-	GenerateBranchSummaryOptions,
-} from "./session/index.js";
-
-// Prompt templates
-export {
-	loadPromptTemplates,
-	expandTemplate,
-	matchTemplate,
-	getTemplateHelp,
-} from "./templates/prompt-templates.js";
-export type { PromptTemplate, TemplateLoadConfig } from "./templates/prompt-templates.js";
-
-// Resource packages
-export { loadResourcePackages } from "./resources/packages.js";
-export type {
-	LoadResourcePackagesConfig,
-	LoadResourcePackagesResult,
-	ResourcePackage,
-	ResourcePackageManifest,
-} from "./resources/packages.js";
-
-// Skills
-export { loadSkills, findSkillByCommand, expandSkill, getSkillHelp } from "./resources/skills.js";
-export type { LoadSkillsConfig, LoadSkillsResult, SkillDefinition } from "./resources/skills.js";
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	formatSize,
+	GREP_MAX_LINE_LENGTH,
+	truncateHead,
+	truncateLine,
+	truncateTail,
+} from "./tools/truncate.js";
+export type { WriteOperations, WriteToolInput, WriteToolOptions } from "./tools/write.js";
+export { createWriteTool, createWriteToolDefinition } from "./tools/write.js";

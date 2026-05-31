@@ -3,9 +3,9 @@ import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } 
 import { type Static, Type } from "@sinclair/typebox";
 import type { AgentTool } from "../agent/types.js";
 import {
-	type Edit,
 	applyEditsToNormalizedContent,
 	detectLineEnding,
+	type Edit,
 	generateDiffString,
 	normalizeToLF,
 	restoreLineEndings,

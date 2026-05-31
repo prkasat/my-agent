@@ -21,8 +21,8 @@ import {
 	fsyncSync,
 	mkdirSync,
 	openSync,
-	readFileSync,
 	readdirSync,
+	readFileSync,
 	renameSync,
 	statSync,
 	truncateSync,
@@ -30,11 +30,10 @@ import {
 	writeFileSync,
 	writeSync,
 } from "node:fs";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import { withCrossProcessLock } from "../tools/file-mutation-queue.js";
-
 import type { AgentMessage } from "../agent/types.js";
+import { withCrossProcessLock } from "../tools/file-mutation-queue.js";
 import { collectEntriesForBranchSummary } from "./branch-summary.js";
 import type {
 	BranchSummaryDetails,
@@ -364,7 +363,7 @@ async function buildSessionInfo(filePath: string): Promise<SessionInfo | null> {
 		const headerVersion = typeof (header as SessionHeader).version === "number" ? (header as SessionHeader).version : 1;
 		if (headerVersion > CURRENT_SESSION_VERSION) return null;
 
-		const stats = await stat(filePath);
+		const _stats = await stat(filePath);
 		let messageCount = 0;
 		let firstMessage = "";
 		let name: string | undefined;
@@ -1560,7 +1559,7 @@ export class SessionManager {
 	 * that branch context after reload.
 	 */
 	buildMessageToEntryMapping(): (string | null)[] {
-		const entries = this.getEntries();
+		const _entries = this.getEntries();
 		const path = this.getBranch();
 
 		// Find latest compaction on the path (same logic as buildSessionContext)

@@ -5,7 +5,7 @@ import type { AgentTool } from "../agent/types.js";
 import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
-import { DEFAULT_MAX_BYTES, type TruncationResult, formatSize, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const lsSchema = Type.Object({
 	path: Type.Optional(Type.String({ description: "Directory to list (default: current directory)" })),

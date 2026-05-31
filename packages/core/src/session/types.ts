@@ -6,7 +6,6 @@
  * forming a tree structure that supports branching and navigation.
  */
 
-import type { Model } from "@my-agent/ai";
 import type { AgentMessage } from "../agent/types.js";
 
 // ============================================================================

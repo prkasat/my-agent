@@ -1,5 +1,11 @@
-import type { Context, Model, StreamFunction, StreamOptions } from "../types.js";
-import type { AssistantMessage, AssistantMessageEvent } from "../types.js";
+import type {
+	AssistantMessage,
+	AssistantMessageEvent,
+	Context,
+	Model,
+	StreamFunction,
+	StreamOptions,
+} from "../types.js";
 import type { EventStream } from "../utils/event-stream.js";
 
 type ProviderFactory = () => Promise<StreamFunction>;

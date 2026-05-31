@@ -2,7 +2,7 @@
  * DiffViewer - Component for displaying unified diffs
  */
 
-import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { DiffViewerTheme } from "../theme.js";
 
 export interface DiffHunk {

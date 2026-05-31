@@ -9,27 +9,27 @@
  * - Streaming output to stdout
  */
 
-import { stream, type Usage, getModel } from "@my-agent/ai";
+import { getModel, stream, type Usage } from "@my-agent/ai";
 import {
 	type AgentContext,
 	type AgentLoopConfig,
 	type AgentMessage,
 	type AgentToolResult,
 	type AskDecision,
+	agentLoop,
 	BASE_INSTRUCTIONS,
 	BUILTIN_READ_TOOL_NAMES,
-	CostTracker,
-	type ExtensionUI,
-	type PermissionAskContext,
-	type SessionCosts,
-	type SessionManager,
-	agentLoop,
 	buildSystemPrompt,
+	CostTracker,
 	createAllTools,
 	createAutoCompactorWithPersistence,
 	createPermissionChecker,
 	defaultConvertToLlm,
 	discoverProjectContext,
+	type ExtensionUI,
+	type PermissionAskContext,
+	type SessionCosts,
+	type SessionManager,
 } from "@my-agent/core";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";

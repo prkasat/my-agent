@@ -4,7 +4,6 @@
  * wrapToolDefinition() bridges them.
  */
 
-import type { ImageContent, TextContent } from "@my-agent/ai";
 import type { Static, TSchema } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "../agent/types.js";
 

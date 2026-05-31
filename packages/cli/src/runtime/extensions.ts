@@ -197,7 +197,7 @@ function isSupportedExtensionFile(filePath: string): boolean {
 export async function importExtensionDefinition(entry: string): Promise<ExtensionDefinition> {
 	const mod = (await import(pathToFileURL(path.resolve(entry)).href)) as Record<string, unknown>;
 	const definition = (mod.default ?? mod.extension) as ExtensionDefinition | undefined;
-	if (!definition || !definition.metadata || typeof definition.activate !== "function") {
+	if (!definition?.metadata || typeof definition.activate !== "function") {
 		throw new Error(`Extension module ${entry} does not export a valid ExtensionDefinition`);
 	}
 	return definition;

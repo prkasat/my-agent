@@ -2,7 +2,7 @@
  * Tests for Footer component
  */
 
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 import { Footer, type FooterData } from "../../../src/ui/components/footer.js";
 import type { FooterTheme } from "../../../src/ui/theme.js";

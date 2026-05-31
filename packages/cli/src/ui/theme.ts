@@ -2,7 +2,7 @@
  * Theme system for agent TUI components
  */
 
-import type { EditorTheme, MarkdownTheme, SelectListTheme } from "@mariozechner/pi-tui";
+import type { EditorTheme, MarkdownTheme, SelectListTheme } from "@earendil-works/pi-tui";
 import { Chalk } from "chalk";
 
 const chalk = new Chalk({ level: 3 });

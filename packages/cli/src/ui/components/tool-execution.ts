@@ -2,7 +2,7 @@
  * ToolExecution - Shows tool execution progress with collapsible output
  */
 
-import { type Component, truncateToWidth } from "@mariozechner/pi-tui";
+import { type Component, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ToolExecutionTheme } from "../theme.js";
 import { getPanelContentWidth, renderPanel } from "./panel.js";
 

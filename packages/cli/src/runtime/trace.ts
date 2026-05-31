@@ -56,11 +56,7 @@ class TraceWriter {
 
 let writer: TraceWriter | undefined;
 
-export function initializeTracing(options: {
-	enabled?: boolean;
-	dir: string;
-	scopes?: TraceScope[];
-}): void {
+export function initializeTracing(options: { enabled?: boolean; dir: string; scopes?: TraceScope[] }): void {
 	const envEnabled = isTruthy(process.env.MY_AGENT_TRACE);
 	const enabled = options.enabled || envEnabled;
 	if (!enabled) {

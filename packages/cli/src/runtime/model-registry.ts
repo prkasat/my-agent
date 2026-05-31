@@ -1,4 +1,4 @@
-import { type Model, getModel, models, normalizeModelKey } from "@my-agent/ai";
+import { getModel, type Model, models, normalizeModelKey } from "@my-agent/ai";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 

@@ -1,5 +1,4 @@
 import { execSync, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { glob as nodeGlob } from "node:fs/promises";
 import nodePath from "node:path";
 import { type Static, Type } from "@sinclair/typebox";
@@ -7,7 +6,7 @@ import type { AgentTool } from "../agent/types.js";
 import { resolveAndValidatePath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
-import { DEFAULT_MAX_BYTES, type TruncationResult, formatSize, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 function toPosixPath(value: string): string {
 	return value.split(nodePath.sep).join("/");

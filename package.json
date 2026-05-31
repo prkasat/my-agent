@@ -1,9 +1,20 @@
 {
 	"name": "my-agent",
 	"private": true,
-	"workspaces": ["packages/*"],
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/prkasat/my-agent.git"
+	},
+	"bugs": {
+		"url": "https://github.com/prkasat/my-agent/issues"
+	},
+	"homepage": "https://github.com/prkasat/my-agent#readme",
+	"workspaces": [
+		"packages/*"
+	],
 	"engines": {
-		"node": ">=20.0.0"
+		"node": ">=22.19.0"
 	},
 	"scripts": {
 		"build": "tsc -b packages/ai packages/core packages/cli",
@@ -16,9 +27,9 @@
 		"clean": "rm -rf packages/*/dist"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "^1.9.0",
-		"@types/node": "^25.5.2",
-		"typescript": "^5.7.0",
-		"vitest": "^2.1.0"
+		"@biomejs/biome": "^2.4.16",
+		"@types/node": "^25.9.1",
+		"typescript": "^6.0.3",
+		"vitest": "^4.1.7"
 	}
 }

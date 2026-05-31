@@ -1,4 +1,4 @@
-import { constants, accessSync, realpathSync } from "node:fs";
+import { accessSync, constants, realpathSync } from "node:fs";
 import * as os from "node:os";
 import { basename, dirname, isAbsolute, resolve as resolvePath, sep } from "node:path";
 

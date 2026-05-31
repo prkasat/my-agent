@@ -8,56 +8,6 @@
  * - Branch summarization to preserve context
  */
 
-// Types
-export type {
-	SessionHeader,
-	SessionEntryBase,
-	MessageEntry,
-	SettingsChangeEntry,
-	CompactionEntry,
-	BranchSummaryEntry,
-	SessionInfoEntry,
-	ExtensionEntry,
-	SessionEntry,
-	FileEntry,
-	CompactionDetails,
-	CompactionEvaluation,
-	BranchSummaryDetails,
-	SessionTreeNode,
-	SessionContext,
-	SessionInfo,
-	CompactionSettings,
-} from "./types.js";
-
-export { CURRENT_SESSION_VERSION, DEFAULT_COMPACTION_SETTINGS } from "./types.js";
-
-// Session Manager
-export { SessionManager, buildSessionContext } from "./session-manager.js";
-
-// Compaction
-export {
-	estimateTokens,
-	estimateContextTokens,
-	measureContextTokens,
-	calculateContextTokens,
-	findCutPoint,
-	extractFileOperations,
-	generateCompactionSummary,
-	evaluateCompaction,
-	compact,
-	shouldCompact,
-} from "./compaction.js";
-export type {
-	CompactionResult,
-	CompactOptions,
-	ContextTokenMeasurement,
-} from "./compaction.js";
-
-// Auto-Compaction
-export {
-	createAutoCompactor,
-	createAutoCompactorWithPersistence,
-} from "./auto-compact.js";
 export type {
 	AutoCompactorOptions,
 	AutoCompactorTransform,
@@ -65,16 +15,61 @@ export type {
 	CompactionCallbackResult,
 	PersistenceSessionManager,
 } from "./auto-compact.js";
-
-// Branch Summarization
+// Auto-Compaction
 export {
-	generateBranchSummary,
-	shouldGenerateBranchSummary,
-	collectEntriesForBranchSummary,
-} from "./branch-summary.js";
+	createAutoCompactor,
+	createAutoCompactorWithPersistence,
+} from "./auto-compact.js";
 export type {
 	BranchSummaryResult,
-	GenerateBranchSummaryOptions,
-	CollectEntriesResult,
 	BranchTreeReader,
+	CollectEntriesResult,
+	GenerateBranchSummaryOptions,
 } from "./branch-summary.js";
+// Branch Summarization
+export {
+	collectEntriesForBranchSummary,
+	generateBranchSummary,
+	shouldGenerateBranchSummary,
+} from "./branch-summary.js";
+export type {
+	CompactionResult,
+	CompactOptions,
+	ContextTokenMeasurement,
+} from "./compaction.js";
+// Compaction
+export {
+	calculateContextTokens,
+	compact,
+	estimateContextTokens,
+	estimateTokens,
+	evaluateCompaction,
+	extractFileOperations,
+	findCutPoint,
+	generateCompactionSummary,
+	measureContextTokens,
+	shouldCompact,
+} from "./compaction.js";
+// Session Manager
+export { buildSessionContext, SessionManager } from "./session-manager.js";
+// Types
+export type {
+	BranchSummaryDetails,
+	BranchSummaryEntry,
+	CompactionDetails,
+	CompactionEntry,
+	CompactionEvaluation,
+	CompactionSettings,
+	ExtensionEntry,
+	FileEntry,
+	MessageEntry,
+	SessionContext,
+	SessionEntry,
+	SessionEntryBase,
+	SessionHeader,
+	SessionInfo,
+	SessionInfoEntry,
+	SessionTreeNode,
+	SettingsChangeEntry,
+} from "./types.js";
+export { CURRENT_SESSION_VERSION, DEFAULT_COMPACTION_SETTINGS } from "./types.js";

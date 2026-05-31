@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	type AskDecision,
 	BUILTIN_READ_TOOL_NAMES,
+	createPermissionChecker,
 	type PermissionAskContext,
 	type PermissionMode,
-	createPermissionChecker,
 } from "../src/agent/permissions.js";
 import type { AgentContext, BeforeToolCallContext } from "../src/agent/types.js";
 

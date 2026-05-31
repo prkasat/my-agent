@@ -14,7 +14,7 @@
 import type { AssistantMessage, Message, Model, StreamFunctionLike, Usage } from "@my-agent/ai";
 import { defaultConvertToLlm } from "../agent/convert.js";
 import { calculateUsageCost } from "../agent/cost-tracker.js";
-import type { AgentContext, AgentMessage } from "../agent/types.js";
+import type { AgentMessage } from "../agent/types.js";
 import type { CompactionDetails, CompactionEvaluation } from "./types.js";
 
 // ============================================================================
@@ -349,7 +349,7 @@ function findCutPointWithSplitInfo(
 	// mid-turn (after the turn start, before the turn ends). Cuts exactly at
 	// turn boundaries (user messages, branch_summary, compaction_summary,
 	// extension with sendToLlm) are NOT splits.
-	const cutMsg = messages[cutIndex];
+	const _cutMsg = messages[cutIndex];
 	const turnStartIndex = findTurnStartIndex(messages, cutIndex);
 	// Cut is at a turn boundary if turnStartIndex equals cutIndex, or if
 	// no turn start was found (turnStartIndex === -1, e.g., leading assistant).

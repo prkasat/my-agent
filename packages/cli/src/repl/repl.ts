@@ -14,10 +14,10 @@ import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import type { LoadThemesResult } from "../ui/theme-loader.js";
 import {
-	type SlashContext,
-	type SlashSessionManager,
 	handleSlashCommand,
 	listSlashCommandSuggestions,
+	type SlashContext,
+	type SlashSessionManager,
 } from "./slash-commands.js";
 
 export interface ReplDeps {

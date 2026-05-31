@@ -5,7 +5,7 @@
  * After finalization, switches to full markdown parsing.
  */
 
-import { type Component, type DefaultTextStyle, Markdown, type MarkdownTheme } from "@mariozechner/pi-tui";
+import { type Component, type DefaultTextStyle, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import type { AssistantMessageTheme } from "../theme.js";
 import { getPanelContentWidth, renderPanel, wrapStyledText } from "./panel.js";
 
@@ -202,7 +202,9 @@ export class StreamingMessage implements Component {
 
 	private renderExpandedBody(contentWidth: number): string[] {
 		const theme = this.options.messageTheme;
-		return this.isStreaming ? wrapStyledText(this.rawText, contentWidth, theme.text) : this.markdown.render(contentWidth);
+		return this.isStreaming
+			? wrapStyledText(this.rawText, contentWidth, theme.text)
+			: this.markdown.render(contentWidth);
 	}
 
 	private renderCollapsedBody(contentWidth: number): string[] {

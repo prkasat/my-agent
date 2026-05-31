@@ -2,11 +2,12 @@ import {
 	type AutocompleteItem,
 	CombinedAutocompleteProvider,
 	Key,
-	type SlashCommand,
 	matchesKey,
-} from "@mariozechner/pi-tui";
+	type SlashCommand,
+} from "@earendil-works/pi-tui";
 import {
 	type AskDecision,
+	getToolPath,
 	type LoadResourcePackagesResult,
 	type PermissionAskContext,
 	type PromptTemplate,
@@ -14,18 +15,17 @@ import {
 	SessionManager,
 	type SessionTreeNode,
 	type SkillDefinition,
-	getToolPath,
 } from "@my-agent/core";
 import { handleLogin, isLoginCancelledError } from "../commands/login.js";
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import { saveSettings } from "../config/settings.js";
 import {
-	THINKING_LEVELS,
-	type ThinkingLevel,
 	getNextThinkingLevel,
 	getThinkingLevelDescription,
 	isThinkingLevel,
+	THINKING_LEVELS,
+	type ThinkingLevel,
 } from "../config/thinking-levels.js";
 import { handleSlashCommand, listSlashCommandSuggestions } from "../repl/slash-commands.js";
 import { runAgent } from "../runtime/agent-runtime.js";
@@ -38,25 +38,25 @@ import {
 import { trace } from "../runtime/trace.js";
 import {
 	Box,
+	createModelSelector,
+	createSessionSelector,
+	createTreeSelector,
+	defaultAgentTheme,
 	Editor,
 	Footer,
 	MultiDiffViewer,
 	ProcessTerminal,
+	parseMultiDiff,
 	SelectList,
 	Spacer,
 	StreamingMessage,
 	SystemMessage,
 	type SystemMessageVariant,
-	TUI,
 	Text,
 	TimelineMarker,
 	ToolExecution,
+	TUI,
 	UserMessage,
-	createModelSelector,
-	createSessionSelector,
-	createTreeSelector,
-	defaultAgentTheme,
-	parseMultiDiff,
 } from "../ui/index.js";
 import { type LoadThemesResult, resolveThemeSelection } from "../ui/theme-loader.js";
 
@@ -75,7 +75,7 @@ export interface TuiOptions {
 
 class InputDialog extends Box {
 	private readonly messageText: Text;
-	private readonly input: import("@mariozechner/pi-tui").Input;
+	private readonly input: import("@earendil-works/pi-tui").Input;
 	private _focused = false;
 
 	get focused(): boolean {
@@ -1177,10 +1177,11 @@ export async function runTuiApp(options: TuiOptions): Promise<void> {
 	}
 }
 
-function requirePiTui(): typeof import("@mariozechner/pi-tui") {
-	return require("@mariozechner/pi-tui");
+function requirePiTui(): typeof import("@earendil-works/pi-tui") {
+	return require("@earendil-works/pi-tui");
 }
 
 // Node ESM-friendly lazy require for Input/Container classes used in helper dialogs.
 import { createRequire } from "node:module";
+
 const require = createRequire(import.meta.url);

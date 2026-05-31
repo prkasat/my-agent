@@ -1,5 +1,5 @@
-import { EventStream } from "@my-agent/ai";
 import type { AssistantMessage, AssistantMessageEvent } from "@my-agent/ai";
+import { EventStream } from "@my-agent/ai";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { agentLoop } from "../src/agent/agent-loop.js";

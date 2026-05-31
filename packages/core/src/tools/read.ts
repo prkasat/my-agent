@@ -8,7 +8,7 @@ import { formatDimensionNote, resizeImage } from "./image-resize.js";
 import { resolveReadPath } from "./path-utils.js";
 import type { ToolDefinition } from "./tool-definition.js";
 import { wrapToolDefinition } from "./tool-definition.js";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, formatSize, truncateHead } from "./truncate.js";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, type TruncationResult, truncateHead } from "./truncate.js";
 
 const readSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),

@@ -9,7 +9,7 @@
 
 import type { AssistantMessage, AssistantMessageEvent, Model, Usage } from "@my-agent/ai";
 import type { Static, TSchema } from "@sinclair/typebox";
-import type { AgentContext, AgentMessage, AgentTool, AgentToolResult } from "../agent/types.js";
+import type { AgentContext, AgentTool, AgentToolResult } from "../agent/types.js";
 
 // =============================================================================
 // Events dispatched to extensions

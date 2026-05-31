@@ -1,6 +1,6 @@
 import type { SessionInfo } from "@my-agent/core";
 import { describe, expect, it } from "vitest";
-import { type SlashContext, type SlashSessionManager, handleSlashCommand } from "../src/repl/slash-commands.js";
+import { handleSlashCommand, type SlashContext, type SlashSessionManager } from "../src/repl/slash-commands.js";
 
 function makeSession(overrides: Partial<SlashSessionManager> = {}): SlashSessionManager {
 	return {

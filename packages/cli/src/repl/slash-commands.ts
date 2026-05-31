@@ -23,10 +23,10 @@ import { handleLogin, handleLogout, isLoginCancelledError } from "../commands/lo
 import type { AuthStorage } from "../config/auth-storage.js";
 import type { Settings } from "../config/settings.js";
 import {
-	THINKING_LEVELS,
 	getNextThinkingLevel,
 	getThinkingLevelDescription,
 	isThinkingLevel,
+	THINKING_LEVELS,
 } from "../config/thinking-levels.js";
 import { inspectExtensions, runExtensionCommand } from "../runtime/extensions.js";
 import { getModelProviderForKey, listModelAvailability } from "../runtime/model-registry.js";

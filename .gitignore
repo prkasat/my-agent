@@ -3,6 +3,7 @@ dist/
 *.tsbuildinfo
 .env
 .env.local
+.my-agent/
 coverage/
 .DS_Store
 CLAUDE.local.md

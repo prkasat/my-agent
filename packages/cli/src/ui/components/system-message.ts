@@ -1,5 +1,5 @@
+import { type Component, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Chalk } from "chalk";
-import { type Component, truncateToWidth, visibleWidth } from "@mariozechner/pi-tui";
 import type { SystemMessageTheme } from "../theme.js";
 import { wrapStyledText } from "./panel.js";
 
