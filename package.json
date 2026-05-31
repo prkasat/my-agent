@@ -2,6 +2,7 @@
 	"name": "my-agent",
 	"private": true,
 	"license": "MIT",
+	"packageManager": "npm@11.6.2",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/prkasat/my-agent.git"
@@ -14,7 +15,8 @@
 		"packages/*"
 	],
 	"engines": {
-		"node": ">=22.19.0"
+		"node": ">=22.19.0",
+		"npm": ">=11.0.0"
 	},
 	"scripts": {
 		"build": "tsc -b packages/ai packages/core packages/cli",

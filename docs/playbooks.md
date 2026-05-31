@@ -44,7 +44,7 @@
 
 ## Dependency upgrades
 
-- keep `build`, `test`, and `lint` green before and after upgrades
+- keep `npm ci`, `build`, `test`, and `lint` green before and after upgrades
 - prefer additive upgrades with docs/test updates in the same change
 - re-run RPC, auth, session, and TUI smoke tests after runtime-facing changes
 

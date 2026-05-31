@@ -1,27 +1,31 @@
+<p align="center">
+  <img src="docs/assets/logo.svg" alt="my-agent logo" width="760">
+</p>
+
+<p align="center">
+  <a href="https://github.com/prkasat/my-agent/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/prkasat/my-agent/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Node.js" src="https://img.shields.io/badge/node-%3E%3D22.19.0-3C873A">
+  <img alt="License" src="https://img.shields.io/badge/license-MIT-blue">
+</p>
+
 # my-agent
 
-Private-first terminal agent for coding and task-specific workflows.
+`my-agent` is a private-first terminal AI runtime for coding and task-specific workflows. It pairs a daily-driver CLI/TUI with durable sessions, explicit permission gates, trusted local extensions, reusable resource packages, and provider-aware model selection.
 
-## Features
+## Why It Exists
 
-- OpenRouter API-key auth
-- Anthropic OAuth auth
-- OpenAI Codex / ChatGPT subscription OAuth auth
-- auth-aware model registry and fallback selection
-- full-screen TUI by default in interactive terminals, plus REPL fallback and JSONL RPC mode
-- session persistence, branching, export, and replay
-- runtime permission checks for risky tools
-- trusted local extensions with tools, commands, and middleware
-- prompt templates, skills, packages, and themes
-- structured tracing, replay, profiling, and mock eval harness
-- reusable TUI component/theme layer built on `@earendil-works/pi-tui`
+- **Private-first workflow:** credentials, sessions, traces, prompts, packages, themes, and extensions live in local `~/.my-agent` and project `.my-agent` directories.
+- **One coherent terminal UX:** interactive terminals default to the full-screen TUI, with REPL, one-shot, replay, trace, profile, and JSONL RPC modes available from the same CLI.
+- **Provider-aware model routing:** OpenRouter API keys, Anthropic OAuth, and OpenAI Codex OAuth are modeled explicitly so model availability and auth errors stay explainable.
+- **Inspectable agent runtime:** the core loop, tools, permissions, sessions, compaction, tracing, and extension contracts are split into focused packages with docs and tests.
+- **Extensible by design:** prompts, skills, packages, themes, and trusted local extensions let the agent grow beyond coding-only workflows without rewriting the core.
 
-## Quick start
+## Quick Start
 
 Requirements:
 
 - Node.js 22.19.0 or newer
-- npm 10 or newer
+- npm 11 or newer
 
 ```bash
 npm install
@@ -30,33 +34,41 @@ npm test
 npm run lint
 ```
 
-Start the agent (interactive TTY defaults to the TUI):
+Start the agent:
 
 ```bash
 node packages/cli/dist/main.js
 ```
 
-Force the plain-text REPL fallback:
+Interactive terminals launch the TUI by default. Use `--repl` for the plain-text fallback:
 
 ```bash
 node packages/cli/dist/main.js --repl
 ```
 
-Authenticate with OpenRouter:
+## Authentication
 
 ```bash
 export OPENROUTER_API_KEY=...
 node packages/cli/dist/main.js
 ```
 
-Or log in from the TUI/REPL:
+OAuth providers are available from the TUI or REPL:
 
 ```text
 /login anthropic
 /login openai-codex
 ```
 
-## Useful commands
+Provider policy:
+
+| Provider | Auth | Notes |
+|---|---|---|
+| `openrouter` | API key | Supported through `OPENROUTER_API_KEY` or auth storage. |
+| `anthropic` | OAuth | Subscription-style provider path. |
+| `openai-codex` | OAuth | ChatGPT subscription / Codex path, distinct from generic OpenAI Platform API usage. |
+
+## Common Commands
 
 ```bash
 node packages/cli/dist/main.js --help
@@ -72,25 +84,29 @@ node packages/cli/dist/main.js --rpc
 npm run eval:mock
 ```
 
-## Auth policy
+## Architecture
 
-- `openrouter` → API key only
-- `anthropic` → OAuth only
-- `openai-codex` → OAuth only
+```mermaid
+flowchart LR
+    CLI["CLI / REPL / TUI / RPC"] --> Runtime["CLI runtime"]
+    Runtime --> Core["core agent loop"]
+    Runtime --> AI["provider layer"]
+    Runtime --> Resources["prompts / skills / packages / themes / extensions"]
+    Core --> Tools["built-in tools + permissions"]
+    Core --> Sessions["sessions + compaction"]
+    AI --> Providers["OpenRouter / Anthropic / OpenAI Codex"]
+    Runtime --> Disk["~/.my-agent + .my-agent"]
+```
 
-`openai-codex` is intentionally distinct from generic OpenAI Platform API usage.
+Workspace packages:
 
-## What “parity with pi-mono where it matters” means here
+| Package | Owns |
+|---|---|
+| `packages/ai` | provider adapters, model metadata, streaming helpers, OAuth helper types |
+| `packages/core` | agent loop, tools, permissions, sessions, compaction, resources, extension contracts |
+| `packages/cli` | settings, auth storage, CLI entrypoints, TUI, REPL, RPC, tracing, replay |
 
-For this repo, parity means:
-
-- practical daily-driver terminal UX
-- coherent login and model switching
-- reliable session/tree/export/replay flows
-- strong interactive safety and debugging
-- an extension/resource platform that can grow beyond coding-only use
-
-## Resource model
+## Resource Model
 
 - prompts → lightweight reusable prompt files
 - skills → task-specific prompt workflows with commands/aliases
@@ -105,7 +121,22 @@ Examples:
 - `examples/extensions/starter.mjs`
 - `examples/prompts/generate-extension.md`
 
-## Docs
+## Validation
+
+The release gate is:
+
+```bash
+npm ci
+npm run lint
+npm run build
+npm test
+npm run eval:mock
+npm audit --audit-level=moderate
+```
+
+CI runs the same build, lint, test, and mock eval checks on Ubuntu, macOS, and Windows.
+
+## Documentation
 
 See `docs/README.md`.
 
@@ -132,25 +163,12 @@ Key docs:
 - `docs/security.md`
 - `docs/architecture.md`
 
-Project docs:
+Project operations:
 
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `CHANGELOG.md`
 - `LICENSE`
-
-## Validation
-
-Current repo validation targets:
-
-- `npm run build`
-- `npm test`
-- `npm run lint`
-- `npm run eval:mock`
-
-## Checklist
-
-The full target state is tracked in `PRODUCTION_READINESS_CHECKLIST.md`.
 
 ## Contributing
 

@@ -19,11 +19,14 @@ Track at least:
 
 ## Release checklist
 
-1. `npm run lint`
-2. `npm run build`
-3. `npm test`
-4. run `--doctor`
-5. run `--list-models`
-6. smoke-test one-shot, REPL, and RPC mode
-7. update docs when behavior changed
-8. review security/trust-model impact
+1. `npm ci`
+2. `npm run lint`
+3. `npm run build`
+4. `npm test`
+5. `npm run eval:mock`
+6. `npm audit --audit-level=moderate`
+7. run `--doctor`
+8. run `--list-models`
+9. smoke-test one-shot, REPL, and RPC mode
+10. update docs when behavior changed
+11. review security/trust-model impact

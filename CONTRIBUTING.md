@@ -7,7 +7,7 @@ Thanks for helping improve `my-agent`.
 Requirements:
 
 - Node.js 22.19.0 or newer
-- npm 10 or newer
+- npm 11 or newer
 
 Install and validate from the repository root:
 

@@ -2,8 +2,13 @@
 
 ## Install
 
+Requirements:
+
+- Node.js 22.19.0 or newer
+- npm 11 or newer
+
 ```bash
-npm install
+npm ci
 npm run build
 npm test
 npm run lint

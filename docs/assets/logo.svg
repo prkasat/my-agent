@@ -1,0 +1,53 @@
+<svg width="960" height="360" viewBox="0 0 960 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+	<title id="title">my-agent logo</title>
+	<desc id="desc">A terminal window connected to agent workflow nodes.</desc>
+	<defs>
+		<linearGradient id="bg" x1="96" y1="48" x2="864" y2="312" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#071318"/>
+			<stop offset="1" stop-color="#10151F"/>
+		</linearGradient>
+		<linearGradient id="cyan" x1="166" y1="84" x2="608" y2="284" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#70F4EA"/>
+			<stop offset="1" stop-color="#13B4C6"/>
+		</linearGradient>
+		<linearGradient id="amber" x1="456" y1="120" x2="780" y2="292" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#FFD66B"/>
+			<stop offset="1" stop-color="#FF9F2E"/>
+		</linearGradient>
+		<filter id="soft-glow" x="-20%" y="-30%" width="140%" height="160%" color-interpolation-filters="sRGB">
+			<feGaussianBlur stdDeviation="10" result="blur"/>
+			<feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.07 0 0 0 0 0.77 0 0 0 0 0.80 0 0 0 0.48 0"/>
+			<feBlend in="SourceGraphic"/>
+		</filter>
+	</defs>
+
+	<rect width="960" height="360" rx="32" fill="url(#bg)"/>
+	<path d="M144 226C229 283 352 269 452 214C548 162 637 86 769 117" stroke="#126875" stroke-width="12" stroke-linecap="round" stroke-dasharray="1 26" opacity="0.58"/>
+	<path d="M138 215C238 258 357 248 455 198C547 150 626 87 743 103" stroke="#5CE9E6" stroke-width="10" stroke-linecap="round" opacity="0.88"/>
+	<path d="M531 210H738" stroke="#FFBD4A" stroke-width="10" stroke-linecap="round" opacity="0.9"/>
+
+	<g>
+		<rect x="104" y="76" width="392" height="216" rx="28" fill="#071116" stroke="#5CE9E6" stroke-width="6"/>
+		<rect x="126" y="122" width="348" height="146" rx="22" fill="#02080B"/>
+		<circle cx="146" cy="102" r="11" fill="#FF684E"/>
+		<circle cx="181" cy="102" r="11" fill="#FFD05B"/>
+		<circle cx="216" cy="102" r="11" fill="#39D9A1"/>
+		<path d="M163 160L224 207L163 254L148 234L183 207L148 180Z" fill="#5CE9E6"/>
+		<rect x="244" y="219" width="86" height="18" rx="9" fill="#5CE9E6"/>
+	</g>
+
+	<g>
+		<circle cx="532" cy="210" r="46" fill="#10151B" stroke="#5CE9E6" stroke-width="8"/>
+		<rect x="508" y="191" width="48" height="38" rx="19" fill="#11100D" stroke="#FFBD4A" stroke-width="8"/>
+		<circle cx="523" cy="210" r="5" fill="#FFD66B"/>
+		<circle cx="542" cy="210" r="5" fill="#FFD66B"/>
+		<circle cx="137" cy="215" r="30" fill="#123943" stroke="#5CE9E6" stroke-width="9"/>
+		<circle cx="744" cy="103" r="30" fill="#123943" stroke="#5CE9E6" stroke-width="9"/>
+		<circle cx="740" cy="210" r="30" fill="#3B250D" stroke="#FFBD4A" stroke-width="9"/>
+	</g>
+
+	<path d="M608 270H844" stroke="#F4F7F7" stroke-width="14" stroke-linecap="round" opacity="0.92"/>
+	<path d="M608 305H780" stroke="#93A7AE" stroke-width="10" stroke-linecap="round" opacity="0.78"/>
+	<path d="M608 88H790" stroke="#1C3C45" stroke-width="8" stroke-linecap="round" opacity="0.72"/>
+	<path d="M608 118H704" stroke="#1C3C45" stroke-width="8" stroke-linecap="round" opacity="0.72"/>
+</svg>
