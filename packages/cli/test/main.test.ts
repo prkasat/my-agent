@@ -41,9 +41,11 @@ describe("CLI one-shot mode", () => {
 		const result = spawnSync(npmCmd, ["run", "build"], {
 			cwd: repoRoot,
 			encoding: "utf8",
+			shell: process.platform === "win32",
 		});
 		if (result.status !== 0) {
-			throw new Error(`Failed to build CLI for integration test:\n${result.stdout}\n${result.stderr}`);
+			const details = [result.error?.message, result.stdout, result.stderr].filter(Boolean).join("\n");
+			throw new Error(`Failed to build CLI for integration test:\n${details}`);
 		}
 
 		tmpDir = await fsp.mkdtemp(path.join(os.tmpdir(), "cli-main-test-"));
@@ -52,7 +54,9 @@ describe("CLI one-shot mode", () => {
 	});
 
 	afterAll(async () => {
-		await fsp.rm(tmpDir, { recursive: true, force: true });
+		if (tmpDir) {
+			await fsp.rm(tmpDir, { recursive: true, force: true });
+		}
 	});
 
 	it("prints actionable onboarding when one-shot mode runs without authentication", async () => {

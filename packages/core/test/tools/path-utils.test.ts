@@ -28,7 +28,7 @@ describe("path-utils", () => {
 
 	describe("resolveToCwd", () => {
 		it("resolves relative paths against cwd", () => {
-			expect(resolveToCwd("foo/bar", "/home/user")).toBe("/home/user/foo/bar");
+			expect(resolveToCwd("foo/bar", "/home/user")).toBe(path.resolve("/home/user", "foo/bar"));
 		});
 
 		it("returns absolute paths unchanged", () => {
