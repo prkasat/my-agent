@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type AuditLogEntry, AuditLogger } from "../../src/tools/audit.js";
 
+const openAiKey = (value: string) => ["sk", value].join("-");
+const githubToken = (prefix: string, value: string) => [prefix, value].join("_");
+
 describe("AuditLogger redaction", () => {
 	let logDir: string;
 	beforeEach(() => {
@@ -24,6 +27,9 @@ describe("AuditLogger redaction", () => {
 	}
 
 	it("redacts secrets in command, error, and metadata before file write", () => {
+		const commandSecret = githubToken("ghp", "A".repeat(36));
+		const errorSecret = openAiKey("FAILEDREQUEST_AAAAAAAAAAAAAAAA");
+		const metadataSecret = ["wJalrXUtnFEMI", "K7MDENG", "bPxRfiCYEXAMPLEKEY"].join("/");
 		const logger = new AuditLogger({ logDir });
 		logger.log({
 			timestamp: new Date().toISOString(),
@@ -31,10 +37,10 @@ describe("AuditLogger redaction", () => {
 			toolCallId: "t1",
 			durationMs: 10,
 			status: "success",
-			command: "curl -H 'Authorization: Bearer REDACTED_GITHUB_TOKEN' https://api",
-			error: "OPENAI_API_KEY=REDACTED_OPENAI_TOKEN was rejected",
+			command: `curl -H 'Authorization: Bearer ${commandSecret}' https://api`,
+			error: `OPENAI_API_KEY=${errorSecret} was rejected`,
 			metadata: {
-				envSnippet: "AWS_SECRET_ACCESS_KEY=AWS_SECRET_REDACTION_FIXTURE",
+				envSnippet: `AWS_SECRET_ACCESS_KEY=${metadataSecret}`,
 				safe: 42,
 			},
 		});
@@ -42,16 +48,16 @@ describe("AuditLogger redaction", () => {
 		const entries = readPersistedEntries();
 		expect(entries.length).toBe(1);
 		const e = entries[0];
-		expect(e.command).not.toContain("ghp_AAAA");
+		expect(e.command).not.toContain(commandSecret);
 		expect(e.command).toMatch(/Authorization:\s*Bearer\s+\[REDACTED\]/i);
-		expect(e.error).not.toContain("sk-FAILEDREQUEST");
-		expect((e.metadata as { envSnippet: string }).envSnippet).not.toContain("wJalrXUtnFEMI");
+		expect(e.error).not.toContain(errorSecret);
+		expect((e.metadata as { envSnippet: string }).envSnippet).not.toContain(metadataSecret);
 		expect((e.metadata as { safe: number }).safe).toBe(42);
 	});
 
-	it("can be disabled via redactSecrets: false (raw secrets persisted)", () => {
+	it("keeps redaction enabled even when the deprecated opt-out is false", () => {
 		const logger = new AuditLogger({ logDir, redactSecrets: false });
-		const secret = "REDACTED_GITHUB_TOKEN";
+		const secret = githubToken("ghp", `OPTOUT${"A".repeat(31)}`);
 		logger.log({
 			timestamp: new Date().toISOString(),
 			tool: "bash",
@@ -62,10 +68,12 @@ describe("AuditLogger redaction", () => {
 		});
 
 		const entries = readPersistedEntries();
-		expect(entries[0].command).toContain(secret);
+		expect(entries[0].command).not.toContain(secret);
+		expect(entries[0].command).toContain("[REDACTED]");
 	});
 
 	it("custom handlers also receive the redacted entry", () => {
+		const secret = openAiKey("A".repeat(24));
 		const captured: AuditLogEntry[] = [];
 		const logger = new AuditLogger({
 			logDir,
@@ -77,9 +85,9 @@ describe("AuditLogger redaction", () => {
 			toolCallId: "t3",
 			durationMs: 1,
 			status: "success",
-			command: "export OPENAI_API_KEY=REDACTED_OPENAI_TOKEN",
+			command: `export OPENAI_API_KEY=${secret}`,
 		});
-		expect(captured[0].command).not.toContain("REDACTED_OPENAI_TOKEN");
+		expect(captured[0].command).not.toContain(secret);
 		expect(captured[0].command).toContain("[REDACTED]");
 	});
 });

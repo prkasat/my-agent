@@ -1,23 +1,29 @@
 import { describe, expect, it } from "vitest";
 import { redactSecrets, redactValue } from "../../src/tools/redact.js";
 
+const openAiKey = (value: string) => ["sk", value].join("-");
+const githubToken = (prefix: string, value: string) => [prefix, value].join("_");
+
 describe("redactSecrets", () => {
 	it("redacts GitHub personal access tokens (pat + legacy)", () => {
-		const input =
-			"GITHUB_TOKEN=REDACTED_GITHUB_PAT and REDACTED_GITHUB_TOKEN";
+		const pat = ["github", "pat", "A".repeat(20), "B".repeat(20)].join("_");
+		const legacy = githubToken("gho", "A".repeat(36));
+		const input = `GITHUB_TOKEN=${pat} and ${legacy}`;
 		const out = redactSecrets(input);
-		expect(out).not.toContain("REDACTED_GITHUB_PAT");
-		expect(out).not.toContain("REDACTED_GITHUB_TOKEN");
+		expect(out).not.toContain(pat);
+		expect(out).not.toContain(legacy);
 		expect(out).toContain("[REDACTED]");
 	});
 
 	it("redacts Anthropic and OpenAI API keys distinctly", () => {
-		const input =
-			"REDACTED_ANTHROPIC_TOKEN and REDACTED_OPENAI_PROJECT_TOKEN and REDACTED_OPENAI_TOKEN";
+		const anthropicKey = ["sk", "ant", "api03", "A".repeat(24)].join("-");
+		const projectKey = ["sk", "proj", "B".repeat(24)].join("-");
+		const standardKey = openAiKey("C".repeat(20));
+		const input = `${anthropicKey} and ${projectKey} and ${standardKey}`;
 		const out = redactSecrets(input);
-		expect(out).not.toContain("REDACTED_ANTHROPIC_TOKEN");
-		expect(out).not.toContain("REDACTED_OPENAI_PROJECT_TOKEN");
-		expect(out).not.toContain("REDACTED_OPENAI_TOKEN");
+		expect(out).not.toContain(anthropicKey);
+		expect(out).not.toContain(projectKey);
+		expect(out).not.toContain(standardKey);
 		// Should NOT collapse to "everything's redacted" — still readable text
 		expect(out).toContain("and");
 	});
@@ -45,10 +51,13 @@ describe("redactSecrets", () => {
 	});
 
 	it("redacts Authorization headers (Bearer / Basic / Token) preserving header name", () => {
+		const bearerValue = openAiKey("secret-token-abc123");
+		const basicValue = ["dXNlcjpw", "YXNzd29yZA=="].join("");
+		const tokenValue = githubToken("ghp", "A".repeat(24));
 		const cases = [
-			"curl -H 'Authorization: Bearer REDACTED_OPENAI_TOKEN'",
-			'-H "Authorization: Basic BASIC_AUTH_REDACTION_FIXTURE=="',
-			"Authorization: Token REDACTED_GITHUB_TOKEN",
+			`curl -H 'Authorization: Bearer ${bearerValue}'`,
+			`-H "Authorization: Basic ${basicValue}"`,
+			`Authorization: Token ${tokenValue}`,
 		];
 		for (const c of cases) {
 			const out = redactSecrets(c);
@@ -57,23 +66,26 @@ describe("redactSecrets", () => {
 	});
 
 	it("redacts KEY=value env exports for sensitive-named keys", () => {
+		const openAiEnvValue = openAiKey("very-secret-XYZAAAAAAAAA");
+		const githubEnvValue = githubToken("ghp", "A".repeat(36));
+		const awsSecret = ["wJalrXUtnFEMI", "K7MDENG", "bPxRfiCYEXAMPLEKEY"].join("/");
 		const cases: { input: string; key: string; value: string }[] = [
 			{
-				input: "OPENAI_API_KEY=REDACTED_OPENAI_TOKEN",
+				input: `OPENAI_API_KEY=${openAiEnvValue}`,
 				key: "OPENAI_API_KEY",
-				value: "REDACTED_OPENAI_TOKEN",
+				value: openAiEnvValue,
 			},
 			{
-				input: 'GITHUB_TOKEN="REDACTED_GITHUB_TOKEN"',
+				input: `GITHUB_TOKEN="${githubEnvValue}"`,
 				key: "GITHUB_TOKEN",
-				value: "REDACTED_GITHUB_TOKEN",
+				value: githubEnvValue,
 			},
 			{ input: "DB_PASSWORD='hunter2'", key: "DB_PASSWORD", value: "hunter2" },
 			{ input: "MY_PRIVATE_KEY=-----BEGIN", key: "MY_PRIVATE_KEY", value: "-----BEGIN" },
 			{
-				input: "AWS_SECRET_ACCESS_KEY=AWS_SECRET_REDACTION_FIXTURE",
+				input: `AWS_SECRET_ACCESS_KEY=${awsSecret}`,
 				key: "AWS_SECRET_ACCESS_KEY",
-				value: "AWS_SECRET_REDACTION_FIXTURE",
+				value: awsSecret,
 			},
 		];
 		for (const c of cases) {
@@ -95,28 +107,31 @@ describe("redactSecrets", () => {
 	});
 
 	it("redacts multiple secrets in a single string independently", () => {
-		const input =
-			"export OPENAI_API_KEY=REDACTED_OPENAI_TOKEN && curl -H 'Authorization: Bearer REDACTED_GITHUB_TOKEN' https://api";
+		const envValue = openAiKey("A".repeat(20));
+		const headerValue = githubToken("ghp", "B".repeat(36));
+		const input = `export OPENAI_API_KEY=${envValue} && curl -H 'Authorization: Bearer ${headerValue}' https://api`;
 		const out = redactSecrets(input);
-		expect(out).not.toContain("REDACTED_OPENAI_TOKEN");
-		expect(out).not.toContain("REDACTED_GITHUB_TOKEN");
+		expect(out).not.toContain(envValue);
+		expect(out).not.toContain(headerValue);
 		expect((out.match(/\[REDACTED\]/g) ?? []).length).toBeGreaterThanOrEqual(2);
 	});
 });
 
 describe("redactValue", () => {
 	it("redacts strings inside nested objects and arrays", () => {
+		const bearerValue = openAiKey("secret-AAAAAAAAAAAAAAAAAAAA");
+		const argValue = githubToken("ghp", "A".repeat(36));
 		const input = {
 			outer: {
-				cmd: "curl -H 'Authorization: Bearer REDACTED_OPENAI_TOKEN'",
-				args: ["--key", "REDACTED_GITHUB_TOKEN"],
+				cmd: `curl -H 'Authorization: Bearer ${bearerValue}'`,
+				args: ["--key", argValue],
 			},
 			count: 7,
 			ok: true,
 		};
 		const out = redactValue(input) as typeof input;
-		expect(out.outer.cmd).not.toContain("sk-secret-AAAA");
-		expect(out.outer.args[1]).not.toContain("ghp_AAAA");
+		expect(out.outer.cmd).not.toContain(bearerValue);
+		expect(out.outer.args[1]).not.toContain(argValue);
 		expect(out.count).toBe(7);
 		expect(out.ok).toBe(true);
 	});

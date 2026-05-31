@@ -66,9 +66,10 @@ export interface AuditLoggerConfig {
 	/**
 	 * Redact known secret patterns (API keys, bearer tokens, KEY=value
 	 * env exports, etc.) from `command`, `error`, and `metadata` before
-	 * persistence. Default: true. Disable only if you have a separate
-	 * upstream redaction step or are auditing in a sealed environment
-	 * where the log is never shared.
+	 * persistence. Always enabled.
+	 *
+	 * @deprecated This option is ignored. Audit entries are always redacted
+	 * before they reach file logging or custom handlers.
 	 */
 	redactSecrets?: boolean;
 }
@@ -98,7 +99,7 @@ export class AuditLogger {
 			logDir: config?.logDir ?? DEFAULT_LOG_DIR,
 			maxFileSize: config?.maxFileSize ?? DEFAULT_MAX_FILE_SIZE,
 			maxFiles: config?.maxFiles ?? DEFAULT_MAX_FILES,
-			redactSecrets: config?.redactSecrets ?? true,
+			redactSecrets: true,
 			handler: config?.handler,
 		};
 	}
@@ -106,14 +107,13 @@ export class AuditLogger {
 	/**
 	 * Log a tool execution.
 	 *
-	 * Applies secret redaction (when enabled) BEFORE handing off to the
-	 * custom handler or the file writer, so neither path sees raw
-	 * secrets in command/error/metadata.
+	 * Applies secret redaction before handing off to the custom handler or
+	 * the file writer, so neither path sees raw secrets in command/error/metadata.
 	 */
 	log(entry: AuditLogEntry): void {
 		if (!this.config.enabled) return;
 
-		const sanitized = this.config.redactSecrets ? this.redactEntry(entry) : entry;
+		const sanitized = this.redactEntry(entry);
 
 		// Use custom handler if provided
 		if (this.config.handler) {

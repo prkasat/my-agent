@@ -26,10 +26,12 @@ Risky tools are protected by the runtime permission checker.
 
 ### Logging and tracing
 
-Structured traces and audit-style records redact sensitive values before persistence where possible.
-Still treat local logs as sensitive.
+Structured traces and audit records redact known sensitive value shapes before persistence.
+Trace and audit redaction covers provider-style API keys, bearer/basic/token authorization headers, JWTs, and sensitive `KEY=value` assignments.
+Still treat local traces, audit logs, and session files as sensitive because user prompts and tool output can contain private project data.
 
 Audit logging can be enabled in embedded/private automation contexts through the exported core audit logger helpers.
+Audit redaction is always enabled for file logging and custom handlers.
 
 ## Safe mode
 

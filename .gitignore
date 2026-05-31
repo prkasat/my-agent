@@ -2,7 +2,8 @@ node_modules/
 dist/
 *.tsbuildinfo
 .env
-.env.local
+.env.*
+!.env.example
 .my-agent/
 coverage/
 .DS_Store
@@ -10,3 +11,11 @@ CLAUDE.local.md
 .claude
 .omc
 .temp
+.npmrc
+*.pem
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+credentials.json
+auth.json
