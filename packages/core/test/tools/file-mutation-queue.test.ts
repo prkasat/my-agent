@@ -666,10 +666,10 @@ describe("file-mutation-queue cross-process lock", () => {
 		const externalStart = Date.now();
 		const externalAcquired = acquireFileLock(file, { timeout: 2_000 });
 
-		await localBacklog;
 		const release = await externalAcquired;
 		const externalElapsed = Date.now() - externalStart;
 		release();
+		await localBacklog;
 
 		// External should have made it in within the realistic local
 		// backlog window (~3 * 80ms + some retry slack), well under
