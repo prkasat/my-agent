@@ -3,8 +3,12 @@
 	"version": "0.1.0",
 	"license": "MIT",
 	"type": "module",
-	"main": "dist/index.js",
-	"types": "dist/index.d.ts",
+	"main": "dist/main.js",
+	"types": "dist/main.d.ts",
+	"files": [
+		"dist",
+		"README.md"
+	],
 	"bin": {
 		"my-agent": "dist/main.js"
 	},
@@ -22,6 +26,6 @@
 	},
 	"devDependencies": {
 		"tsx": "^4.22.4",
-		"vitest": "^4.1.7"
+		"vitest": "^4.1.8"
 	}
 }

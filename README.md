@@ -102,9 +102,11 @@ Workspace packages:
 
 | Package | Owns |
 |---|---|
-| `packages/ai` | provider adapters, model metadata, streaming helpers, OAuth helper types |
-| `packages/core` | agent loop, tools, permissions, sessions, compaction, resources, extension contracts |
-| `packages/cli` | settings, auth storage, CLI entrypoints, TUI, REPL, RPC, tracing, replay |
+| [`packages/ai`](packages/ai/README.md) | provider adapters, model metadata, streaming helpers, OAuth helper types |
+| [`packages/core`](packages/core/README.md) | agent loop, tools, permissions, sessions, compaction, resources, extension contracts |
+| [`packages/cli`](packages/cli/README.md) | settings, auth storage, CLI entrypoints, TUI, REPL, RPC, tracing, replay |
+
+For package and source-area maps, see [`packages/README.md`](packages/README.md).
 
 ## Resource Model
 
