@@ -2,7 +2,7 @@
 	"name": "my-agent",
 	"private": true,
 	"license": "MIT",
-	"packageManager": "npm@11.6.2",
+	"packageManager": "npm@11.13.0",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/prkasat/my-agent.git"
